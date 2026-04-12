@@ -1,5 +1,5 @@
 /**
- * Testing utilities for agent-loop.
+ * Testing utilities for agent-do.
  *
  * Provides a createMockModel that wraps the AI SDK's MockLanguageModelV3
  * with a simpler interface for predetermined responses.

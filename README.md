@@ -1,4 +1,4 @@
-# agent-loop
+# agent-do
 
 Provider-agnostic autonomous agent loop for JavaScript. Built on the [Vercel AI SDK](https://sdk.vercel.ai/), it drives any `LanguageModel` through a tool-use loop until the task is complete.
 
@@ -17,7 +17,7 @@ Provider-agnostic autonomous agent loop for JavaScript. Built on the [Vercel AI 
 ## Install
 
 ```bash
-npm install agent-loop
+npm install agent-do
 ```
 
 Peer dependency: `ai` (Vercel AI SDK v6+).
@@ -25,8 +25,8 @@ Peer dependency: `ai` (Vercel AI SDK v6+).
 ## Quick Start
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const model = createMockModel({
   responses: [
@@ -49,8 +49,8 @@ console.log(result); // "The capital of France is Paris."
 `stream()` returns an `AsyncIterable<ProgressEvent>` that yields events as the agent works:
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const model = createMockModel({
   responses: [
@@ -112,7 +112,7 @@ for await (const event of agent.stream('Tell me about Paris')) {
 Create multiple agents with different models, tools, and system prompts:
 
 ```ts
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -141,8 +141,8 @@ const research = await researcher.run('Find info about TypeScript');
 Define tools using the Vercel AI SDK's `tool()` function:
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -177,8 +177,8 @@ The agent loops automatically: it calls tools, feeds results back to the model, 
 `createFileTools()` generates a set of file-manipulation tools backed by any `MemoryStore`:
 
 ```ts
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const store = new InMemoryMemoryStore();
 const fileTools = createFileTools(store, 'agent-1');
@@ -217,7 +217,7 @@ The `MemoryStore` interface abstracts file storage for agents. Two implementatio
 - **`FilesystemMemoryStore`** — persists to the local filesystem (survives restarts)
 
 ```ts
-import { FilesystemMemoryStore, createFileTools, createAgent } from 'agent-loop';
+import { FilesystemMemoryStore, createFileTools, createAgent } from 'agent-do';
 
 const store = new FilesystemMemoryStore('./agent-data');
 const agent = createAgent({
@@ -257,7 +257,7 @@ See [`examples/08-custom-memory-store.ts`](examples/08-custom-memory-store.ts) f
 Pass previous conversation turns to maintain context:
 
 ```ts
-import { createAgent, type ConversationMessage } from 'agent-loop';
+import { createAgent, type ConversationMessage } from 'agent-do';
 
 const history: ConversationMessage[] = [];
 
@@ -278,7 +278,7 @@ Skills extend an agent's system prompt with additional instructions. They can be
 ### Defining a skill
 
 ```ts
-import type { Skill } from 'agent-loop';
+import type { Skill } from 'agent-do';
 
 const skill: Skill = {
   id: 'code-review',
@@ -294,8 +294,8 @@ const skill: Skill = {
 ### Using InMemorySkillStore
 
 ```ts
-import { createAgent, InMemorySkillStore } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent, InMemorySkillStore } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const skills = new InMemorySkillStore();
 await skills.install({
@@ -320,7 +320,7 @@ When a `SkillStore` is provided, the agent gets:
 ### Parsing SKILL.md files
 
 ```ts
-import { parseSkillMd } from 'agent-loop';
+import { parseSkillMd } from 'agent-do';
 
 const skill = parseSkillMd(`---
 name: My Skill
@@ -355,8 +355,8 @@ interface SkillStore {
 Hooks let you observe and control the agent loop. All hooks are optional and async.
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const agent = createAgent({
   id: 'hooked',
@@ -418,8 +418,8 @@ interface HookDecision {
 Control which tools the agent can call.
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const agent = createAgent({
   id: 'safe',
@@ -457,8 +457,8 @@ const agent = createAgent({
 Track token usage and costs across agent runs with built-in pricing for 50+ models.
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 const agent = createAgent({
   id: 'tracked',
@@ -488,7 +488,7 @@ const agent = createAgent({
 For standalone usage tracking outside of `createAgent`:
 
 ```ts
-import { UsageTracker, estimateCost, DEFAULT_PRICING } from 'agent-loop';
+import { UsageTracker, estimateCost, DEFAULT_PRICING } from 'agent-do';
 
 const tracker = new UsageTracker({
   perRunLimit: 1.0,
@@ -514,8 +514,8 @@ const cost = estimateCost('gpt-4o', 10000, 5000);
 `createMockModel()` returns a mock `LanguageModel` compatible with the Vercel AI SDK. It uses predetermined responses so you can test agent behavior without API keys.
 
 ```ts
-import { createAgent } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -561,7 +561,7 @@ const result = await agent.run('Weather in London?');
 
 ## API Reference
 
-### Main exports (`agent-loop`)
+### Main exports (`agent-do`)
 
 | Export | Type | Description |
 |--------|------|-------------|
@@ -581,7 +581,7 @@ const result = await agent.run('Weather in London?');
 | `estimateCost` | `(model, input, output, pricing?) => number` | Estimate cost in USD |
 | `DEFAULT_PRICING` | `PricingTable` | Built-in pricing for 50+ models |
 
-### Test exports (`agent-loop/testing`)
+### Test exports (`agent-do/testing`)
 
 | Export | Type | Description |
 |--------|------|-------------|
@@ -606,7 +606,7 @@ const result = await agent.run('Weather in London?');
 | `ConversationMessage` | User/assistant message for conversation history |
 | `Orchestrator` / `OrchestratorConfig` | Multi-agent orchestration types |
 
-### Store exports (`agent-loop/stores`)
+### Store exports (`agent-do/stores`)
 
 | Export | Description |
 |--------|-------------|
@@ -617,8 +617,8 @@ const result = await agent.run('Weather in London?');
 
 | Export | Import path | Description |
 |--------|-------------|-------------|
-| `InMemoryMemoryStore` | `agent-loop` | In-memory store for testing/prototyping (data lost on exit) |
-| `FilesystemMemoryStore` | `agent-loop` | Node.js filesystem store (persistent, path-traversal safe) |
+| `InMemoryMemoryStore` | `agent-do` | In-memory store for testing/prototyping (data lost on exit) |
+| `FilesystemMemoryStore` | `agent-do` | Node.js filesystem store (persistent, path-traversal safe) |
 
 ## Examples
 

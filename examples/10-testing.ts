@@ -7,8 +7,8 @@
  * Run: npx tsx examples/10-testing.ts
  */
 
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-loop';
-import { createMockModel } from 'agent-loop/testing';
+import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
 
 console.log('═══════════════════════════════════════');
 console.log('  Example 10: Testing Agents');

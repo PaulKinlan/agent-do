@@ -13,7 +13,7 @@
  * Run: npx tsx examples/02-agent-with-tools.ts
  */
 
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { tool } from 'ai';
 import { z } from 'zod';

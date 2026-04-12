@@ -7,7 +7,7 @@
  * Run: npx tsx examples/04-lifecycle-hooks.ts
  */
 
-import { createAgent, InMemoryMemoryStore, createFileTools } from 'agent-loop';
+import { createAgent, InMemoryMemoryStore, createFileTools } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');

@@ -9,7 +9,7 @@ describe('FilesystemMemoryStore', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-loop-test-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-do-test-'));
     store = new FilesystemMemoryStore(tmpDir);
   });
 

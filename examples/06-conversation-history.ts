@@ -7,7 +7,7 @@
  * Run: npx tsx examples/06-conversation-history.ts
  */
 
-import { createAgent, type ConversationMessage } from 'agent-loop';
+import { createAgent, type ConversationMessage } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════════════');

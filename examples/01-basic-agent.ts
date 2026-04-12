@@ -7,7 +7,7 @@
  * Run: npx tsx examples/01-basic-agent.ts
  */
 
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');

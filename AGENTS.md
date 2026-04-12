@@ -1,4 +1,4 @@
-# agent-loop — Development Guide
+# agent-do — Development Guide
 
 ## What This Is
 

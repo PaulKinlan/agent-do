@@ -50,7 +50,7 @@ When asked to review code:
 Parse these files with `parseSkillMd()`:
 
 ```typescript
-import { parseSkillMd } from 'agent-loop';
+import { parseSkillMd } from 'agent-do';
 import { readFileSync } from 'fs';
 
 const content = readFileSync('code-review.skill.md', 'utf-8');
@@ -85,7 +85,7 @@ interface SkillStore {
 The package ships with `InMemorySkillStore` for development and testing:
 
 ```typescript
-import { InMemorySkillStore } from 'agent-loop';
+import { InMemorySkillStore } from 'agent-do';
 
 const store = new InMemorySkillStore();
 await store.install({
@@ -101,7 +101,7 @@ await store.install({
 Pass a `SkillStore` to `createAgent`:
 
 ```typescript
-import { createAgent, InMemorySkillStore, parseSkillMd } from 'agent-loop';
+import { createAgent, InMemorySkillStore, parseSkillMd } from 'agent-do';
 import { anthropic } from '@ai-sdk/anthropic';
 
 const skills = new InMemorySkillStore();
@@ -150,7 +150,7 @@ await agent.run('Search for a data-analysis skill and install it, then analyze t
 If you need the skill tools without the full agent setup, use `createSkillTools()`:
 
 ```typescript
-import { createSkillTools, InMemorySkillStore } from 'agent-loop';
+import { createSkillTools, InMemorySkillStore } from 'agent-do';
 
 const store = new InMemorySkillStore();
 const tools = createSkillTools(store);
@@ -162,7 +162,7 @@ const tools = createSkillTools(store);
 If you're building a custom loop, use `buildSkillsPrompt()` to generate the system prompt section:
 
 ```typescript
-import { buildSkillsPrompt } from 'agent-loop';
+import { buildSkillsPrompt } from 'agent-do';
 
 const skills = await store.list();
 const promptSection = buildSkillsPrompt(skills);

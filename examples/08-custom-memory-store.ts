@@ -8,7 +8,7 @@
  * Copy the pattern and add the real SDK calls for your backend.
  */
 
-import type { MemoryStore, FileEntry } from 'agent-loop';
+import type { MemoryStore, FileEntry } from 'agent-do';
 
 // ═══════════════════════════════════════════════════
 // Pattern 1: Node.js Filesystem

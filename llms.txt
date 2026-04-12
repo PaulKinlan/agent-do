@@ -1,4 +1,4 @@
-# agent-loop
+# agent-do
 
 > Provider-agnostic autonomous agent loop for JavaScript. Built on the Vercel AI SDK.
 
@@ -74,7 +74,7 @@
 ## Testing
 
 - `createMockModel(options: MockModelOptions)` ��� mock LanguageModel with predetermined responses
-- Import from `agent-loop/testing`
+- Import from `agent-do/testing`
 
 ## ConversationMessage
 

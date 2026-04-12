@@ -1,5 +1,5 @@
 {
-  "name": "agent-loop",
+  "name": "agent-do",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",

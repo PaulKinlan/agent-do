@@ -5,7 +5,7 @@
  * Files persist across process restarts.
  *
  * Usage:
- *   import { FilesystemMemoryStore } from 'agent-loop/stores/filesystem';
+ *   import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
  *   const store = new FilesystemMemoryStore('/path/to/data');
  */
 

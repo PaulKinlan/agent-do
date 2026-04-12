@@ -8,7 +8,7 @@
  * Run: npx tsx examples/03-agent-with-memory.ts
  */
 
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-loop';
+import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');

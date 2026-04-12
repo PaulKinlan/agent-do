@@ -7,7 +7,7 @@
  * Run: npx tsx examples/09-skills.ts
  */
 
-import { createAgent, InMemorySkillStore, parseSkillMd } from 'agent-loop';
+import { createAgent, InMemorySkillStore, parseSkillMd } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');

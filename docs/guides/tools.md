@@ -2,7 +2,7 @@
 
 ## Vercel AI SDK tool() Basics
 
-Tools in `agent-loop` use the Vercel AI SDK's `tool()` function. Each tool needs a description, an input schema (using Zod), and an execute function:
+Tools in `agent-do` use the Vercel AI SDK's `tool()` function. Each tool needs a description, an input schema (using Zod), and an execute function:
 
 ```typescript
 import { tool } from 'ai';
@@ -37,10 +37,10 @@ const agent = createAgent({
 
 ## Built-in File Tools
 
-`agent-loop` ships with `createFileTools()` which creates a full set of file-manipulation tools backed by any `MemoryStore` from `
+`agent-do` ships with `createFileTools()` which creates a full set of file-manipulation tools backed by any `MemoryStore` from `
 
 ```typescript
-import { createAgent, createFileTools } from 'agent-loop';
+import { createAgent, createFileTools } from 'agent-do';
 import { InMemoryMemoryStore } from '';
 
 const memoryStore = new InMemoryMemoryStore();

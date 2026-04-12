@@ -1,9 +1,9 @@
-# Getting Started with agent-loop
+# Getting Started with agent-do
 
 ## Installation
 
 ```bash
-npm install agent-loop ai zod
+npm install agent-do ai zod
 ```
 
 You also need a model provider. For example, to use Anthropic:
@@ -15,7 +15,7 @@ npm install @ai-sdk/anthropic
 ## Create Your First Agent
 
 ```typescript
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 import { anthropic } from '@ai-sdk/anthropic';
 
 const agent = createAgent({
@@ -36,7 +36,7 @@ console.log(result); // "The capital of France is Paris."
 Tools use the Vercel AI SDK `tool()` function:
 
 ```typescript
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 import { anthropic } from '@ai-sdk/anthropic';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -197,7 +197,7 @@ for await (const event of stream) {
 If you need more control, use `runAgentLoop` and `streamAgentLoop` directly:
 
 ```typescript
-import { runAgentLoop, streamAgentLoop } from 'agent-loop';
+import { runAgentLoop, streamAgentLoop } from 'agent-do';
 import { anthropic } from '@ai-sdk/anthropic';
 
 const config = {

@@ -1,6 +1,6 @@
-# agent-loop API Reference
+# agent-do API Reference
 
-Complete API reference for the `agent-loop` package -- a provider-agnostic autonomous agent loop built on the Vercel AI SDK.
+Complete API reference for the `agent-do` package -- a provider-agnostic autonomous agent loop built on the Vercel AI SDK.
 
 ## Core
 
@@ -390,7 +390,7 @@ Built-in pricing table with prices per 1M tokens in USD. Covers Anthropic, OpenA
 
 ## Testing
 
-Exported from `agent-loop/testing`.
+Exported from `agent-do/testing`.
 
 ### `createMockModel(options: MockModelOptions): MockLanguageModelV3`
 

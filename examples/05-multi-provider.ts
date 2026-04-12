@@ -7,7 +7,7 @@
  * Run: npx tsx examples/05-multi-provider.ts [anthropic|google|openai|ollama]
  */
 
-import { createAgent } from 'agent-loop';
+import { createAgent } from 'agent-do';
 
 console.log('═══════════════════════════════════════');
 console.log('  Example 5: Multiple Providers');

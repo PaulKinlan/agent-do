@@ -14,7 +14,7 @@
  * Run: npx tsx examples/07-multi-agent-orchestration.ts
  */
 
-import { createOrchestrator } from 'agent-loop';
+import { createOrchestrator } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════════════');

@@ -12,7 +12,7 @@
  * Run: npx tsx examples/11-filesystem-store.ts
  */
 
-import { createAgent, createFileTools, FilesystemMemoryStore } from 'agent-loop';
+import { createAgent, createFileTools, FilesystemMemoryStore } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import * as fs from 'node:fs';
 import * as path from 'node:path';

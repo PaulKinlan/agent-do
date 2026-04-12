@@ -2,11 +2,11 @@
 
 ## createMockModel
 
-The `agent-loop/testing` export provides `createMockModel` for deterministic agent testing. It wraps the AI SDK's `MockLanguageModelV3` with a simpler interface.
+The `agent-do/testing` export provides `createMockModel` for deterministic agent testing. It wraps the AI SDK's `MockLanguageModelV3` with a simpler interface.
 
 ```typescript
-import { createMockModel } from 'agent-loop/testing';
-import { createAgent } from 'agent-loop';
+import { createMockModel } from 'agent-do/testing';
+import { createAgent } from 'agent-do';
 
 const model = createMockModel({
   responses: [
@@ -118,7 +118,7 @@ await agent.run('Do something');
 Test that permission logic works:
 
 ```typescript
-import { evaluatePermission } from 'agent-loop';
+import { evaluatePermission } from 'agent-do';
 
 // Test accept-all mode
 const allowed = await evaluatePermission('read_file', {}, {
@@ -146,7 +146,7 @@ const asked = await evaluatePermission('write_file', { path: '/tmp/test' }, {
 Use in-memory store implementations for integration tests:
 
 ```typescript
-import { createAgent, createFileTools, InMemorySkillStore } from 'agent-loop';
+import { createAgent, createFileTools, InMemorySkillStore } from 'agent-do';
 import { InMemoryMemoryStore } from '';
 
 const memoryStore = new InMemoryMemoryStore();
