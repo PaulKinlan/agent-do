@@ -28,7 +28,7 @@
 
 ## File Tools
 
-- `createFileTools(store: MemoryStore, agentId: string): ToolSet` — creates read_file, write_file, list_directory, delete_file, grep_file, find_files
+- `createFileTools(store: MemoryStore, agentId: string): ToolSet` — creates read_file, write_file, edit_file, list_directory, delete_file, grep_file, find_files
 
 ## Memory Stores
 

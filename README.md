@@ -204,6 +204,7 @@ The generated tools are:
 |------|-------------|
 | `read_file` | Read a file's contents |
 | `write_file` | Write content to a file (creates parent dirs) |
+| `edit_file` | Find-and-replace in a file (match must be unique) |
 | `list_directory` | List files and directories at a path |
 | `delete_file` | Delete a file |
 | `grep_file` | Search for a text pattern across files |

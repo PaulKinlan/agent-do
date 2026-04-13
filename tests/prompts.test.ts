@@ -214,10 +214,77 @@ describe('buildSystemPrompt edge cases', () => {
     })).not.toThrow();
   });
 
-  it('fileTools section does not mention edit_file', () => {
+  it('fileTools section lists edit_file', () => {
     const result = builtinSections.fileTools();
-    expect(result).not.toContain('edit_file');
+    expect(result).toContain('edit_file');
     expect(result).toContain('read_file');
     expect(result).toContain('write_file');
+  });
+
+  it('prototype method names work as section keys (null-prototype map)', () => {
+    // Keys like 'toString', 'hasOwnProperty' would shadow Object.prototype
+    // on a normal {}, but Object.create(null) handles them safely
+    const prompt = buildSystemPrompt({
+      sectionOrder: ['toString', 'hasOwnProperty'],
+      sections: {
+        'toString': () => 'toString section',
+        'hasOwnProperty': () => 'hasOwn section',
+      },
+    });
+    expect(prompt).toContain('toString section');
+    expect(prompt).toContain('hasOwn section');
+  });
+
+  it('constructor key is handled safely', () => {
+    const prompt = buildSystemPrompt({
+      sectionOrder: ['constructor'],
+      sections: {
+        'constructor': () => 'constructor section',
+      },
+    });
+    expect(prompt).toContain('constructor section');
+  });
+
+  it('empty sectionOrder produces prompt from prepend/append only', () => {
+    const prompt = buildSystemPrompt({
+      sectionOrder: [],
+      prepend: ['before'],
+      append: ['after'],
+    });
+    expect(prompt).toBe('before\n\nafter');
+  });
+
+  it('all builtin templates produce non-empty prompts', () => {
+    for (const name of Object.keys(builtinTemplates)) {
+      const prompt = buildSystemPrompt({ template: name });
+      expect(prompt.length).toBeGreaterThan(100);
+    }
+  });
+});
+
+describe('interpolate advanced', () => {
+  it('{{#if}} with nested variable replacement', () => {
+    const tmpl = '{{#if name}}Hello {{name}}, welcome!{{/if}}';
+    expect(interpolate(tmpl, { name: 'Paul' })).toBe('Hello Paul, welcome!');
+  });
+
+  it('{{#if}} preserves content outside blocks', () => {
+    const tmpl = 'Start. {{#if show}}Middle.{{/if}} End.';
+    expect(interpolate(tmpl, { show: 'yes' })).toBe('Start. Middle. End.');
+    expect(interpolate(tmpl, {})).toBe('Start.  End.');
+  });
+
+  it('handles multiline {{#if}} blocks', () => {
+    const tmpl = '{{#if bio}}Bio:\n{{bio}}\nEnd bio.{{/if}}';
+    expect(interpolate(tmpl, { bio: 'I am a developer.' })).toBe('Bio:\nI am a developer.\nEnd bio.');
+    expect(interpolate(tmpl, {})).toBe('');
+  });
+
+  it('multiple variables in one line', () => {
+    expect(interpolate('{{a}}-{{b}}-{{c}}', { a: '1', b: '2', c: '3' })).toBe('1-2-3');
+  });
+
+  it('same variable used multiple times', () => {
+    expect(interpolate('{{x}} and {{x}} again', { x: 'hi' })).toBe('hi and hi again');
   });
 });

@@ -25,6 +25,7 @@ describe('createFileTools', () => {
     const tools = getTools();
     expect(Object.keys(tools).sort()).toEqual([
       'delete_file',
+      'edit_file',
       'find_files',
       'grep_file',
       'list_directory',
@@ -92,5 +93,62 @@ describe('createFileTools', () => {
     expect(result).toContain('a.md');
     expect(result).toContain('sub');
     expect(result).toContain('b.md');
+  });
+
+  it('edit_file replaces unique match', async () => {
+    await store.write(agentId, 'doc.md', '# Title\n\nHello world\n\nGoodbye');
+    const result = await execute('edit_file', {
+      path: 'doc.md',
+      old_string: 'Hello world',
+      new_string: 'Hello universe',
+    });
+    expect(result).toContain('Successfully edited');
+    const content = await store.read(agentId, 'doc.md');
+    expect(content).toContain('Hello universe');
+    expect(content).not.toContain('Hello world');
+  });
+
+  it('edit_file rejects when old_string not found', async () => {
+    await store.write(agentId, 'doc.md', 'some content');
+    const result = await execute('edit_file', {
+      path: 'doc.md',
+      old_string: 'nonexistent text',
+      new_string: 'replacement',
+    });
+    expect(result).toContain('not found');
+  });
+
+  it('edit_file rejects when old_string appears multiple times', async () => {
+    await store.write(agentId, 'doc.md', 'foo bar foo baz foo');
+    const result = await execute('edit_file', {
+      path: 'doc.md',
+      old_string: 'foo',
+      new_string: 'qux',
+    });
+    expect(result).toContain('3 times');
+    expect(result).toContain('must be unique');
+    // File should be unchanged
+    const content = await store.read(agentId, 'doc.md');
+    expect(content).toBe('foo bar foo baz foo');
+  });
+
+  it('edit_file returns error for missing file', async () => {
+    const result = await execute('edit_file', {
+      path: 'nonexistent.md',
+      old_string: 'x',
+      new_string: 'y',
+    });
+    expect(result).toContain('Error:');
+  });
+
+  it('creates all expected tools including edit_file', () => {
+    const toolNames = Object.keys(getTools());
+    expect(toolNames).toContain('read_file');
+    expect(toolNames).toContain('write_file');
+    expect(toolNames).toContain('edit_file');
+    expect(toolNames).toContain('list_directory');
+    expect(toolNames).toContain('delete_file');
+    expect(toolNames).toContain('grep_file');
+    expect(toolNames).toContain('find_files');
   });
 });
