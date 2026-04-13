@@ -28,6 +28,13 @@ src/
     types.ts        — eval types (assertions, cases, results)
     assertions.ts   — assertion evaluators (13 types)
     runner.ts       — eval runner (defineEval, runEvals)
+  cli.ts            — CLI entry point (npx agent-do)
+  cli/
+    args.ts         — argument parser + stdin reader
+    prompt.ts       — prompt mode (one-shot + interactive)
+    script.ts       — script mode (npx agent-do run)
+    eval-cmd.ts     — eval mode (npx agent-do eval)
+    resolve-model.ts — dynamic provider/model resolution
   index.ts          — all exports
 
 tests/              — vitest unit tests (one file per module)

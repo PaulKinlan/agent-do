@@ -108,3 +108,21 @@
 - Custom assertions via `{ type: 'custom', name, fn: (result) => boolean }`
 - Each case gets isolated memory store — no state leaks between cases
 - `options.concurrency: number` — parallel case execution (default: 1)
+
+## CLI (npx agent-do)
+
+- `npx agent-do "prompt"` — one-shot task with default agent
+- `npx agent-do` — interactive chat REPL
+- `echo "context" | npx agent-do "prompt"` — pipe stdin as context, merged with prompt
+- `npx agent-do run <file>` — run a script exporting an Agent, AgentConfig, or simple config
+- `npx agent-do eval <file|dir>` — run eval cases from file or directory
+- `--provider <name>` — anthropic | google | openai | ollama (default: anthropic)
+- `--model <id>` — model ID (default: provider-specific)
+- `--system <prompt>` — system prompt
+- `--memory <dir>` — memory directory (default: .agent-do/)
+- `--read-only` — no filesystem writes
+- `--verbose` — show tool calls
+- `--json` — JSON output
+- `--compare <providers>` — eval: compare across providers (comma-separated)
+- `--output <format>` — eval: console | json | csv
+- `--concurrency <n>` — eval: parallel case execution

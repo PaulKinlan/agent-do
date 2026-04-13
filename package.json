@@ -4,6 +4,9 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "agent-do": "./dist/cli.js"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",

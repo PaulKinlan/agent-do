@@ -23,6 +23,69 @@ npm install agent-do
 
 Peer dependency: `ai` (Vercel AI SDK v6+).
 
+## CLI
+
+Run agents from the command line with zero config:
+
+```bash
+# One-shot task
+npx agent-do "What is TypeScript?"
+
+# Pipe content as context
+cat README.md | npx agent-do "Summarize this"
+
+# Pipe + prompt merged
+echo "function add(a, b) { return a + b }" | npx agent-do "Review this code"
+
+# Interactive chat
+npx agent-do
+
+# Choose provider and model
+npx agent-do --provider google --model gemini-2.5-flash "Hello"
+
+# Run a custom agent script
+npx agent-do run my-agent.ts "Do something"
+
+# Run eval cases
+npx agent-do eval evals/basic.ts
+
+# Compare providers
+npx agent-do eval evals/ --compare anthropic,google,openai --output json
+```
+
+### CLI options
+
+```
+npx agent-do [options] [prompt]          One-shot or interactive
+npx agent-do run <file> [task]           Run agent script
+npx agent-do eval <file|dir> [options]   Run evals
+
+Options:
+  --provider <name>      anthropic | google | openai | ollama (default: anthropic)
+  --model <id>           Model ID (default: provider-specific)
+  --system <prompt>      System prompt
+  --memory <dir>         Memory directory (default: .agent-do/)
+  --read-only            No filesystem writes
+  --max-iterations <n>   Max loop iterations (default: 20)
+  --no-tools             Disable file tools
+  --verbose              Show tool calls
+  --json                 JSON output
+  --output <fmt>         console | json | csv (eval only)
+  --compare <providers>  Compare providers (eval only, comma-separated)
+  --concurrency <n>      Parallel eval cases (default: 1)
+```
+
+### Piping
+
+Piped stdin is merged with the command-line prompt:
+
+| stdin | prompt | result |
+|-------|--------|--------|
+| no | `"Hello"` | Task: `"Hello"` |
+| `"context"` | no | Task: `"context"` |
+| `"context"` | `"Summarize"` | Task: `"Summarize\n\n---\n\ncontext"` |
+| no | no | Interactive mode |
+
 ## Quick Start
 
 ```ts
