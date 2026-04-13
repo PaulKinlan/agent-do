@@ -288,3 +288,184 @@ describe('interpolate advanced', () => {
     expect(interpolate('{{x}} and {{x}} again', { x: 'hi' })).toBe('hi and hi again');
   });
 });
+
+describe('interpolate defensive — null/undefined/edge cases', () => {
+  it('handles null variables without throwing', () => {
+    expect(interpolate('Hello {{name}}!', null)).toBe('Hello {{name}}!');
+  });
+
+  it('handles undefined variables without throwing', () => {
+    expect(interpolate('Hello {{name}}!', undefined)).toBe('Hello {{name}}!');
+  });
+
+  it('handles null variables with {{#if}} blocks', () => {
+    const tmpl = '{{#if name}}Hello {{name}}!{{/if}} Done.';
+    expect(interpolate(tmpl, null)).toBe(' Done.');
+  });
+
+  it('handles undefined variables with {{#if}} blocks', () => {
+    const tmpl = '{{#if name}}Hello {{name}}!{{/if}} Done.';
+    expect(interpolate(tmpl, undefined)).toBe(' Done.');
+  });
+
+  it('handles empty template string', () => {
+    expect(interpolate('', { name: 'Paul' })).toBe('');
+    expect(interpolate('', null)).toBe('');
+    expect(interpolate('', {})).toBe('');
+  });
+
+  it('handles template with no placeholders', () => {
+    expect(interpolate('plain text', { name: 'Paul' })).toBe('plain text');
+    expect(interpolate('plain text', null)).toBe('plain text');
+  });
+
+  it('handles variable value containing curly braces', () => {
+    expect(interpolate('{{x}}', { x: '{{y}}' })).toBe('{{y}}');
+  });
+
+  it('handles variable value containing regex special chars', () => {
+    expect(interpolate('{{x}}', { x: 'a.*b+c?(d)' })).toBe('a.*b+c?(d)');
+  });
+
+  it('preserves partial/malformed placeholders', () => {
+    expect(interpolate('{{', {})).toBe('{{');
+    expect(interpolate('}}', {})).toBe('}}');
+    expect(interpolate('{name}', { name: 'Paul' })).toBe('{name}');
+    expect(interpolate('{{ name }}', { name: 'Paul' })).toBe('{{ name }}');
+  });
+
+  it('handles prototype property names as keys safely', () => {
+    expect(interpolate('{{toString}}', { toString: 'safe' })).toBe('safe');
+    expect(interpolate('{{constructor}}', { constructor: 'safe' })).toBe('safe');
+    expect(interpolate('{{hasOwnProperty}}', { hasOwnProperty: 'safe' })).toBe('safe');
+  });
+
+  it('does not resolve prototype methods when key is absent', () => {
+    // toString exists on Object.prototype — should NOT resolve it
+    expect(interpolate('{{toString}}', {})).toBe('{{toString}}');
+    expect(interpolate('{{constructor}}', {})).toBe('{{constructor}}');
+  });
+
+  it('{{#if}} with prototype property names', () => {
+    expect(interpolate('{{#if toString}}yes{{/if}}', { toString: 'val' })).toBe('yes');
+    expect(interpolate('{{#if toString}}yes{{/if}}', {})).toBe('');
+  });
+
+  it('handles adjacent placeholders', () => {
+    expect(interpolate('{{a}}{{b}}', { a: 'x', b: 'y' })).toBe('xy');
+  });
+
+  it('handles variable with newlines in value', () => {
+    expect(interpolate('{{x}}', { x: 'line1\nline2' })).toBe('line1\nline2');
+  });
+
+  it('handles nested {{#if}} blocks (inner not supported — treated as literals)', () => {
+    // The regex is non-greedy, so nested blocks won't work as expected.
+    // This test documents the behavior — inner {{/if}} closes the outer block.
+    const tmpl = '{{#if a}}outer {{#if b}}inner{{/if}} rest{{/if}}';
+    // The first {{/if}} closes the outer block
+    const result = interpolate(tmpl, { a: 'yes', b: 'yes' });
+    expect(result).toContain('outer');
+  });
+
+  it('handles {{#if}} with only whitespace key', () => {
+    // \w+ won't match spaces, so this should pass through unchanged
+    expect(interpolate('{{#if }}text{{/if}}', {})).toBe('{{#if }}text{{/if}}');
+  });
+});
+
+describe('buildSystemPrompt defensive', () => {
+  it('works with no options at all', () => {
+    const prompt = buildSystemPrompt();
+    expect(typeof prompt).toBe('string');
+    expect(prompt.length).toBeGreaterThan(0);
+  });
+
+  it('works with empty options object', () => {
+    const prompt = buildSystemPrompt({});
+    expect(typeof prompt).toBe('string');
+    expect(prompt.length).toBeGreaterThan(0);
+  });
+
+  it('handles variables as undefined', () => {
+    const prompt = buildSystemPrompt({
+      template: 'assistant',
+      variables: undefined,
+    });
+    expect(prompt).toContain('# Agent');
+  });
+
+  it('handles empty append and prepend arrays', () => {
+    const prompt = buildSystemPrompt({
+      template: 'assistant',
+      append: [],
+      prepend: [],
+    });
+    expect(prompt).toContain('# Agent');
+  });
+
+  it('handles sections that return empty strings', () => {
+    const prompt = buildSystemPrompt({
+      sectionOrder: ['empty', 'identity'],
+      sections: { empty: () => '' },
+    });
+    expect(prompt).toContain('# Agent');
+  });
+
+  it('section functions receive undefined vars when no variables provided', () => {
+    let receivedVars: unknown = 'sentinel';
+    buildSystemPrompt({
+      sectionOrder: ['test'],
+      sections: {
+        test: (vars) => {
+          receivedVars = vars;
+          return 'ok';
+        },
+      },
+    });
+    expect(receivedVars).toBeUndefined();
+  });
+
+  it('section functions receive variables when provided', () => {
+    let receivedVars: unknown;
+    buildSystemPrompt({
+      sectionOrder: ['test'],
+      sections: {
+        test: (vars) => {
+          receivedVars = vars;
+          return 'ok';
+        },
+      },
+      variables: { key: 'val' },
+    });
+    expect(receivedVars).toEqual({ key: 'val' });
+  });
+
+  it('append function receives undefined vars when no variables', () => {
+    let receivedVars: unknown = 'sentinel';
+    buildSystemPrompt({
+      sectionOrder: [],
+      append: [(vars) => {
+        receivedVars = vars;
+        return 'appended';
+      }],
+    });
+    expect(receivedVars).toBeUndefined();
+  });
+
+  it('duplicate section keys in order — renders section twice', () => {
+    const prompt = buildSystemPrompt({
+      sectionOrder: ['identity', 'identity'],
+      variables: { agentName: 'DupeBot' },
+    });
+    const matches = prompt.match(/# DupeBot/g);
+    expect(matches?.length).toBe(2);
+  });
+
+  it('custom template object with empty sections array', () => {
+    const prompt = buildSystemPrompt({
+      template: { name: 'empty', description: 'nothing', sections: [] },
+    });
+    expect(prompt).toBe('');
+  });
+});

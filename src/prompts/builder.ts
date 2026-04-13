@@ -194,12 +194,15 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
  *
  * Empty string values are valid — only undefined/missing keys are kept as placeholders.
  */
-export function interpolate(template: string, variables: Record<string, string>): string {
+export function interpolate(template: string, variables?: Record<string, string> | null): string {
+  // Defensive: treat null/undefined variables as empty object
+  const vars = variables ?? {};
+
   // Handle {{#if key}}...{{/if}} blocks
   let result = template.replace(
     /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
     (_, key: string, content: string) => {
-      const value = Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : undefined;
+      const value = Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : undefined;
       return value ? content : '';
     },
   );
@@ -208,7 +211,7 @@ export function interpolate(template: string, variables: Record<string, string>)
   result = result.replace(
     /\{\{(\w+)\}\}/g,
     (match, key: string) => {
-      return Object.prototype.hasOwnProperty.call(variables, key) ? variables[key]! : match;
+      return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key]! : match;
     },
   );
 
