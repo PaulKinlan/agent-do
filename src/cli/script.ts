@@ -93,7 +93,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     );
   }
 
-  // Run the agent
+  // Run the agent — quiet by default, only final answer printed
   for await (const event of agent.stream(task)) {
     switch (event.type) {
       case 'thinking':
@@ -112,13 +112,18 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
         }
         break;
       case 'text':
-        process.stdout.write(event.content);
+        if (args.verbose) {
+          console.log(event.content);
+        }
         break;
       case 'done':
+        if (!args.verbose) {
+          process.stdout.write(event.content);
+        }
         process.stdout.write('\n');
         break;
       case 'error':
-        console.error(`\nError: ${event.content}`);
+        console.error(`Error: ${event.content}`);
         process.exit(1);
         break;
     }

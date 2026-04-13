@@ -43,8 +43,8 @@ npx agent-do
 # Choose provider and model
 npx agent-do --provider google --model gemini-2.5-flash "Hello"
 
-# Run a custom agent script
-npx agent-do run my-agent.ts "Do something"
+# Run a custom agent script (.js files, or .ts with tsx loader)
+npx agent-do run my-agent.js "Do something"
 
 # Run eval cases
 npx agent-do eval evals/basic.ts

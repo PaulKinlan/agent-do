@@ -102,7 +102,7 @@ async function runOneShot(
     return;
   }
 
-  // Streaming mode
+  // Streaming mode — quiet by default, only final answer printed
   for await (const event of agent.stream(task)) {
     switch (event.type) {
       case 'thinking':
@@ -121,14 +121,20 @@ async function runOneShot(
         }
         break;
       case 'text':
-        // Final text output for a step
-        process.stdout.write(event.content);
+        // Per-step text — only show in verbose mode to avoid intermediate outputs
+        if (args.verbose) {
+          console.log(event.content);
+        }
         break;
       case 'done':
+        // Final answer — always print
+        if (!args.verbose) {
+          process.stdout.write(event.content);
+        }
         process.stdout.write('\n');
         break;
       case 'error':
-        console.error(`\nError: ${event.content}`);
+        console.error(`Error: ${event.content}`);
         process.exit(1);
         break;
     }
@@ -182,14 +188,19 @@ async function runInteractive(
           }
           break;
         case 'text':
-          process.stdout.write(event.content);
+          if (args.verbose) {
+            console.log(event.content);
+          }
           break;
         case 'done':
           response = event.content;
+          if (!args.verbose) {
+            process.stdout.write(response);
+          }
           process.stdout.write('\n\n');
           break;
         case 'error':
-          console.error(`\nError: ${event.content}\n`);
+          console.error(`Error: ${event.content}\n`);
           break;
       }
     }

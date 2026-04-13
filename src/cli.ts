@@ -70,7 +70,7 @@ Options:
   --read-only            No filesystem writes
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable file tools
-  --verbose              Show tool calls and step details
+  --verbose              Show thinking, tool calls, and per-step text (quiet by default)
   --json                 Output as JSON
   -h, --help             Show this help
 
