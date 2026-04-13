@@ -128,7 +128,7 @@ export interface EvalSuiteConfig {
   name: string;
   /** Description. */
   description?: string;
-  /** The model to use. Can be overridden per-case or via runEvals options. */
+  /** The model to use. Can be overridden via runEvals options. */
   model?: LanguageModel;
   /** System prompt for the agent. */
   systemPrompt?: string;
