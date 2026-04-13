@@ -31,11 +31,15 @@ console.warn('   The agent will create directories and write files on your');
 console.warn('   real filesystem. It decides what to create based on the task.');
 console.warn('   Files persist after this script exits.');
 console.warn('');
-console.warn('   Press Enter to continue, or Ctrl+C to abort.\n');
 
-await new Promise<void>(resolve => {
-  process.stdin.once('data', () => resolve());
-});
+if (process.stdin.isTTY) {
+  console.warn('   Press Enter to continue, or Ctrl+C to abort.\n');
+  await new Promise<void>(resolve => {
+    process.stdin.once('data', () => resolve());
+  });
+} else {
+  console.warn('   Non-interactive stdin detected; continuing without confirmation.\n');
+}
 
 console.log(`Storage directory: ${DATA_DIR}`);
 console.log('Files will persist across runs. Delete .agent-data/ to reset.\n');

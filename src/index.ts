@@ -54,4 +54,5 @@ export type {
 // Store interfaces and default implementations
 export type { MemoryStore, FileEntry } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
-export { FilesystemMemoryStore, type FilesystemMemoryStoreOptions } from './stores/filesystem.js';
+export { FilesystemMemoryStore } from './stores/filesystem.js';
+export type { FilesystemMemoryStoreOptions } from './types.js';

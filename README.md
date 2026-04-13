@@ -238,13 +238,16 @@ const agent = createAgent({
 
 ```ts
 // Read-only mode — agent can read but not create/modify/delete
-const store = new FilesystemMemoryStore('./data', { readOnly: true });
+const readOnlyStore = new FilesystemMemoryStore('./data', { readOnly: true });
+```
 
-// Write confirmation — approve each operation
-const store = new FilesystemMemoryStore('./data', {
-  onBeforeWrite: async (agentId, path, operation) => {
-    console.log(`Agent ${agentId} wants to ${operation}: ${path}`);
+```ts
+// Write confirmation — approve each operation (sync or async)
+const guardedStore = new FilesystemMemoryStore('./data', {
+  onBeforeWrite: (agentId, canonicalPath, operation) => {
+    console.log(`Agent ${agentId} wants to ${operation}: ${canonicalPath}`);
     // Return true to allow, false to block
+    // The path is canonicalized — ../traversal is resolved before this callback
     return true;
   },
 });

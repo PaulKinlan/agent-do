@@ -5,7 +5,7 @@
  * Files persist across process restarts.
  *
  * Security options:
- * - `readOnly: true` blocks all write operations
+ * - `readOnly: true` blocks all write operations (zero write side effects)
  * - `onBeforeWrite` callback lets you approve/deny each write
  *
  * Usage:
@@ -15,12 +15,13 @@
  *   const store = new FilesystemMemoryStore('/path/to/data');
  *
  *   // Read-only (agent can read but not modify):
- *   const store = new FilesystemMemoryStore('/path/to/data', { readOnly: true });
+ *   const readOnlyStore = new FilesystemMemoryStore('/path/to/data', { readOnly: true });
  *
- *   // With write confirmation:
- *   const store = new FilesystemMemoryStore('/path/to/data', {
- *     onBeforeWrite: async (agentId, path) => {
- *       return confirm(`Allow write to ${path}?`);
+ *   // With write confirmation (receives canonicalized path):
+ *   const guardedStore = new FilesystemMemoryStore('/path/to/data', {
+ *     onBeforeWrite: async (agentId, canonicalPath, operation) => {
+ *       console.log(`Agent ${agentId} wants to ${operation}: ${canonicalPath}`);
+ *       return true; // or false to block
  *     },
  *   });
  */
@@ -28,24 +29,20 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
+import type { FilesystemMemoryStoreOptions } from '../types.js';
 
-export interface FilesystemMemoryStoreOptions {
-  /** Block all write operations. Agent can only read existing files. */
-  readOnly?: boolean;
-  /**
-   * Called before any write/append/delete/mkdir operation.
-   * Return true to allow, false to block.
-   * If not provided, all writes are allowed (unless readOnly is true).
-   */
-  onBeforeWrite?: (agentId: string, filePath: string, operation: 'write' | 'append' | 'delete' | 'mkdir') => Promise<boolean>;
-}
+export type { FilesystemMemoryStoreOptions } from '../types.js';
 
 export class FilesystemMemoryStore implements MemoryStore {
   private options: FilesystemMemoryStoreOptions;
 
   constructor(private baseDir: string, options?: FilesystemMemoryStoreOptions) {
     this.options = options || {};
-    fs.mkdirSync(baseDir, { recursive: true });
+    // Only create the base directory if not in read-only mode
+    // so readOnly has zero write side effects
+    if (!this.options.readOnly) {
+      fs.mkdirSync(baseDir, { recursive: true });
+    }
   }
 
   private resolve(agentId: string, filePath: string): string {
@@ -57,14 +54,23 @@ export class FilesystemMemoryStore implements MemoryStore {
     return resolved;
   }
 
+  /** Returns the canonicalized relative path for use in callbacks. */
+  private canonicalRelativePath(agentId: string, filePath: string): string {
+    const resolved = this.resolve(agentId, filePath);
+    const agentDir = path.resolve(this.baseDir, agentId);
+    return path.relative(agentDir, resolved);
+  }
+
   private async checkWrite(agentId: string, filePath: string, op: 'write' | 'append' | 'delete' | 'mkdir'): Promise<void> {
     if (this.options.readOnly) {
       throw new Error(`Write blocked: store is read-only (attempted ${op} on ${filePath})`);
     }
     if (this.options.onBeforeWrite) {
-      const allowed = await this.options.onBeforeWrite(agentId, filePath, op);
+      // Pass the canonicalized path so policies can't be bypassed with ../
+      const canonicalPath = this.canonicalRelativePath(agentId, filePath);
+      const allowed = await Promise.resolve(this.options.onBeforeWrite(agentId, canonicalPath, op));
       if (!allowed) {
-        throw new Error(`Write blocked by onBeforeWrite callback (attempted ${op} on ${filePath})`);
+        throw new Error(`Write blocked by onBeforeWrite callback (attempted ${op} on ${canonicalPath})`);
       }
     }
   }
