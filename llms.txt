@@ -95,3 +95,36 @@
 - `builtinTemplates` — assistant, coder, researcher, reviewer, writer, planner
 - `builtinSections` — identity, memoryManagement, fileTools, efficiency, concise, selfEditing, learnedPreferences, htmlGeneration, todoTracking, runtimeContext
 - `roleSections` — codingApproach, researchApproach, reviewApproach, writingApproach, planningApproach
+
+## Eval Framework (agent-do/eval)
+
+- `defineEval(config: EvalSuiteConfig): EvalSuiteConfig` — define an eval suite
+- `runEvals(suite, options?): Promise<EvalResult>` — run evals, return structured results
+- `evaluateAssertion(assertion, result, judgeModel?): Promise<AssertionResult>` — evaluate one assertion
+- Assertion types: contains, not-contains, regex, json-schema, tool-called, tool-not-called, tool-args, file-exists, file-contains, max-steps, max-cost, llm-rubric, custom
+- Output formats: console (default), json, csv, silent
+- Multi-provider comparison via `options.providers: Array<{ name, model }>`
+- LLM-as-judge via `llm-rubric` assertion with configurable score type (pass-fail or 1-5)
+- Custom assertions via `{ type: 'custom', name, fn: (result) => boolean }`
+- Each case gets isolated memory store — no state leaks between cases
+- `options.concurrency: number` — parallel case execution (default: 1)
+
+## CLI (npx agent-do)
+
+- `npx agent-do "prompt"` — one-shot task with default agent
+- `npx agent-do` — interactive chat REPL
+- `echo "context" | npx agent-do "prompt"` — pipe stdin as context, merged with prompt
+- `npx agent-do create <name>` — create a saved agent config (.agent-do/agents/<name>.json)
+- `npx agent-do list` — list saved agents
+- `npx agent-do run <name|file>` — run a saved agent by name, or a script file
+- `npx agent-do eval <file|dir>` — run eval cases from file or directory
+- `--provider <name>` — anthropic | google | openai | ollama (default: anthropic)
+- `--model <id>` — model ID (default: provider-specific)
+- `--system <prompt>` — system prompt
+- `--memory <dir>` — memory directory (default: .agent-do/)
+- `--read-only` — no filesystem writes
+- `--verbose` — show tool calls
+- `--json` — JSON output
+- `--compare <providers>` — eval: compare across providers (comma-separated)
+- `--output <format>` — eval: console | json | csv
+- `--concurrency <n>` — eval: parallel case execution

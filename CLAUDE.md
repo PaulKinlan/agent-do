@@ -23,6 +23,18 @@ src/
   orchestrator.ts   — multi-agent orchestration (master + workers)
   testing/
     index.ts        — createMockModel() for testing
+  eval/
+    index.ts        — eval framework exports
+    types.ts        — eval types (assertions, cases, results)
+    assertions.ts   — assertion evaluators (13 types)
+    runner.ts       — eval runner (defineEval, runEvals)
+  cli.ts            — CLI entry point (npx agent-do)
+  cli/
+    args.ts         — argument parser + stdin reader
+    prompt.ts       — prompt mode (one-shot + interactive)
+    script.ts       — script mode (npx agent-do run)
+    eval-cmd.ts     — eval mode (npx agent-do eval)
+    resolve-model.ts — dynamic provider/model resolution
   index.ts          — all exports
 
 tests/              — vitest unit tests (one file per module)
@@ -99,12 +111,14 @@ Use `createMockModel()` with multi-step response sequences to test:
 - Hooks firing in the right order
 - Permission system blocking/allowing correctly
 
-### Eval Framework (future)
+### Eval Framework (agent-do/eval)
 For evaluating agent quality (not just correctness):
-- Define eval cases: input prompt + expected behavior
-- Run against real models with scoring criteria
-- Track quality metrics over time
-- Compare across model providers
+- `defineEval()` + `runEvals()` for structured eval suites
+- 13 assertion types: contains, not-contains, regex, json-schema, tool-called, tool-not-called, tool-args, file-exists, file-contains, max-steps, max-cost, llm-rubric, custom
+- Multi-provider comparison via `options.providers`
+- LLM-as-judge via `llm-rubric` assertion
+- Output formats: console, json, csv, silent
+- Each case gets isolated memory store
 
 ## Key Design Decisions
 

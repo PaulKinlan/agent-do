@@ -4,13 +4,17 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "agent-do": "./dist/src/cli.js"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
     "./stores": "./src/stores.ts",
     "./stores/in-memory": "./src/stores/in-memory.ts",
     "./stores/filesystem": "./src/stores/filesystem.ts",
-    "./prompts": "./src/prompts/index.ts"
+    "./prompts": "./src/prompts/index.ts",
+    "./eval": "./src/eval/index.ts"
   },
   "scripts": {
     "build": "tsc",
