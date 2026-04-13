@@ -174,4 +174,44 @@ describe('parseArgs', () => {
     expect(args.verbose).toBe(true);
     expect(args.prompt).toBe('hello world');
   });
+
+  // Create and list commands
+  it('recognizes create subcommand', () => {
+    const args = parseArgs(['create', 'my-agent', '--provider', 'google']);
+    expect(args.command).toBe('create');
+    expect(args.agentName).toBe('my-agent');
+    expect(args.provider).toBe('google');
+  });
+
+  it('create with all options', () => {
+    const args = parseArgs([
+      'create', 'reviewer',
+      '--provider', 'anthropic',
+      '--model', 'claude-haiku-4-5',
+      '--system', 'Review code.',
+      '--memory', '/tmp/data',
+      '--read-only',
+      '--no-tools',
+    ]);
+    expect(args.command).toBe('create');
+    expect(args.agentName).toBe('reviewer');
+    expect(args.model).toBe('claude-haiku-4-5');
+    expect(args.systemPrompt).toBe('Review code.');
+    expect(args.readOnly).toBe(true);
+    expect(args.noTools).toBe(true);
+  });
+
+  it('throws when create has no name', () => {
+    expect(() => parseArgs(['create'])).toThrow('Usage');
+  });
+
+  it('create with --help does not throw', () => {
+    const args = parseArgs(['create', '--help']);
+    expect(args.help).toBe(true);
+  });
+
+  it('recognizes list subcommand', () => {
+    const args = parseArgs(['list']);
+    expect(args.command).toBe('list');
+  });
 });

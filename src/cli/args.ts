@@ -6,9 +6,10 @@
  */
 
 export interface ParsedArgs {
-  command: 'prompt' | 'run' | 'eval';
+  command: 'prompt' | 'run' | 'eval' | 'create' | 'list';
   prompt?: string;
   file?: string;
+  agentName?: string;
   provider: string;
   model?: string;
   systemPrompt: string;
@@ -58,6 +59,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       i = 1;
     } else if (first === 'eval') {
       args.command = 'eval';
+      i = 1;
+    } else if (first === 'create') {
+      args.command = 'create';
+      i = 1;
+    } else if (first === 'list') {
+      args.command = 'list';
       i = 1;
     }
   }
@@ -116,7 +123,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // Assign positional args based on command
   if (args.command === 'run') {
     if (positional.length === 0) {
-      throw new Error('Usage: npx agent-do run <file>');
+      throw new Error('Usage: npx agent-do run <file-or-agent-name> [task]');
     }
     args.file = positional[0];
     args.prompt = positional.slice(1).join(' ') || undefined;
@@ -125,6 +132,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       throw new Error('Usage: npx agent-do eval <file|dir>');
     }
     args.file = positional[0];
+  } else if (args.command === 'create') {
+    if (positional.length === 0 && !args.help) {
+      throw new Error('Usage: npx agent-do create <name> [options]');
+    }
+    args.agentName = positional[0];
+  } else if (args.command === 'list') {
+    // no positional args needed
   } else {
     // prompt mode — all positional args become the prompt
     if (positional.length > 0) {

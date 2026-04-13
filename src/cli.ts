@@ -8,7 +8,9 @@
  *   npx agent-do                              Interactive chat
  *   echo "prompt" | npx agent-do              Piped input
  *   echo "context" | npx agent-do "prompt"    Piped context merged with prompt
- *   npx agent-do run script.ts                Run a script that exports an agent
+ *   npx agent-do create <name> [options]      Create a saved agent
+ *   npx agent-do list                         List saved agents
+ *   npx agent-do run <name-or-file> [task]    Run a saved agent or script
  *   npx agent-do eval evals/basic.ts          Run eval cases
  */
 
@@ -16,6 +18,7 @@ import { parseArgs, type ParsedArgs } from './cli/args.js';
 import { runPromptMode } from './cli/prompt.js';
 import { runScriptMode } from './cli/script.js';
 import { runEvalMode } from './cli/eval-cmd.js';
+import { createSavedAgent, listSavedAgents } from './cli/agents.js';
 
 async function main(): Promise<void> {
   let args: ParsedArgs;
@@ -42,6 +45,12 @@ async function main(): Promise<void> {
       case 'eval':
         await runEvalMode(args);
         break;
+      case 'create':
+        await createSavedAgent(args);
+        break;
+      case 'list':
+        await listSavedAgents();
+        break;
     }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -55,7 +64,9 @@ agent-do — run AI agents from the command line
 
 Usage:
   npx agent-do [options] [prompt]          One-shot task or interactive chat
-  npx agent-do run <file>                  Run a script that exports an agent
+  npx agent-do create <name> [options]     Create a reusable agent config
+  npx agent-do list                        List saved agents
+  npx agent-do run <name|file> [task]      Run a saved agent or script file
   npx agent-do eval <file|dir> [options]   Run eval cases
 
 Piping:
@@ -86,11 +97,11 @@ Environment:
 
 Examples:
   npx agent-do "What is TypeScript?"
-  npx agent-do --provider google --model gemini-2.5-flash "Hello"
+  npx agent-do create code-reviewer --provider anthropic --system "Review code for bugs"
+  npx agent-do run code-reviewer "Review this function"
+  npx agent-do list
   cat README.md | npx agent-do "Summarize this"
-  npx agent-do run my-agent.ts
-  npx agent-do eval evals/basic.ts
-  npx agent-do eval evals/ --compare anthropic,google --output json
+  npx agent-do eval evals/basic.ts --compare anthropic,google --output json
 `);
 }
 

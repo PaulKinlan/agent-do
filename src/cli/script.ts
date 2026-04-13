@@ -18,6 +18,7 @@ import { pathToFileURL } from 'node:url';
 import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
+import { loadSavedAgent } from './agents.js';
 import { createAgent } from '../agent.js';
 import { createFileTools } from '../tools/file-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
@@ -25,9 +26,16 @@ import type { Agent } from '../types.js';
 
 export async function runScriptMode(args: ParsedArgs): Promise<void> {
   if (!args.file) {
-    throw new Error('Usage: npx agent-do run <file>');
+    throw new Error('Usage: npx agent-do run <file-or-agent-name> [task]');
   }
 
+  // First try loading as a saved agent name
+  const saved = await loadSavedAgent(args.file);
+  if (saved) {
+    return runSavedAgent(saved, args);
+  }
+
+  // Otherwise try loading as a file
   const filePath = path.resolve(args.file);
   let mod: Record<string, unknown>;
   try {
@@ -35,7 +43,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     mod = await import(pathToFileURL(filePath).href);
   } catch (err) {
     throw new Error(
-      `Failed to import "${args.file}": ${err instanceof Error ? err.message : String(err)}`,
+      `No saved agent "${args.file}" found, and failed to import as file: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
@@ -120,6 +128,65 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
         if (!args.verbose) {
           process.stdout.write(event.content);
         }
+        process.stdout.write('\n');
+        break;
+      case 'error':
+        console.error(`Error: ${event.content}`);
+        process.exit(1);
+        break;
+    }
+  }
+}
+
+async function runSavedAgent(
+  saved: import('./agents.js').SavedAgent,
+  args: ParsedArgs,
+): Promise<void> {
+  const model = await resolveModel(saved.provider, saved.model);
+  const agentId = saved.name;
+
+  let tools = undefined;
+  if (!saved.noTools) {
+    const store = new FilesystemMemoryStore(saved.memoryDir, { readOnly: saved.readOnly });
+    tools = createFileTools(store, agentId);
+  }
+
+  const agent = createAgent({
+    id: agentId,
+    name: saved.name,
+    model,
+    systemPrompt: saved.systemPrompt,
+    tools,
+    maxIterations: saved.maxIterations,
+    permissions: { mode: 'accept-all' },
+    usage: { enabled: true },
+  });
+
+  const stdinContent = await readStdin();
+  const task = buildTask(args.prompt, stdinContent);
+
+  if (!task) {
+    throw new Error(
+      `No task provided. Run: npx agent-do run ${saved.name} "your task"`,
+    );
+  }
+
+  for await (const event of agent.stream(task)) {
+    switch (event.type) {
+      case 'thinking':
+        if (args.verbose) process.stdout.write(event.content);
+        break;
+      case 'tool-call':
+        if (args.verbose) console.log(`\n[tool] ${event.toolName}(${JSON.stringify(event.toolArgs).slice(0, 100)})`);
+        break;
+      case 'tool-result':
+        if (args.verbose) console.log(`[result] ${String(event.toolResult).slice(0, 200)}`);
+        break;
+      case 'text':
+        if (args.verbose) console.log(event.content);
+        break;
+      case 'done':
+        if (!args.verbose) process.stdout.write(event.content);
         process.stdout.write('\n');
         break;
       case 'error':

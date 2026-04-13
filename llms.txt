@@ -114,7 +114,9 @@
 - `npx agent-do "prompt"` — one-shot task with default agent
 - `npx agent-do` — interactive chat REPL
 - `echo "context" | npx agent-do "prompt"` — pipe stdin as context, merged with prompt
-- `npx agent-do run <file>` — run a script exporting an Agent, AgentConfig, or simple config
+- `npx agent-do create <name>` — create a saved agent config (.agent-do/agents/<name>.json)
+- `npx agent-do list` — list saved agents
+- `npx agent-do run <name|file>` — run a saved agent by name, or a script file
 - `npx agent-do eval <file|dir>` — run eval cases from file or directory
 - `--provider <name>` — anthropic | google | openai | ollama (default: anthropic)
 - `--model <id>` — model ID (default: provider-specific)

@@ -43,6 +43,15 @@ npx agent-do
 # Choose provider and model
 npx agent-do --provider google --model gemini-2.5-flash "Hello"
 
+# Create a reusable agent
+npx agent-do create code-reviewer --provider anthropic --system "Review code for bugs"
+
+# Run a saved agent by name
+npx agent-do run code-reviewer "Review this function"
+
+# List saved agents
+npx agent-do list
+
 # Run a custom agent script (.js files, or .ts with tsx loader)
 npx agent-do run my-agent.js "Do something"
 
