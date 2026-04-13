@@ -137,16 +137,17 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
   // Merge section functions: builtins + role-specific + custom overrides
   // Only include own properties to avoid prototype pollution
-  const allSections: Record<string, SectionFn> = {};
+  // Use null-prototype object to prevent __proto__ pollution
+  const allSections: Record<string, SectionFn> = Object.create(null);
   for (const [k, v] of Object.entries(builtinSections)) {
-    if (Object.prototype.hasOwnProperty.call(builtinSections, k)) allSections[k] = v;
+    allSections[k] = v;
   }
   for (const [k, v] of Object.entries(roleSections)) {
-    if (Object.prototype.hasOwnProperty.call(roleSections, k)) allSections[k] = v;
+    allSections[k] = v;
   }
   if (customSections) {
     for (const [k, v] of Object.entries(customSections)) {
-      if (Object.prototype.hasOwnProperty.call(customSections, k)) allSections[k] = v;
+      allSections[k] = v;
     }
   }
 
