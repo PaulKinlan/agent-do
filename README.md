@@ -13,6 +13,7 @@ Provider-agnostic autonomous agent loop for JavaScript. Built on the [Vercel AI 
 - **Permission system** -- accept-all, deny-all, or ask mode with per-tool overrides
 - **Usage tracking** -- built-in cost estimation for 50+ models with per-run and per-day spending limits
 - **Testable** -- `createMockModel()` returns a mock `LanguageModel` with predetermined responses
+- **Eval framework** -- `defineEval()` + `runEvals()` to measure agent quality with 13 assertion types, LLM-as-judge, and multi-provider comparison
 
 ## Install
 
@@ -584,6 +585,110 @@ const result = await agent.run('Weather in London?');
 | `inputTokensPerCall` | `10` | Simulated input tokens per call |
 | `outputTokensPerCall` | `20` | Simulated output tokens per call |
 
+## Eval Framework
+
+Define eval cases to measure agent quality, compare providers, and catch regressions.
+
+```ts
+import { defineEval, runEvals } from 'agent-do/eval';
+import { createAnthropic } from '@ai-sdk/anthropic';
+
+const anthropic = createAnthropic();
+
+const suite = defineEval({
+  name: 'my-assistant-eval',
+  model: anthropic('claude-haiku-4-5'),
+  systemPrompt: 'You are a helpful assistant.',
+  cases: [
+    {
+      name: 'knows capitals',
+      input: 'What is the capital of France?',
+      assert: [
+        { type: 'contains', value: 'Paris' },
+        { type: 'not-contains', value: 'London' },
+      ],
+    },
+    {
+      name: 'saves notes correctly',
+      input: 'Save a note that my name is Alice.',
+      assert: [
+        { type: 'tool-called', tool: 'write_file' },
+        { type: 'file-contains', path: 'memories/user.md', value: 'Alice' },
+        { type: 'max-steps', max: 5 },
+        { type: 'max-cost', maxUsd: 0.05 },
+      ],
+    },
+  ],
+});
+
+const result = await runEvals(suite);
+// Console output:  ✓ PASS  knows capitals  ($0.0012, 800ms, 1 steps)
+//                  ✓ PASS  saves notes correctly  ($0.0035, 2100ms, 2 steps)
+```
+
+### Assertion types
+
+| Type | Description |
+|------|-------------|
+| `contains` | Response text contains a string |
+| `not-contains` | Response does NOT contain a string |
+| `regex` | Response matches a regex pattern |
+| `json-schema` | Response is valid JSON matching a schema |
+| `tool-called` | A specific tool was called during execution |
+| `tool-not-called` | A specific tool was NOT called |
+| `tool-args` | Tool was called with specific arguments (partial match) |
+| `file-exists` | A file was created in the memory store |
+| `file-contains` | A file in the store contains a string |
+| `max-steps` | Agent completed in N or fewer steps |
+| `max-cost` | Agent completed within a cost budget (USD) |
+| `llm-rubric` | Another LLM scores the response against a rubric |
+| `custom` | Custom function receives the full result |
+
+### Multi-provider comparison
+
+```ts
+const result = await runEvals(suite, {
+  providers: [
+    { name: 'anthropic', model: anthropic('claude-sonnet-4-6') },
+    { name: 'google', model: google('gemini-2.5-flash') },
+    { name: 'openai', model: openai('gpt-4.1-mini') },
+  ],
+});
+// Prints a comparison table with pass rate, cost, and latency per provider
+```
+
+### LLM-as-judge
+
+```ts
+{
+  name: 'explains clearly',
+  input: 'Explain quantum computing to a 10 year old',
+  assert: [
+    {
+      type: 'llm-rubric',
+      rubric: 'The explanation should be simple, use analogies, avoid jargon.',
+      score: 'pass-fail', // or '1-5'
+    },
+  ],
+}
+```
+
+### Output formats
+
+```ts
+// Console output (default)
+await runEvals(suite);
+
+// JSON (for CI/dashboards)
+await runEvals(suite, { output: 'json' });
+
+// CSV (for spreadsheets)
+await runEvals(suite, { output: 'csv' });
+
+// Silent (programmatic use)
+const result = await runEvals(suite, { output: 'silent' });
+```
+
 ## API Reference
 
 ### Main exports (`agent-do`)
@@ -633,6 +738,19 @@ const result = await agent.run('Weather in London?');
 | `BuildSystemPromptOptions` | Options for the prompt builder |
 | `SectionFn` | Function that returns a prompt section string |
 | `PromptTemplate` | Named template with ordered section list |
+| `EvalSuiteConfig` | Eval suite definition (name, model, cases) |
+| `EvalCase` | Single eval test case (input, assertions) |
+| `Assertion` | Union of all assertion types |
+| `EvalResult` | Full eval result with provider breakdowns |
+| `CaseResult` | Result of a single eval case |
+
+### Eval exports (`agent-do/eval`)
+
+| Export | Type | Description |
+|--------|------|-------------|
+| `defineEval` | `(config: EvalSuiteConfig) => EvalSuiteConfig` | Define an eval suite (type-safe helper) |
+| `runEvals` | `(suite, options?) => Promise<EvalResult>` | Run an eval suite and return results |
+| `evaluateAssertion` | `(assertion, result, judgeModel?) => Promise<AssertionResult>` | Evaluate a single assertion |
 
 ### Prompt exports (`agent-do/prompts`)
 
@@ -676,6 +794,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 10 | [`10-testing.ts`](examples/10-testing.ts) | Testing with createMockModel |
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
 | 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
+| 13 | [`13-eval-framework.ts`](examples/13-eval-framework.ts) | Eval framework — define cases, assert quality, compare providers |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
