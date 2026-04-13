@@ -1,40 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { createSavedAgent, listSavedAgents, loadSavedAgent } from '../src/cli/agents.js';
-import type { ParsedArgs } from '../src/cli/args.js';
+import { loadSavedAgent } from '../src/cli/agents.js';
 
-const TEST_DIR = path.join('.agent-do-test-' + Date.now());
-const AGENTS_DIR = path.join(TEST_DIR, 'agents');
-
-// Override the agents dir for testing
 const originalCwd = process.cwd();
-
-function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
-  return {
-    command: 'create',
-    provider: 'anthropic',
-    systemPrompt: 'You are a test agent.',
-    memoryDir: TEST_DIR,
-    readOnly: false,
-    maxIterations: 20,
-    noTools: false,
-    verbose: false,
-    json: false,
-    help: false,
-    output: 'console',
-    concurrency: 1,
-    ...overrides,
-  };
-}
+let testDir: string;
 
 describe('saved agents', () => {
   beforeEach(async () => {
-    await fs.promises.mkdir(AGENTS_DIR, { recursive: true });
+    testDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agent-do-test-'));
+    process.chdir(testDir);
   });
 
   afterEach(async () => {
-    await fs.promises.rm(TEST_DIR, { recursive: true, force: true });
+    process.chdir(originalCwd);
+    await fs.promises.rm(testDir, { recursive: true, force: true });
   });
 
   it('loadSavedAgent returns null for nonexistent agent', async () => {
@@ -66,22 +47,29 @@ describe('saved agents', () => {
     expect(loaded!.name).toBe('test-agent');
     expect(loaded!.provider).toBe('google');
     expect(loaded!.model).toBe('gemini-2.5-flash');
-
-    // Cleanup
-    await fs.promises.rm(path.join('.agent-do', 'agents', 'test-agent.json'));
   });
 
   it('loadSavedAgent returns null for invalid JSON', async () => {
-    await fs.promises.mkdir(path.join('.agent-do', 'agents'), { recursive: true });
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
     await fs.promises.writeFile(
-      path.join('.agent-do', 'agents', 'bad.json'),
+      path.join(agentDir, 'bad.json'),
       'not json{{{',
     );
 
     const loaded = await loadSavedAgent('bad');
     expect(loaded).toBeNull();
+  });
 
-    // Cleanup
-    await fs.promises.rm(path.join('.agent-do', 'agents', 'bad.json'));
+  it('rejects invalid agent names', async () => {
+    await expect(loadSavedAgent('my agent')).rejects.toThrow('Invalid agent name');
+    await expect(loadSavedAgent('../../etc')).rejects.toThrow('Invalid agent name');
+    await expect(loadSavedAgent('')).rejects.toThrow('Invalid agent name');
+  });
+
+  it('accepts valid agent names', async () => {
+    // Should not throw, just return null (not found)
+    const result = await loadSavedAgent('my-agent_v2');
+    expect(result).toBeNull();
   });
 });

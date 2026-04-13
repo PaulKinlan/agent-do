@@ -129,7 +129,8 @@ async function runProviderEvals(
       totalCost += caseResult.cost;
     }
   } else {
-    // Parallel with concurrency limit — worker pattern
+    // Parallel with concurrency limit — worker pattern, preserving input order
+    const indexed: Array<{ index: number; result: CaseResult }> = [];
     let nextCaseIndex = 0;
     const workerCount = Math.min(concurrency, suite.cases.length);
     const workers = Array.from({ length: workerCount }, async () => {
@@ -139,12 +140,18 @@ async function runProviderEvals(
 
         const evalCase = suite.cases[currentIndex]!;
         const caseResult = await runCase(suite, evalCase, provider, options);
-        cases.push(caseResult);
-        totalCost += caseResult.cost;
+        indexed.push({ index: currentIndex, result: caseResult });
       }
     });
 
     await Promise.all(workers);
+
+    // Sort by original index to preserve input order
+    indexed.sort((a, b) => a.index - b.index);
+    for (const { result } of indexed) {
+      cases.push(result);
+      totalCost += result.cost;
+    }
   }
 
   const passed = cases.filter(c => c.passed).length;

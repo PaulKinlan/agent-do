@@ -810,11 +810,6 @@ const result = await runEvals(suite, { output: 'silent' });
 | `BuildSystemPromptOptions` | Options for the prompt builder |
 | `SectionFn` | Function that returns a prompt section string |
 | `PromptTemplate` | Named template with ordered section list |
-| `EvalSuiteConfig` | Eval suite definition (name, model, cases) |
-| `EvalCase` | Single eval test case (input, assertions) |
-| `Assertion` | Union of all assertion types |
-| `EvalResult` | Full eval result with provider breakdowns |
-| `CaseResult` | Result of a single eval case |
 
 ### Eval exports (`agent-do/eval`)
 
@@ -823,6 +818,11 @@ const result = await runEvals(suite, { output: 'silent' });
 | `defineEval` | `(config: EvalSuiteConfig) => EvalSuiteConfig` | Define an eval suite (type-safe helper) |
 | `runEvals` | `(suite, options?) => Promise<EvalResult>` | Run an eval suite and return results |
 | `evaluateAssertion` | `(assertion, result, judgeModel?) => Promise<AssertionResult>` | Evaluate a single assertion |
+| `EvalSuiteConfig` | type | Eval suite definition (name, model, cases) |
+| `EvalCase` | type | Single eval test case (input, assertions) |
+| `Assertion` | type | Union of all 13 assertion types |
+| `EvalResult` | type | Full eval result with provider breakdowns |
+| `CaseResult` | type | Result of a single eval case |
 
 ### Prompt exports (`agent-do/prompts`)
 

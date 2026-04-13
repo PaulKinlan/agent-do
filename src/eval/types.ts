@@ -44,7 +44,7 @@ export interface ToolNotCalledAssertion {
 export interface ToolArgsAssertion {
   type: 'tool-args';
   tool: string;
-  /** Partial match — every key/value in args must appear in the actual tool call args. */
+  /** Deep partial match — every key in args must exist and match in the actual tool call args. Objects are partial-matched recursively; arrays require exact length and element-by-element match. */
   args: Record<string, unknown>;
 }
 

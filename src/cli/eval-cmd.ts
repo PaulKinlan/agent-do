@@ -31,12 +31,18 @@ export async function runEvalMode(args: ParsedArgs): Promise<void> {
   // Determine if CLI explicitly specifies a provider/model override
   const hasCliModelOverride = !!args.model || args.provider !== 'anthropic';
 
+  // For structured output (json/csv) with multiple suites, suppress per-suite
+  // output and emit one combined document at the end
+  const isStructured = args.output === 'json' || args.output === 'csv';
+  const multiSuite = suites.length > 1;
+
   let hasFailures = false;
+  const allResults: import('../eval/types.js').EvalResult[] = [];
 
   for (const suite of suites) {
     // Build per-suite options to preserve each suite's own model
     const options: RunEvalsOptions = {
-      output: args.output,
+      output: (isStructured && multiSuite) ? 'silent' : args.output,
       concurrency: args.concurrency,
     };
 
@@ -44,17 +50,44 @@ export async function runEvalMode(args: ParsedArgs): Promise<void> {
     if (args.compare && args.compare.length > 0) {
       options.providers = await resolveCompareProviders(args.compare, args.model);
     } else if (hasCliModelOverride) {
-      // CLI explicitly overrides provider/model — applies to all suites
       options.model = await resolveModel(args.provider, args.model);
     } else if (!suite.model) {
-      // Suite has no model — resolve default
       options.model = await resolveModel(args.provider, args.model);
     }
-    // else: suite has its own model and CLI didn't override — use suite's model
 
     const result = await runEvals(suite, options);
+    allResults.push(result);
     if (result.providers.some(p => p.failed > 0)) {
       hasFailures = true;
+    }
+  }
+
+  // Emit combined structured output for multi-suite runs
+  if (isStructured && multiSuite) {
+    if (args.output === 'json') {
+      console.log(JSON.stringify(allResults, null, 2));
+    } else {
+      // CSV: emit header once, then rows from all results
+      const lines = ['timestamp,suite,provider,model,case,passed,cost_usd,duration_ms,steps,error'];
+      for (const result of allResults) {
+        for (const provider of result.providers) {
+          for (const c of provider.cases) {
+            lines.push([
+              result.timestamp,
+              csvEscape(result.name),
+              csvEscape(provider.provider),
+              csvEscape(provider.model),
+              csvEscape(c.name),
+              c.passed,
+              c.cost.toFixed(6),
+              c.durationMs,
+              c.steps,
+              csvEscape(c.error ?? ''),
+            ].join(','));
+          }
+        }
+      }
+      console.log(lines.join('\n'));
     }
   }
 
@@ -113,4 +146,11 @@ async function loadSuiteFile(filePath: string): Promise<EvalSuiteConfig> {
   }
 
   return suite;
+}
+
+function csvEscape(s: string): string {
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
 }

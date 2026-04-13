@@ -144,7 +144,8 @@ function validateJsonStructure(
   const expectedType = schema.type as string | undefined;
 
   if (expectedType) {
-    const actualType = Array.isArray(value) ? 'array' : typeof value;
+    // null is typeof 'object' in JS but should not match 'object' schema
+    const actualType = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
     if (actualType !== expectedType) {
       errors.push(`${path || 'root'}: expected ${expectedType}, got ${actualType}`);
       return errors;

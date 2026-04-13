@@ -25,10 +25,12 @@ export interface SavedAgent {
 const AGENTS_DIR = path.join('.agent-do', 'agents');
 
 function agentPath(name: string): string {
-  // Sanitize name — alphanumeric, dash, underscore only
-  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!safe) throw new Error('Agent name must contain alphanumeric characters, dashes, or underscores.');
-  return path.join(AGENTS_DIR, `${safe}.json`);
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error(
+      `Invalid agent name "${name}". Names may only contain alphanumeric characters, dashes, and underscores.`,
+    );
+  }
+  return path.join(AGENTS_DIR, `${name}.json`);
 }
 
 /**

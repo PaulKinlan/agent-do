@@ -106,6 +106,15 @@ describe('json-schema assertion', () => {
     expect(r.passed).toBe(false);
     expect(r.message).toContain('not valid JSON');
   });
+
+  it('fails for null when schema expects object', async () => {
+    const r = await evaluateAssertion(
+      { type: 'json-schema', schema: { type: 'object' } },
+      makeResult({ text: 'null' }),
+    );
+    expect(r.passed).toBe(false);
+    expect(r.message).toContain('expected object, got null');
+  });
 });
 
 describe('tool-called assertion', () => {
