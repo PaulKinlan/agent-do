@@ -37,7 +37,6 @@ export const fileTools: SectionFn = () => `## File Tools
 You have file tools for reading and writing your private storage:
 - **read_file** — Read a file
 - **write_file** — Write to a file (creates parent dirs)
-- **edit_file** — Find-and-replace in a file
 - **list_directory** — List files and directories
 - **delete_file** — Delete a file
 - **grep_file** — Search files for a pattern

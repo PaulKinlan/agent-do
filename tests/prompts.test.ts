@@ -169,4 +169,55 @@ describe('interpolate', () => {
   it('handles empty variables', () => {
     expect(interpolate('no vars here', {})).toBe('no vars here');
   });
+
+  it('treats empty string as a valid value (not missing)', () => {
+    expect(interpolate('value={{key}}', { key: '' })).toBe('value=');
+  });
+
+  it('handles {{#if}} conditional blocks', () => {
+    const tmpl = '{{#if name}}Hello {{name}}!{{/if}}';
+    expect(interpolate(tmpl, { name: 'Paul' })).toBe('Hello Paul!');
+    expect(interpolate(tmpl, {})).toBe('');
+  });
+
+  it('handles {{#if}} with empty value (treated as falsy)', () => {
+    expect(interpolate('{{#if x}}yes{{/if}}', { x: '' })).toBe('');
+  });
+
+  it('handles multiple {{#if}} blocks', () => {
+    const tmpl = '{{#if a}}A{{/if}} {{#if b}}B{{/if}}';
+    expect(interpolate(tmpl, { a: 'yes', b: 'yes' })).toBe('A B');
+    expect(interpolate(tmpl, { a: 'yes' })).toBe('A ');
+  });
+});
+
+describe('buildSystemPrompt edge cases', () => {
+  it('onUnknownSection throw mode', () => {
+    expect(() => buildSystemPrompt({
+      sectionOrder: ['nonexistent'],
+      onUnknownSection: 'throw',
+    })).toThrow('Unknown section');
+  });
+
+  it('onUnknownSection callback mode', () => {
+    const unknown: string[] = [];
+    buildSystemPrompt({
+      sectionOrder: ['identity', 'nope', 'also_nope'],
+      onUnknownSection: (key) => unknown.push(key),
+    });
+    expect(unknown).toEqual(['nope', 'also_nope']);
+  });
+
+  it('onUnknownSection skip mode (default) does not throw', () => {
+    expect(() => buildSystemPrompt({
+      sectionOrder: ['identity', 'nonexistent'],
+    })).not.toThrow();
+  });
+
+  it('fileTools section does not mention edit_file', () => {
+    const result = builtinSections.fileTools();
+    expect(result).not.toContain('edit_file');
+    expect(result).toContain('read_file');
+    expect(result).toContain('write_file');
+  });
 });

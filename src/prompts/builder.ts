@@ -19,7 +19,7 @@ export interface BuildSystemPromptOptions {
   /**
    * Start with a named template (e.g. 'assistant', 'coder', 'researcher').
    * The template defines which sections to include and in what order.
-   * If not provided, you must specify `sections` explicitly.
+   * If not provided, defaults to ['identity', 'concise'] unless `sectionOrder` is set.
    */
   template?: string | PromptTemplate;
 
@@ -68,6 +68,12 @@ export interface BuildSystemPromptOptions {
    * Additional content prepended before all sections.
    */
   prepend?: Array<string | SectionFn>;
+
+  /**
+   * Called when a section key in the order list has no matching function.
+   * Defaults to silently skipping. Set to 'throw' to error on unknown sections.
+   */
+  onUnknownSection?: 'skip' | 'throw' | ((key: string) => void);
 }
 
 /**
@@ -111,12 +117,14 @@ export interface BuildSystemPromptOptions {
  * ```
  */
 export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): string {
-  const { template, sectionOrder, sections: customSections, variables, append, prepend } = options;
+  const { template, sectionOrder, sections: customSections, variables, append, prepend, onUnknownSection = 'skip' } = options;
 
-  // Resolve template
+  // Resolve template — use hasOwnProperty for safe lookup
   let resolvedTemplate: PromptTemplate | undefined;
   if (typeof template === 'string') {
-    resolvedTemplate = builtinTemplates[template];
+    resolvedTemplate = Object.prototype.hasOwnProperty.call(builtinTemplates, template)
+      ? builtinTemplates[template]
+      : undefined;
     if (!resolvedTemplate) {
       throw new Error(`Unknown template: "${template}". Available: ${Object.keys(builtinTemplates).join(', ')}`);
     }
@@ -128,11 +136,19 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
   const order = sectionOrder || resolvedTemplate?.sections || ['identity', 'concise'];
 
   // Merge section functions: builtins + role-specific + custom overrides
-  const allSections: Record<string, SectionFn> = {
-    ...builtinSections,
-    ...roleSections,
-    ...(customSections || {}),
-  };
+  // Only include own properties to avoid prototype pollution
+  const allSections: Record<string, SectionFn> = {};
+  for (const [k, v] of Object.entries(builtinSections)) {
+    if (Object.prototype.hasOwnProperty.call(builtinSections, k)) allSections[k] = v;
+  }
+  for (const [k, v] of Object.entries(roleSections)) {
+    if (Object.prototype.hasOwnProperty.call(roleSections, k)) allSections[k] = v;
+  }
+  if (customSections) {
+    for (const [k, v] of Object.entries(customSections)) {
+      if (Object.prototype.hasOwnProperty.call(customSections, k)) allSections[k] = v;
+    }
+  }
 
   // Build the prompt
   const parts: string[] = [];
@@ -146,12 +162,16 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
   // Sections
   for (const key of order) {
-    const fn = allSections[key];
-    if (fn) {
-      parts.push(fn(variables));
+    if (Object.prototype.hasOwnProperty.call(allSections, key)) {
+      parts.push(allSections[key]!(variables));
     } else {
-      // Unknown section — skip silently (might be a future section)
-      console.warn(`[buildSystemPrompt] Unknown section: "${key}" — skipping`);
+      // Unknown section
+      if (onUnknownSection === 'throw') {
+        throw new Error(`Unknown section: "${key}". Available: ${Object.keys(allSections).join(', ')}`);
+      } else if (typeof onUnknownSection === 'function') {
+        onUnknownSection(key);
+      }
+      // 'skip' — silently skip
     }
   }
 
@@ -166,9 +186,30 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 }
 
 /**
- * Simple variable interpolation for templates.
- * Replaces {{variableName}} with the value from the variables object.
+ * Variable interpolation for prompt templates.
+ *
+ * Replaces `{{variableName}}` with the value from the variables object.
+ * Supports `{{#if key}}...{{/if}}` conditional blocks.
+ *
+ * Empty string values are valid — only undefined/missing keys are kept as placeholders.
  */
 export function interpolate(template: string, variables: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] || `{{${key}}}`);
+  // Handle {{#if key}}...{{/if}} blocks
+  let result = template.replace(
+    /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
+    (_, key: string, content: string) => {
+      const value = Object.prototype.hasOwnProperty.call(variables, key) ? variables[key] : undefined;
+      return value ? content : '';
+    },
+  );
+
+  // Handle {{variable}} replacements — use nullish check so '' is valid
+  result = result.replace(
+    /\{\{(\w+)\}\}/g,
+    (match, key: string) => {
+      return Object.prototype.hasOwnProperty.call(variables, key) ? variables[key]! : match;
+    },
+  );
+
+  return result;
 }
