@@ -141,4 +141,84 @@ describe('FilesystemMemoryStore', () => {
       expect(results[0]!.path).toContain('deep.txt');
     });
   });
+
+  describe('readOnly mode', () => {
+    it('blocks write operations', async () => {
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      await expect(roStore.write('agent-1', 'file.txt', 'data')).rejects.toThrow('read-only');
+    });
+
+    it('blocks append operations', async () => {
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      await expect(roStore.append('agent-1', 'file.txt', 'data')).rejects.toThrow('read-only');
+    });
+
+    it('blocks delete operations', async () => {
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      await expect(roStore.delete('agent-1', 'file.txt')).rejects.toThrow('read-only');
+    });
+
+    it('blocks mkdir operations', async () => {
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      await expect(roStore.mkdir('agent-1', 'newdir')).rejects.toThrow('read-only');
+    });
+
+    it('allows read operations', async () => {
+      // Write with the normal store first
+      await store.write('agent-1', 'readable.txt', 'can read this');
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      const content = await roStore.read('agent-1', 'readable.txt');
+      expect(content).toBe('can read this');
+    });
+
+    it('allows list operations', async () => {
+      await store.write('agent-1', 'listed.txt', 'data');
+      const roStore = new FilesystemMemoryStore(tmpDir, { readOnly: true });
+      const entries = await roStore.list('agent-1');
+      expect(entries.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('onBeforeWrite callback', () => {
+    it('blocks writes when callback returns false', async () => {
+      const guardedStore = new FilesystemMemoryStore(tmpDir, {
+        onBeforeWrite: async () => false,
+      });
+      await expect(guardedStore.write('agent-1', 'blocked.txt', 'nope')).rejects.toThrow('blocked by onBeforeWrite');
+    });
+
+    it('allows writes when callback returns true', async () => {
+      const guardedStore = new FilesystemMemoryStore(tmpDir, {
+        onBeforeWrite: async () => true,
+      });
+      await guardedStore.write('agent-1', 'allowed.txt', 'yes');
+      expect(await guardedStore.read('agent-1', 'allowed.txt')).toBe('yes');
+    });
+
+    it('receives correct arguments', async () => {
+      const calls: Array<{ agentId: string; path: string; op: string }> = [];
+      const guardedStore = new FilesystemMemoryStore(tmpDir, {
+        onBeforeWrite: async (agentId, filePath, operation) => {
+          calls.push({ agentId, path: filePath, op: operation });
+          return true;
+        },
+      });
+      await guardedStore.write('test-agent', 'notes/hello.md', 'hi');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.agentId).toBe('test-agent');
+      expect(calls[0]!.path).toBe('notes/hello.md');
+      expect(calls[0]!.op).toBe('write');
+    });
+
+    it('is called for delete and mkdir too', async () => {
+      const ops: string[] = [];
+      const guardedStore = new FilesystemMemoryStore(tmpDir, {
+        onBeforeWrite: async (_a, _p, op) => { ops.push(op); return true; },
+      });
+      await guardedStore.write('agent-1', 'temp.txt', 'data');
+      await guardedStore.mkdir('agent-1', 'newdir');
+      await guardedStore.delete('agent-1', 'temp.txt');
+      expect(ops).toEqual(['write', 'mkdir', 'delete']);
+    });
+  });
 });

@@ -22,6 +22,21 @@ console.log('  Example 11: Filesystem Memory Store');
 console.log('═══════════════════════════════════════════════\n');
 
 const DATA_DIR = path.resolve('.agent-data');
+
+// ── Safety warning and confirmation ──
+console.warn('⚠️  WARNING: This example gives an AI agent read/write access to:');
+console.warn(`   ${DATA_DIR}/`);
+console.warn('');
+console.warn('   The agent will create directories and write files on your');
+console.warn('   real filesystem. It decides what to create based on the task.');
+console.warn('   Files persist after this script exits.');
+console.warn('');
+console.warn('   Press Enter to continue, or Ctrl+C to abort.\n');
+
+await new Promise<void>(resolve => {
+  process.stdin.once('data', () => resolve());
+});
+
 console.log(`Storage directory: ${DATA_DIR}`);
 console.log('Files will persist across runs. Delete .agent-data/ to reset.\n');
 
