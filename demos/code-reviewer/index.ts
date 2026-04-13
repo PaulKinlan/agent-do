@@ -70,10 +70,11 @@ console.log('');
 
 // The review target is mounted read-only -- the agent cannot modify the code.
 // FilesystemMemoryStore scopes to {baseDir}/{agentId}/, so we use the parent
-// directory as baseDir and the directory name as agentId. This way
-// read_file("src/index.ts") reads from the actual target directory.
-const sourceStore = new FilesystemMemoryStore(path.dirname(targetDir), { readOnly: true });
-const SOURCE_AGENT_ID = path.basename(targetDir);
+// Use targetDir as baseDir with '.' as agentId — read_file("src/index.ts")
+// resolves to targetDir/src/index.ts. Path traversal (../) is blocked by
+// FilesystemMemoryStore's containment check against baseDir.
+const sourceStore = new FilesystemMemoryStore(targetDir, { readOnly: true });
+const SOURCE_AGENT_ID = '.';
 
 // A writable store for saving the review output
 const outputStore = new FilesystemMemoryStore(OUTPUT_DIR);
