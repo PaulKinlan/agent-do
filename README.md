@@ -629,6 +629,19 @@ const result = await agent.run('Weather in London?');
 | `FileEntry` | File/directory entry from `list()` |
 | `ConversationMessage` | User/assistant message for conversation history |
 | `Orchestrator` / `OrchestratorConfig` | Multi-agent orchestration types |
+| `BuildSystemPromptOptions` | Options for the prompt builder |
+| `SectionFn` | Function that returns a prompt section string |
+| `PromptTemplate` | Named template with ordered section list |
+
+### Prompt exports (`agent-do/prompts`)
+
+| Export | Type | Description |
+|--------|------|-------------|
+| `buildSystemPrompt` | function | Compose a system prompt from templates, sections, and variables |
+| `interpolate` | function | Simple `{{variable}}` replacement |
+| `builtinTemplates` | object | Preconfigured templates: assistant, coder, researcher, reviewer, writer, planner |
+| `builtinSections` | object | Reusable sections: identity, memoryManagement, fileTools, efficiency, etc. |
+| `roleSections` | object | Role-specific sections: codingApproach, researchApproach, etc. |
 
 ### Store exports (`agent-do/stores`)
 
@@ -661,6 +674,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 9 | [`09-skills.ts`](examples/09-skills.ts) | Skills system |
 | 10 | [`10-testing.ts`](examples/10-testing.ts) | Testing with createMockModel |
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
+| 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

@@ -56,3 +56,11 @@ export type { MemoryStore, FileEntry } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
 export type { FilesystemMemoryStoreOptions } from './types.js';
+
+// Prompt builder
+export { buildSystemPrompt, interpolate } from './prompts/builder.js';
+export { builtinSections } from './prompts/sections.js';
+export { builtinTemplates, roleSections } from './prompts/templates.js';
+export type { BuildSystemPromptOptions } from './prompts/builder.js';
+export type { SectionFn } from './prompts/sections.js';
+export type { PromptTemplate } from './prompts/templates.js';
