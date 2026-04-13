@@ -77,19 +77,28 @@ async function runOneShot(
   args: ParsedArgs,
 ): Promise<void> {
   if (args.json) {
-    // JSON mode — collect everything
+    // JSON mode — collect everything, detect errors
     const events: ProgressEvent[] = [];
     let finalText = '';
+    let hasError = false;
+    let errorMessage = '';
 
     for await (const event of agent.stream(task)) {
       events.push(event);
       if (event.type === 'done') finalText = event.content;
+      if (event.type === 'error') {
+        hasError = true;
+        errorMessage = event.content;
+      }
     }
 
     console.log(JSON.stringify({
       text: finalText,
+      error: hasError ? errorMessage : undefined,
       events: args.verbose ? events : undefined,
     }, null, 2));
+
+    if (hasError) process.exit(1);
     return;
   }
 
@@ -97,7 +106,9 @@ async function runOneShot(
   for await (const event of agent.stream(task)) {
     switch (event.type) {
       case 'thinking':
-        process.stdout.write(event.content);
+        if (args.verbose) {
+          process.stdout.write(event.content);
+        }
         break;
       case 'tool-call':
         if (args.verbose) {
@@ -110,7 +121,8 @@ async function runOneShot(
         }
         break;
       case 'text':
-        // Final text — already streamed via thinking
+        // Final text output for a step
+        process.stdout.write(event.content);
         break;
       case 'done':
         process.stdout.write('\n');
@@ -149,13 +161,15 @@ async function runInteractive(
     if (!trimmed) continue;
     if (trimmed === 'exit' || trimmed === 'quit') break;
 
-    history.push({ role: 'user', content: trimmed });
-
+    // Pass only prior turns as history — streamAgentLoop appends the current
+    // user message from the task parameter, so adding it here would duplicate it
     let response = '';
     for await (const event of agent.stream(trimmed, undefined, history)) {
       switch (event.type) {
         case 'thinking':
-          process.stdout.write(event.content);
+          if (args.verbose) {
+            process.stdout.write(event.content);
+          }
           break;
         case 'tool-call':
           if (args.verbose) {
@@ -167,6 +181,9 @@ async function runInteractive(
             console.log(`[result] ${truncate(String(event.toolResult), 200)}`);
           }
           break;
+        case 'text':
+          process.stdout.write(event.content);
+          break;
         case 'done':
           response = event.content;
           process.stdout.write('\n\n');
@@ -177,6 +194,8 @@ async function runInteractive(
       }
     }
 
+    // Add both turns to history AFTER the run completes
+    history.push({ role: 'user', content: trimmed });
     if (response) {
       history.push({ role: 'assistant', content: response });
     }

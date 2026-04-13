@@ -10,6 +10,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { ParsedArgs } from './args.js';
 import { resolveModel, resolveCompareProviders } from './resolve-model.js';
 import { runEvals } from '../eval/runner.js';
@@ -27,26 +28,30 @@ export async function runEvalMode(args: ParsedArgs): Promise<void> {
     throw new Error(`No eval suites found in "${args.file}"`);
   }
 
-  // Build run options
-  const options: RunEvalsOptions = {
-    output: args.output,
-    concurrency: args.concurrency,
-  };
-
-  // Multi-provider comparison
-  if (args.compare && args.compare.length > 0) {
-    options.providers = await resolveCompareProviders(args.compare, args.model);
-  } else {
-    // Single model — override if CLI specifies provider/model, or use suite's model
-    const needsModel = suites.some(s => !s.model);
-    if (args.model || needsModel) {
-      options.model = await resolveModel(args.provider, args.model);
-    }
-  }
+  // Determine if CLI explicitly specifies a provider/model override
+  const hasCliModelOverride = !!args.model || args.provider !== 'anthropic';
 
   let hasFailures = false;
 
   for (const suite of suites) {
+    // Build per-suite options to preserve each suite's own model
+    const options: RunEvalsOptions = {
+      output: args.output,
+      concurrency: args.concurrency,
+    };
+
+    // Multi-provider comparison
+    if (args.compare && args.compare.length > 0) {
+      options.providers = await resolveCompareProviders(args.compare, args.model);
+    } else if (hasCliModelOverride) {
+      // CLI explicitly overrides provider/model — applies to all suites
+      options.model = await resolveModel(args.provider, args.model);
+    } else if (!suite.model) {
+      // Suite has no model — resolve default
+      options.model = await resolveModel(args.provider, args.model);
+    }
+    // else: suite has its own model and CLI didn't override — use suite's model
+
     const result = await runEvals(suite, options);
     if (result.providers.some(p => p.failed > 0)) {
       hasFailures = true;
@@ -90,7 +95,8 @@ async function loadSuites(target: string): Promise<EvalSuiteConfig[]> {
 async function loadSuiteFile(filePath: string): Promise<EvalSuiteConfig> {
   let mod: Record<string, unknown>;
   try {
-    mod = await import(filePath);
+    // Use file URL for cross-platform compatibility (Windows paths)
+    mod = await import(pathToFileURL(filePath).href);
   } catch (err) {
     throw new Error(
       `Failed to import eval file "${filePath}": ${err instanceof Error ? err.message : String(err)}`,

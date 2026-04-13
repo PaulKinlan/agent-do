@@ -7,9 +7,14 @@
  * - An Agent instance (has .run() and .stream())
  * - An AgentConfig object (has .model and .id)
  * - A simple config object (has .systemPrompt, auto-resolves model)
+ *
+ * Note: .ts files require a TypeScript loader (tsx, ts-node).
+ * Run with: npx tsx node_modules/.bin/agent-do run script.ts
+ * Or use compiled .js files directly.
  */
 
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
@@ -26,7 +31,8 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   const filePath = path.resolve(args.file);
   let mod: Record<string, unknown>;
   try {
-    mod = await import(filePath);
+    // Use file URL for cross-platform compatibility (Windows paths)
+    mod = await import(pathToFileURL(filePath).href);
   } catch (err) {
     throw new Error(
       `Failed to import "${args.file}": ${err instanceof Error ? err.message : String(err)}`,
@@ -50,16 +56,22 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       (exported.provider as string) ?? args.provider,
       (exported.model as string) ?? args.model,
     );
-    const memDir = (exported.memory as string) ?? args.memoryDir;
-    const store = new FilesystemMemoryStore(memDir, { readOnly: args.readOnly });
     const agentId = (exported.id as string) ?? 'script-agent';
+
+    // Respect --no-tools flag
+    let tools = undefined;
+    if (!args.noTools) {
+      const memDir = (exported.memory as string) ?? args.memoryDir;
+      const store = new FilesystemMemoryStore(memDir, { readOnly: args.readOnly });
+      tools = createFileTools(store, agentId);
+    }
 
     agent = createAgent({
       id: agentId,
       name: (exported.name as string) ?? 'Script Agent',
       model,
       systemPrompt: (exported.systemPrompt as string) ?? args.systemPrompt,
-      tools: createFileTools(store, agentId),
+      tools,
       maxIterations: (exported.maxIterations as number) ?? args.maxIterations,
       permissions: { mode: 'accept-all' },
       usage: { enabled: true },
@@ -85,7 +97,9 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   for await (const event of agent.stream(task)) {
     switch (event.type) {
       case 'thinking':
-        process.stdout.write(event.content);
+        if (args.verbose) {
+          process.stdout.write(event.content);
+        }
         break;
       case 'tool-call':
         if (args.verbose) {
@@ -96,6 +110,9 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
         if (args.verbose) {
           console.log(`[result] ${String(event.toolResult).slice(0, 200)}`);
         }
+        break;
+      case 'text':
+        process.stdout.write(event.content);
         break;
       case 'done':
         process.stdout.write('\n');

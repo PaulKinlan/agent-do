@@ -33,7 +33,7 @@ export async function resolveModel(
   switch (provider) {
     case 'anthropic': {
       const { createAnthropic } = await tryImport('@ai-sdk/anthropic', provider);
-      return createAnthropic()( id) as LanguageModel;
+      return createAnthropic()(id) as LanguageModel;
     }
     case 'google': {
       const { createGoogleGenerativeAI } = await tryImport('@ai-sdk/google', provider);
@@ -44,8 +44,12 @@ export async function resolveModel(
       return createOpenAI()(id) as LanguageModel;
     }
     case 'ollama': {
-      const { createOllama } = await tryImport('ollama-ai-provider', provider);
-      return createOllama()(id) as LanguageModel;
+      // Use OpenAI-compatible endpoint for Ollama (consistent with examples)
+      const { createOpenAI } = await tryImport('@ai-sdk/openai', 'ollama (via @ai-sdk/openai)');
+      return createOpenAI({
+        baseURL: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434/v1',
+        apiKey: 'ollama',
+      })(id) as LanguageModel;
     }
     default:
       throw new Error(
