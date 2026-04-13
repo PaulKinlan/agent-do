@@ -28,7 +28,7 @@
 
 ## File Tools
 
-- `createFileTools(store: MemoryStore, agentId: string): ToolSet` — creates read_file, write_file, list_directory, delete_file, grep_file, find_files
+- `createFileTools(store: MemoryStore, agentId: string): ToolSet` — creates read_file, write_file, edit_file, list_directory, delete_file, grep_file, find_files
 
 ## Memory Stores
 
@@ -81,3 +81,17 @@
 ## ConversationMessage
 
 - `{ role: 'user' | 'assistant', content: string }` — for passing conversation history
+
+## Prompt Builder (agent-do/prompts)
+
+- `buildSystemPrompt(options: BuildSystemPromptOptions): string` — compose a system prompt
+  - `options.template: string | PromptTemplate` — named template or custom template object
+  - `options.sectionOrder: string[]` — override section order
+  - `options.sections: Record<string, SectionFn>` — custom/override section functions
+  - `options.variables: Record<string, string>` — interpolated into sections
+  - `options.append: Array<string | SectionFn>` — content appended after sections
+  - `options.prepend: Array<string | SectionFn>` — content prepended before sections
+- `interpolate(template, variables): string` — {{variable}} replacement
+- `builtinTemplates` — assistant, coder, researcher, reviewer, writer, planner
+- `builtinSections` — identity, memoryManagement, fileTools, efficiency, concise, selfEditing, learnedPreferences, htmlGeneration, todoTracking, runtimeContext
+- `roleSections` — codingApproach, researchApproach, reviewApproach, writingApproach, planningApproach

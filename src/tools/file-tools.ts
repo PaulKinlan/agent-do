@@ -56,6 +56,34 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
       },
     }),
 
+    edit_file: tool({
+      description: 'Edit a file by replacing an exact string match. The old_string must appear exactly once in the file.',
+      inputSchema: s(
+        z.object({
+          path: z.string().describe('The file path to edit'),
+          old_string: z.string().describe('The exact text to find and replace'),
+          new_string: z.string().describe('The replacement text'),
+        }),
+      ),
+      execute: async ({ path, old_string, new_string }: { path: string; old_string: string; new_string: string }) => {
+        try {
+          const content = await store.read(agentId, path);
+          if (!content.includes(old_string)) {
+            return `Error: old_string not found in ${path}`;
+          }
+          const occurrences = content.split(old_string).length - 1;
+          if (occurrences > 1) {
+            return `Error: old_string found ${occurrences} times in ${path} — must be unique. Provide more context to match exactly once.`;
+          }
+          const updated = content.replace(old_string, new_string);
+          await store.write(agentId, path, updated);
+          return `Successfully edited ${path}`;
+        } catch (err) {
+          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      },
+    }),
+
     list_directory: tool({
       description: 'List files and directories at the given path. Returns names and types.',
       inputSchema: s(
