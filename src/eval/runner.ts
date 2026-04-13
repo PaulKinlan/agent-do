@@ -129,38 +129,22 @@ async function runProviderEvals(
       totalCost += caseResult.cost;
     }
   } else {
-    // Parallel with concurrency limit
-    const pending = [...suite.cases];
-    const running: Promise<void>[] = [];
+    // Parallel with concurrency limit — worker pattern
+    let nextCaseIndex = 0;
+    const workerCount = Math.min(concurrency, suite.cases.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (!options.signal?.aborted) {
+        const currentIndex = nextCaseIndex++;
+        if (currentIndex >= suite.cases.length) break;
 
-    while (pending.length > 0 || running.length > 0) {
-      if (options.signal?.aborted) break;
-
-      while (running.length < concurrency && pending.length > 0) {
-        const evalCase = pending.shift()!;
-        const promise = runCase(suite, evalCase, provider, options).then(caseResult => {
-          cases.push(caseResult);
-          totalCost += caseResult.cost;
-        });
-        running.push(promise);
+        const evalCase = suite.cases[currentIndex]!;
+        const caseResult = await runCase(suite, evalCase, provider, options);
+        cases.push(caseResult);
+        totalCost += caseResult.cost;
       }
+    });
 
-      if (running.length > 0) {
-        await Promise.race(running);
-        // Remove settled promises
-        const settled: number[] = [];
-        for (let i = 0; i < running.length; i++) {
-          const status = await Promise.race([
-            running[i]!.then(() => 'settled' as const),
-            Promise.resolve('pending' as const),
-          ]);
-          if (status === 'settled') settled.push(i);
-        }
-        for (let i = settled.length - 1; i >= 0; i--) {
-          running.splice(settled[i]!, 1);
-        }
-      }
-    }
+    await Promise.all(workers);
   }
 
   const passed = cases.filter(c => c.passed).length;
@@ -198,15 +182,19 @@ async function runCase(
   const totalCost = runResults.reduce((sum, r) => sum + r.cost, 0);
   const totalDuration = runResults.reduce((sum, r) => sum + r.durationMs, 0);
 
+  // Surface assertions from the first failing run (or first run if all passed)
+  const representativeRun = runResults.find(r => !r.passed) ?? runResults[0];
+
   return {
     name: evalCase.name,
     input: evalCase.input,
     passed: allPassed,
-    assertions: runResults[0]?.assertions ?? [],
+    assertions: representativeRun?.assertions ?? [],
     cost: totalCost,
     durationMs: totalDuration,
     steps: Math.max(...runResults.map(r => r.steps)),
-    text: runResults[runResults.length - 1]?.text ?? '',
+    text: representativeRun?.text ?? '',
+    error: representativeRun?.error,
     runs: runResults,
   };
 }
@@ -231,15 +219,16 @@ async function runSingleCase(
   const baseTools = suite.tools ?? createFileTools(store, agentId);
   const wrappedTools = wrapToolsForCapture(baseTools, toolCalls);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const parentAbortHandler = () => controller.abort();
+
+  // Also respect parent signal
+  if (options.signal) {
+    options.signal.addEventListener('abort', parentAbortHandler, { once: true });
+  }
+
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-    // Also respect parent signal
-    if (options.signal) {
-      options.signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
-
     const result = await runAgentLoop(
       {
         id: agentId,
@@ -261,8 +250,6 @@ async function runSingleCase(
       evalCase.history,
     );
 
-    clearTimeout(timeoutId);
-
     const caseRunResult: CaseRunResult = {
       text: result.text,
       steps: result.steps,
@@ -281,15 +268,19 @@ async function runSingleCase(
       provider.model,
     );
 
+    // Aborted runs always fail — partial output should not produce false positives
+    const aborted = result.aborted;
+
     return {
       name: evalCase.name,
       input: evalCase.input,
-      passed: assertions.every(a => a.passed),
+      passed: !aborted && assertions.every(a => a.passed),
       assertions,
       cost: caseRunResult.cost,
       durationMs: caseRunResult.durationMs,
       steps: caseRunResult.steps,
       text: caseRunResult.text,
+      error: aborted ? 'Agent run was aborted (timeout or signal).' : undefined,
     };
   } catch (err) {
     return {
@@ -303,6 +294,11 @@ async function runSingleCase(
       text: '',
       error: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    clearTimeout(timeoutId);
+    if (options.signal) {
+      options.signal.removeEventListener('abort', parentAbortHandler);
+    }
   }
 }
 
@@ -322,13 +318,25 @@ function wrapToolsForCapture(
     wrapped[name] = {
       ...toolDef,
       execute: async (args: unknown, context: unknown) => {
-        const result = await (originalExecute as Function)(args, context);
-        captured.push({
+        // Record the call attempt before execution so tool-called assertions
+        // work even if the tool throws
+        const entry = {
           toolName: name,
           args: (args ?? {}) as Record<string, unknown>,
-          result,
-        });
-        return result;
+          result: undefined as unknown,
+        };
+        captured.push(entry);
+
+        try {
+          const result = await (originalExecute as Function)(args, context);
+          entry.result = result;
+          return result;
+        } catch (error) {
+          entry.result = error instanceof Error
+            ? { error: error.name, message: error.message }
+            : { error: 'unknown', message: String(error) };
+          throw error;
+        }
       },
     };
   }

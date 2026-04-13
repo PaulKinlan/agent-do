@@ -213,12 +213,10 @@ function evaluateToolArgs(
     };
   }
 
-  // Check if any call has matching args (partial match)
+  // Check if any call has matching args (deep partial match)
   const passed = calls.some(call => {
     const actualArgs = call.args as Record<string, unknown>;
-    return Object.entries(expectedArgs).every(([key, value]) => {
-      return JSON.stringify(actualArgs[key]) === JSON.stringify(value);
-    });
+    return deepPartialMatch(actualArgs, expectedArgs);
   });
 
   return {
@@ -391,4 +389,34 @@ async function evaluateCustom(
 
 function truncate(s: string, max = 50): string {
   return s.length > max ? s.slice(0, max) + '...' : s;
+}
+
+/**
+ * Deep partial match — every key/value in `expected` must match in `actual`.
+ * Recurses into objects and arrays. Primitives compared with strict equality.
+ */
+function deepPartialMatch(actual: unknown, expected: unknown): boolean {
+  // Primitives — strict equality
+  if (expected === null || expected === undefined || typeof expected !== 'object') {
+    return actual === expected;
+  }
+
+  // Array match — expected array must match actual array element-by-element
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual)) return false;
+    if (expected.length !== actual.length) return false;
+    return expected.every((item, i) => deepPartialMatch(actual[i], item));
+  }
+
+  // Object partial match — every key in expected must exist and match in actual
+  if (typeof actual !== 'object' || actual === null || Array.isArray(actual)) {
+    return false;
+  }
+
+  const actualObj = actual as Record<string, unknown>;
+  const expectedObj = expected as Record<string, unknown>;
+
+  return Object.keys(expectedObj).every(key =>
+    key in actualObj && deepPartialMatch(actualObj[key], expectedObj[key]),
+  );
 }

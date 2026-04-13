@@ -187,6 +187,48 @@ describe('tool-args assertion', () => {
     expect(r.passed).toBe(false);
     expect(r.message).toContain('was not called');
   });
+
+  it('deep partial match — nested objects', async () => {
+    const r = await evaluateAssertion(
+      { type: 'tool-args', tool: 'api_call', args: { config: { timeout: 5000 } } },
+      makeResult({
+        toolCalls: [{
+          toolName: 'api_call',
+          args: { config: { timeout: 5000, retries: 3 }, url: 'http://x' },
+          result: 'ok',
+        }],
+      }),
+    );
+    expect(r.passed).toBe(true);
+  });
+
+  it('deep partial match — array values', async () => {
+    const r = await evaluateAssertion(
+      { type: 'tool-args', tool: 'query', args: { tags: ['a', 'b'] } },
+      makeResult({
+        toolCalls: [{
+          toolName: 'query',
+          args: { tags: ['a', 'b'], limit: 10 },
+          result: 'ok',
+        }],
+      }),
+    );
+    expect(r.passed).toBe(true);
+  });
+
+  it('deep partial match fails on different nested value', async () => {
+    const r = await evaluateAssertion(
+      { type: 'tool-args', tool: 'api_call', args: { config: { timeout: 9999 } } },
+      makeResult({
+        toolCalls: [{
+          toolName: 'api_call',
+          args: { config: { timeout: 5000 } },
+          result: 'ok',
+        }],
+      }),
+    );
+    expect(r.passed).toBe(false);
+  });
 });
 
 describe('file-exists assertion', () => {
