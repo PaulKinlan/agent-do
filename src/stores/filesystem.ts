@@ -4,18 +4,45 @@
  * Stores agent files in {baseDir}/{agentId}/ on the local filesystem.
  * Files persist across process restarts.
  *
+ * Security options:
+ * - `readOnly: true` blocks all write operations (zero write side effects)
+ * - `onBeforeWrite` callback lets you approve/deny each write
+ *
  * Usage:
  *   import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
+ *
+ *   // Basic (full read/write access):
  *   const store = new FilesystemMemoryStore('/path/to/data');
+ *
+ *   // Read-only (agent can read but not modify):
+ *   const readOnlyStore = new FilesystemMemoryStore('/path/to/data', { readOnly: true });
+ *
+ *   // With write confirmation (receives canonicalized path):
+ *   const guardedStore = new FilesystemMemoryStore('/path/to/data', {
+ *     onBeforeWrite: async (agentId, canonicalPath, operation) => {
+ *       console.log(`Agent ${agentId} wants to ${operation}: ${canonicalPath}`);
+ *       return true; // or false to block
+ *     },
+ *   });
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
+import type { FilesystemMemoryStoreOptions } from '../types.js';
+
+export type { FilesystemMemoryStoreOptions } from '../types.js';
 
 export class FilesystemMemoryStore implements MemoryStore {
-  constructor(private baseDir: string) {
-    fs.mkdirSync(baseDir, { recursive: true });
+  private options: FilesystemMemoryStoreOptions;
+
+  constructor(private baseDir: string, options?: FilesystemMemoryStoreOptions) {
+    this.options = options || {};
+    // Only create the base directory if not in read-only mode
+    // so readOnly has zero write side effects
+    if (!this.options.readOnly) {
+      fs.mkdirSync(baseDir, { recursive: true });
+    }
   }
 
   private resolve(agentId: string, filePath: string): string {
@@ -27,6 +54,27 @@ export class FilesystemMemoryStore implements MemoryStore {
     return resolved;
   }
 
+  /** Returns the canonicalized relative path for use in callbacks. */
+  private canonicalRelativePath(agentId: string, filePath: string): string {
+    const resolved = this.resolve(agentId, filePath);
+    const agentDir = path.resolve(this.baseDir, agentId);
+    return path.relative(agentDir, resolved);
+  }
+
+  private async checkWrite(agentId: string, filePath: string, op: 'write' | 'append' | 'delete' | 'mkdir'): Promise<void> {
+    if (this.options.readOnly) {
+      throw new Error(`Write blocked: store is read-only (attempted ${op} on ${filePath})`);
+    }
+    if (this.options.onBeforeWrite) {
+      // Pass the canonicalized path so policies can't be bypassed with ../
+      const canonicalPath = this.canonicalRelativePath(agentId, filePath);
+      const allowed = await Promise.resolve(this.options.onBeforeWrite(agentId, canonicalPath, op));
+      if (!allowed) {
+        throw new Error(`Write blocked by onBeforeWrite callback (attempted ${op} on ${canonicalPath})`);
+      }
+    }
+  }
+
   async read(agentId: string, filePath: string): Promise<string> {
     const full = this.resolve(agentId, filePath);
     if (!fs.existsSync(full)) throw new Error(`File not found: ${filePath}`);
@@ -34,18 +82,21 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
+    await this.checkWrite(agentId, filePath, 'write');
     const full = this.resolve(agentId, filePath);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content, 'utf-8');
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
+    await this.checkWrite(agentId, filePath, 'append');
     const full = this.resolve(agentId, filePath);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.appendFileSync(full, content, 'utf-8');
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
+    await this.checkWrite(agentId, filePath, 'delete');
     const full = this.resolve(agentId, filePath);
     if (fs.existsSync(full)) fs.unlinkSync(full);
   }
@@ -61,6 +112,7 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
+    await this.checkWrite(agentId, dirPath, 'mkdir');
     fs.mkdirSync(this.resolve(agentId, dirPath), { recursive: true });
   }
 

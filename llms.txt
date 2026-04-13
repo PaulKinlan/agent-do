@@ -33,7 +33,9 @@
 ## Memory Stores
 
 - `InMemoryMemoryStore` — in-memory (testing/prototyping, data lost on exit)
-- `FilesystemMemoryStore(baseDir: string)` — Node.js filesystem (persistent)
+- `FilesystemMemoryStore(baseDir: string, options?: FilesystemMemoryStoreOptions)` — Node.js filesystem (persistent)
+  - `options.readOnly: boolean` — block all write operations
+  - `options.onBeforeWrite: (agentId, canonicalPath, operation) => boolean | Promise<boolean>` — approve/deny each write
 - `MemoryStore` interface: read, write, append, delete, list, mkdir, exists, search
 
 ## Skills

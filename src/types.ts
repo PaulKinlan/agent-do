@@ -162,6 +162,19 @@ export interface ConversationMessage {
   content: string;
 }
 
+// Filesystem store options
+export interface FilesystemMemoryStoreOptions {
+  /** Block all write operations. Agent can only read existing files. */
+  readOnly?: boolean;
+  /**
+   * Called before any write/append/delete/mkdir operation.
+   * Receives the canonicalized relative path (safe against ../ bypass).
+   * Return true to allow, false to block.
+   * Supports both sync and async callbacks.
+   */
+  onBeforeWrite?: (agentId: string, filePath: string, operation: 'write' | 'append' | 'delete' | 'mkdir') => boolean | Promise<boolean>;
+}
+
 // Agent instance
 export interface Agent {
   readonly id: string;

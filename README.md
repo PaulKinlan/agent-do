@@ -229,6 +229,30 @@ const agent = createAgent({
 // Files persist at ./agent-data/my-agent/
 ```
 
+### Security: FilesystemMemoryStore
+
+> **Warning:** `FilesystemMemoryStore` gives the agent read/write access to the
+> specified directory. The agent decides what files to create and modify. Use
+> `readOnly: true` to restrict to read-only access, or `onBeforeWrite` to
+> approve each write operation.
+
+```ts
+// Read-only mode — agent can read but not create/modify/delete
+const readOnlyStore = new FilesystemMemoryStore('./data', { readOnly: true });
+```
+
+```ts
+// Write confirmation — approve each operation (sync or async)
+const guardedStore = new FilesystemMemoryStore('./data', {
+  onBeforeWrite: (agentId, canonicalPath, operation) => {
+    console.log(`Agent ${agentId} wants to ${operation}: ${canonicalPath}`);
+    // Return true to allow, false to block
+    // The path is canonicalized — ../traversal is resolved before this callback
+    return true;
+  },
+});
+```
+
 For other backends, implement the interface:
 
 ```ts

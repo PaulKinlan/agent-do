@@ -55,3 +55,4 @@ export type {
 export type { MemoryStore, FileEntry } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
+export type { FilesystemMemoryStoreOptions } from './types.js';
