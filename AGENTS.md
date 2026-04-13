@@ -79,9 +79,9 @@ npx tsx examples/11-filesystem-store.ts
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-cd demos/assistant && npm install && npm start
-cd demos/research-team && npm install && npm start
-cd demos/code-reviewer && npm install && npm start
+(cd demos/assistant && npm install && npm start)
+(cd demos/research-team && npm install && npm start)
+(cd demos/code-reviewer && npm install && npm start)
 ```
 
 ## Testing Strategy

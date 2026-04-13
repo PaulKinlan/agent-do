@@ -13,7 +13,10 @@ A multi-turn interactive assistant that persists files to disk, streams response
 ## How to run
 
 ```bash
-# Install dependencies
+# Install repo root dependencies first (if not already done)
+# (cd ../.. && npm install)
+
+# Install demo dependencies
 npm install
 
 # Set your API key

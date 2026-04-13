@@ -7,13 +7,16 @@ An agent that reads source files from a directory and produces a structured code
 - **Directory scanning** -- Reads all source files from the target directory.
 - **Read-only mode** -- Uses `FilesystemMemoryStore` with `readOnly: true` so the agent cannot modify your code.
 - **Structured review** -- Produces a report organized by severity (critical, warning, suggestion).
-- **File output** -- Saves the review report to `.data/reviews/` as a markdown file.
+- **File output** -- Saves the review report to `.data/reviews/reviewer/` as a markdown file (scoped under the reviewer agent's ID by `FilesystemMemoryStore`).
 - **Progress logging** -- Shows which files are being read and analyzed.
 
 ## How to run
 
 ```bash
-# Install dependencies
+# Install repo root dependencies first (if not already done)
+# (cd ../.. && npm install)
+
+# Install demo dependencies
 npm install
 
 # Set your API key
@@ -35,7 +38,7 @@ npm start
    - Bugs and logic errors
    - Code readability and maintainability
    - Best practices and patterns
-4. A structured review report is saved to `.data/reviews/review-TIMESTAMP.md`.
+4. A structured review report is saved to `.data/reviews/reviewer/review-TIMESTAMP.md`.
 5. The report summary is printed to the console.
 
 ## Example output
@@ -48,7 +51,7 @@ Reading project structure...
 
 Analyzing code...
 
-Review saved to .data/reviews/review-2025-01-15T10-30-00.md
+Review saved to .data/reviews/reviewer/review-2025-01-15T10-30-00.md
 
 Summary:
   Files reviewed: 5

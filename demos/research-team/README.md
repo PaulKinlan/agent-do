@@ -8,12 +8,15 @@ A multi-agent orchestrator where a Master agent coordinates a Researcher and Wri
 - **Researcher agent** -- Gathers information and key facts about the topic.
 - **Writer agent** -- Takes research output and drafts a polished, structured report.
 - **Real-time progress** -- Logs which agent is active and what tools they are calling.
-- **File output** -- Saves the final report to `.data/reports/` as a markdown file.
+- **File output** -- Saves the final report to `.data/master/reports/` as a markdown file (scoped under the master agent's ID by `FilesystemMemoryStore`).
 
 ## How to run
 
 ```bash
-# Install dependencies
+# Install repo root dependencies first (if not already done)
+# (cd ../.. && npm install)
+
+# Install demo dependencies
 npm install
 
 # Set your API key
@@ -32,7 +35,7 @@ npm start  # prompts for a topic interactively
 3. The researcher returns findings to the master.
 4. The master delegates writing to the writer agent.
 5. The writer drafts a structured report.
-6. The master saves the report to `.data/reports/`.
+6. The master saves the report to `.data/master/reports/`.
 7. The final report is printed to the console.
 
 ## Architecture
@@ -55,5 +58,5 @@ Master Agent (claude-sonnet-4-6)
   |      returns polished report
   |
   v
-Final report saved to .data/reports/
+Final report saved to .data/master/reports/
 ```

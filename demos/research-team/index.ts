@@ -12,8 +12,6 @@
  */
 
 import * as readline from 'node:readline';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import {
   createOrchestrator,
   createFileTools,
@@ -26,7 +24,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 // ═══════════════════════════════════════════════
 
 const DATA_DIR = '.data';
-const REPORTS_DIR = path.join(DATA_DIR, 'reports');
 const MASTER_MODEL = 'claude-sonnet-4-6';
 const WORKER_MODEL = 'claude-haiku-4-5';
 
@@ -40,9 +37,6 @@ if (!apiKey) {
   console.error('  export ANTHROPIC_API_KEY=sk-ant-...');
   process.exit(1);
 }
-
-// Ensure reports directory exists
-fs.mkdirSync(REPORTS_DIR, { recursive: true });
 
 const provider = createAnthropic({ apiKey });
 

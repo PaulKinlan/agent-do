@@ -68,23 +68,27 @@ console.log('');
 //  Read-only filesystem store for the source code
 // ═══════════════════════════════════════════════
 
-// The review target is mounted read-only -- the agent cannot modify the code
-const sourceStore = new FilesystemMemoryStore(targetDir, { readOnly: true });
+// The review target is mounted read-only -- the agent cannot modify the code.
+// FilesystemMemoryStore scopes to {baseDir}/{agentId}/, so we use the parent
+// directory as baseDir and the directory name as agentId. This way
+// read_file("src/index.ts") reads from the actual target directory.
+const sourceStore = new FilesystemMemoryStore(path.dirname(targetDir), { readOnly: true });
+const SOURCE_AGENT_ID = path.basename(targetDir);
 
 // A writable store for saving the review output
 const outputStore = new FilesystemMemoryStore(OUTPUT_DIR);
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Combine both into tools:
-//   - Source code tools are read-only (prefixed with source_)
+//   - Source code tools are read-only
 //   - Output tools can write (for saving the review)
-const sourceTools = createFileTools(sourceStore, AGENT_ID);
+const sourceTools = createFileTools(sourceStore, SOURCE_AGENT_ID);
 const outputTools = createFileTools(outputStore, AGENT_ID);
 
 // Build a combined toolset with clear naming
 const tools: Record<string, any> = {};
 
-// Source tools: rename for clarity
+// Source tools: keep only read-only operations
 for (const [name, tool] of Object.entries(sourceTools)) {
   // Keep read-only tools from source, skip write/delete
   if (name === 'read_file' || name === 'list_directory' || name === 'grep_file' || name === 'find_files') {

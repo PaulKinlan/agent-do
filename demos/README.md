@@ -10,12 +10,12 @@ From the repo root, install the main package first:
 npm install
 ```
 
-Then install each demo's dependencies:
+Then install each demo's dependencies (using subshells so your working directory isn't changed):
 
 ```bash
-cd demos/assistant && npm install
-cd demos/research-team && npm install
-cd demos/code-reviewer && npm install
+(cd demos/assistant && npm install)
+(cd demos/research-team && npm install)
+(cd demos/code-reviewer && npm install)
 ```
 
 Make sure your `ANTHROPIC_API_KEY` environment variable is set:
@@ -38,7 +38,7 @@ A multi-turn interactive assistant with persistent file storage, streaming outpu
 - Session summary on exit (total tokens, cost, messages)
 
 ```bash
-cd demos/assistant && npm start
+(cd demos/assistant && npm start)
 ```
 
 ### 2. Multi-Agent Research Pipeline (`demos/research-team/`)
@@ -49,10 +49,10 @@ A multi-agent orchestrator with a Master, Researcher, and Writer agent that coll
 - Researcher gathers information
 - Writer drafts a polished report
 - Real-time progress logging shows which agent is active
-- Final report saved to `.data/reports/`
+- Final report saved to `.data/master/reports/` (scoped under the master agent's ID)
 
 ```bash
-cd demos/research-team && npm start "Rust programming language"
+(cd demos/research-team && npm start "Rust programming language")
 ```
 
 ### 3. Automated Code Reviewer (`demos/code-reviewer/`)
@@ -62,9 +62,9 @@ An agent that reads source files from a directory and produces a structured code
 - Takes a directory path as argument (defaults to current directory)
 - Uses `FilesystemMemoryStore` in read-only mode
 - Structured review covering security, bugs, and readability
-- Saves review report to `.data/reviews/`
+- Saves review report to `.data/reviews/reviewer/` (scoped under the reviewer agent's ID)
 - Progress output as files are read and analyzed
 
 ```bash
-cd demos/code-reviewer && npm start /path/to/project
+(cd demos/code-reviewer && npm start /path/to/project)
 ```
