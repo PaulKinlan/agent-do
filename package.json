@@ -1,20 +1,41 @@
 {
   "name": "agent-do",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
   "bin": {
     "agent-do": "./dist/src/cli.js"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./testing": "./src/testing/index.ts",
-    "./stores": "./src/stores.ts",
-    "./stores/in-memory": "./src/stores/in-memory.ts",
-    "./stores/filesystem": "./src/stores/filesystem.ts",
-    "./prompts": "./src/prompts/index.ts",
-    "./eval": "./src/eval/index.ts"
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./testing": {
+      "types": "./dist/src/testing/index.d.ts",
+      "default": "./dist/src/testing/index.js"
+    },
+    "./stores": {
+      "types": "./dist/src/stores.d.ts",
+      "default": "./dist/src/stores.js"
+    },
+    "./stores/in-memory": {
+      "types": "./dist/src/stores/in-memory.d.ts",
+      "default": "./dist/src/stores/in-memory.js"
+    },
+    "./stores/filesystem": {
+      "types": "./dist/src/stores/filesystem.d.ts",
+      "default": "./dist/src/stores/filesystem.js"
+    },
+    "./prompts": {
+      "types": "./dist/src/prompts/index.d.ts",
+      "default": "./dist/src/prompts/index.js"
+    },
+    "./eval": {
+      "types": "./dist/src/eval/index.d.ts",
+      "default": "./dist/src/eval/index.js"
+    }
   },
   "scripts": {
     "build": "tsc",
