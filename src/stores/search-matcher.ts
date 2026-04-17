@@ -47,12 +47,32 @@ export const MAX_REGEX_PATTERN_LENGTH = 256;
  * solver); false positives are cheap (user rewrites), false negatives
  * hang the loop.
  */
+/**
+ * Cap on the number of `?`-quantified atoms (optional atoms) in a
+ * regex before we call it dangerous (Codex #63 follow-up).
+ *
+ * The attack is `a?a?a?…a?aaaa!` — N consecutive optional atoms
+ * followed by required atoms that force the engine to try all 2^N
+ * combinations before failing. `hasDangerousNesting` alone doesn't
+ * catch it because there's no group to flag as risky. We cap the
+ * total number of `?` quantifiers at a level comfortably above real
+ * regexes but far below the point where exponential backtracking
+ * matters.
+ *
+ * Realistic patterns rarely have more than 3–5 optional atoms
+ * (abbreviated matches, optional separators, version strings); 8 is
+ * a generous upper bound with a sharp cliff before hang territory
+ * (~20 optional atoms on a failing input).
+ */
+const MAX_OPTIONAL_QUANTIFIERS = 8;
+
 function hasDangerousNesting(pattern: string): boolean {
   // `groupStack` tracks, for each currently-open paren, whether the
   // body seen so far contains an alternation or a quantifier. Closing
   // a group consults the top-of-stack flag; if the group is then
   // followed by a quantifier, that's the danger shape.
   const groupStack: { risky: boolean }[] = [];
+  let optionalQuantifiers = 0;
   let i = 0;
   while (i < pattern.length) {
     const ch = pattern[i]!;
@@ -105,14 +125,41 @@ function hasDangerousNesting(pattern: string): boolean {
     if (ch === ')') {
       const closed = groupStack.pop();
       if (!closed) { i++; continue; } // stray `)` — let the regex compiler complain
-      // What follows the `)` — a quantifier means this group is repeated.
+      // What follows the `)` — a *repeating* quantifier means the
+      // group's body is tried multiple times, which is what drives
+      // catastrophic backtracking when the body is itself risky.
+      // `?` is NOT repeating (0-or-1, at most two branches), so
+      // `(\.\d+)?` isn't catastrophic even though the body contains
+      // a `+`. Same for `{0,1}` which is just `?`.
       const nextCh = pattern[i + 1];
-      const isQuant =
-        nextCh === '+' || nextCh === '*' || nextCh === '?' || nextCh === '{';
-      if (isQuant && closed.risky) return true;
-      // Even if this group isn't quantified, the outer group (if any)
-      // inherits any quantifier/alternation we saw inside — `((a+))+`
-      // has a quantifier via the outer group.
+      let repeatingQuant = false;
+      if (nextCh === '+' || nextCh === '*') {
+        repeatingQuant = true;
+      } else if (nextCh === '{') {
+        // Parse `{n,m}` and decide whether the upper bound is ≥ 2.
+        // Missing upper bound (`{n,}`) is unbounded → repeating.
+        const end = pattern.indexOf('}', i + 2);
+        if (end !== -1) {
+          const range = pattern.slice(i + 2, end);
+          const parts = range.split(',');
+          if (parts.length === 1) {
+            // {n} — repeats exactly n times; catastrophic for n ≥ 2.
+            const n = Number(parts[0]);
+            if (!Number.isNaN(n) && n >= 2) repeatingQuant = true;
+          } else {
+            const upper = parts[1]!.trim();
+            if (upper === '') repeatingQuant = true; // {n,}
+            else {
+              const m = Number(upper);
+              if (!Number.isNaN(m) && m >= 2) repeatingQuant = true;
+            }
+          }
+        }
+      }
+      if (repeatingQuant && closed.risky) return true;
+      // Even if this group isn't quantified (or is only `?`-quantified),
+      // the outer group (if any) inherits any risk we saw inside —
+      // `((a+))+` has a quantifier via the outer group.
       if (closed.risky && groupStack.length > 0) {
         groupStack[groupStack.length - 1]!.risky = true;
       }
@@ -132,6 +179,10 @@ function hasDangerousNesting(pattern: string): boolean {
       // group body now contains a quantifier, which makes it risky if
       // the whole group is later quantified.
       if (groupStack.length > 0) groupStack[groupStack.length - 1]!.risky = true;
+      // Count `?` quantifiers separately — a long chain of them is
+      // an optional-chain ReDoS (`a?a?a?…a?aaaa!`) even without any
+      // group nesting.
+      if (ch === '?') optionalQuantifiers++;
       // Skip the full `{n,m}` range so we don't revisit its digits.
       if (ch === '{') {
         while (i < pattern.length && pattern[i] !== '}') i++;
@@ -141,7 +192,7 @@ function hasDangerousNesting(pattern: string): boolean {
     }
     i++;
   }
-  return false;
+  return optionalQuantifiers > MAX_OPTIONAL_QUANTIFIERS;
 }
 
 export interface SearchMatcherOptions {
@@ -172,9 +223,11 @@ export function buildLineMatcher(
     throw new Error(
       'Regex pattern rejected: contains a quantifier applied to a group ' +
       'that itself contains an alternation or another quantifier (e.g. ' +
-      '"(a+)+", "(a|a?)+", "(a+){1,}"). These shapes cause catastrophic ' +
-      'backtracking on adversarial input. Rewrite without the nested ' +
-      'repetition, or omit `regex: true` to do a literal substring match.',
+      '"(a+)+", "(a|a?)+", "(a+){1,}"), or a long chain of `?` optional ' +
+      `atoms (more than ${MAX_OPTIONAL_QUANTIFIERS}). These shapes cause ` +
+      'catastrophic backtracking on adversarial input. Rewrite without ' +
+      'the nested repetition, or omit `regex: true` to do a literal ' +
+      'substring match.',
     );
   }
 

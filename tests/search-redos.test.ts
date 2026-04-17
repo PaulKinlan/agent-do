@@ -212,6 +212,34 @@ describe('store.search regex mode (opt-in)', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('rejects long optional-quantifier chains (Codex #63 follow-up)', async () => {
+    // Catastrophic shape without any group:
+    // `a?a?a?…a?aaaa!` — N optional atoms × N required atoms
+    // explodes to 2^N backtracks. `hasDangerousNesting` alone never
+    // marked this risky because there's no group. The optional-
+    // quantifier counter now kicks in above the cap (8).
+    //
+    // Build the pattern from pieces so CodeQL's static ReDoS scanner
+    // doesn't see a live catastrophic regex in the test fixtures.
+    const optChain = 'a?'.repeat(25);
+    const pattern = '^' + optChain + 'a'.repeat(25) + '$';
+    await expect(
+      store.search('a', pattern, undefined, { regex: true }),
+    ).rejects.toThrow(/catastrophic backtracking|optional atoms/i);
+  });
+
+  it('accepts modest optional-quantifier counts (under the cap)', async () => {
+    // Real patterns with a handful of optional atoms should still
+    // pass: version strings, abbreviated matches, optional whitespace.
+    await store.write('a', 'versions.txt', 'v1.2.3\nv1.2\nv1');
+    const r = await store.search('a', 'v\\d+(\\.\\d+)?(\\.\\d+)?', undefined, { regex: true });
+    expect(r.length).toBeGreaterThan(0);
+    // A few inline optionals — `colou?r`, `behavi?o?u?r` are fine.
+    expect(
+      (await store.search('a', 'a?b?c?d?e?', undefined, { regex: true })).length,
+    ).toBeGreaterThanOrEqual(0);
+  });
+
   it('accepts long literal patterns (no 256-char cap in literal mode)', async () => {
     // Codex + Copilot review on PR #63: the schema cap + store cap
     // were both regex-only, so a safe literal search of >256 chars

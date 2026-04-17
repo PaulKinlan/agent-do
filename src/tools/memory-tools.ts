@@ -190,26 +190,38 @@ export function createMemoryTools(
     }),
 
     memory_search: tool({
-      description: "Search the agent's private memory for a pattern.",
+      description:
+        "Search the agent's private memory for a pattern. Literal " +
+        'substring (case-insensitive) by default. Pass `regex: true` to ' +
+        'treat the pattern as a regex — the same safety checks apply as ' +
+        'for grep_file (length cap + catastrophic-backtracking guard).',
       inputSchema: s(
         z.object({
-          pattern: z.string().describe('Text or regex pattern to search for'),
+          pattern: z
+            .string()
+            .describe('Text pattern to search for. Literal substring by default.'),
           path: z
             .string()
             .optional()
             .describe('Subdirectory to search within (defaults to root)'),
+          regex: z
+            .boolean()
+            .optional()
+            .describe('Treat pattern as a regex (opt-in; safety-checked)'),
         }),
       ),
       execute: async ({
         pattern,
         path,
+        regex,
       }: {
         pattern: string;
         path?: string;
+        regex?: boolean;
       }): Promise<ToolResult> => {
         const scope = path ?? '.';
         try {
-          const results = await store.search(agentId, pattern, path);
+          const results = await store.search(agentId, pattern, path, { regex });
           if (results.length === 0) {
             return {
               modelContent: `No matches found for "${pattern}"`,
