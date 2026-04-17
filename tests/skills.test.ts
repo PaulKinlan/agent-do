@@ -259,7 +259,11 @@ describe('InMemorySkillStore', () => {
     });
     const [r] = await store.search('x');
     expect(r).toEqual({ id: 'x', name: 'X', description: 'd' });
-    expect((r as Record<string, unknown>).url).toBeUndefined();
+    // SkillSearchResult deliberately has no index signature, so the
+    // direct `as Record<string, unknown>` cast is rejected under
+    // `strict` (TS2352). Go through `unknown` to confirm the field is
+    // absent at runtime regardless of declared type.
+    expect((r as unknown as Record<string, unknown>).url).toBeUndefined();
   });
 });
 
