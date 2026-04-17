@@ -35,7 +35,11 @@ describe('renderOptionsFromArgs', () => {
 });
 
 describe('renderEvent', () => {
-  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  // Vitest's `vi.spyOn` return type doesn't simplify well for overloaded
+  // signatures like `process.stderr.write`; type as `any` to keep the
+  // test concise.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stderrSpy: any;
 
   beforeEach(() => {
     stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -70,7 +74,7 @@ describe('renderEvent', () => {
 
   it('renders a structured tool-result summary in verbose mode', () => {
     renderEvent(toolResult({}), { verbose: true, showContent: false });
-    const calls = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('[result]');
     expect(calls).toContain('[read_file] src/app.ts');
     expect(calls).toContain('data: ');
@@ -87,7 +91,7 @@ describe('renderEvent', () => {
       }),
       { verbose: true, showContent: false },
     );
-    const calls = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('[blocked]');
     expect(calls).toContain('rule=.env*');
   });
@@ -99,7 +103,7 @@ describe('renderEvent', () => {
       }),
       { verbose: true, showContent: false },
     );
-    const calls = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).not.toContain('SECRET_TOKEN');
   });
 
@@ -110,7 +114,7 @@ describe('renderEvent', () => {
       }),
       { verbose: true, showContent: true },
     );
-    const calls = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('─── content ───');
     expect(calls).toContain('hello');
     expect(calls).toContain('world');
@@ -123,7 +127,7 @@ describe('renderEvent', () => {
 
   it('prints errors to stderr regardless of verbosity', () => {
     renderEvent({ type: 'error', content: 'oops' } as ProgressEvent, { verbose: false, showContent: false });
-    const calls = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('Error: oops');
   });
 });
