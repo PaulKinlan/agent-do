@@ -13,7 +13,9 @@ export interface ParsedArgs {
   provider: string;
   model?: string;
   systemPrompt: string;
+  workingDir: string;
   memoryDir: string;
+  withMemory: boolean;
   readOnly: boolean;
   maxIterations: number;
   noTools: boolean;
@@ -37,7 +39,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     command: 'prompt',
     provider: 'anthropic',
     systemPrompt: 'You are a helpful assistant.',
+    workingDir: process.cwd(),
     memoryDir: '.agent-do',
+    withMemory: false,
     readOnly: false,
     maxIterations: 20,
     noTools: false,
@@ -80,8 +84,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.model = requireValue(argv, ++i, '--model');
     } else if (arg === '--system') {
       args.systemPrompt = requireValue(argv, ++i, '--system');
+    } else if (arg === '--cwd' || arg === '--working-dir') {
+      args.workingDir = requireValue(argv, ++i, arg);
     } else if (arg === '--memory') {
       args.memoryDir = requireValue(argv, ++i, '--memory');
+    } else if (arg === '--with-memory') {
+      args.withMemory = true;
     } else if (arg === '--read-only') {
       args.readOnly = true;
     } else if (arg === '--max-iterations') {

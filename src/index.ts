@@ -13,7 +13,13 @@ export {
   InMemorySkillStore,
 } from './skills.js';
 
-// File tools
+// Workspace tools (real project files) and memory tools (agent scratchpad)
+export { createWorkspaceTools } from './tools/workspace-tools.js';
+export type { WorkspaceToolsOptions } from './tools/workspace-tools.js';
+export { createMemoryTools } from './tools/memory-tools.js';
+
+// Lower-level file tools — backed by any MemoryStore. Prefer
+// createWorkspaceTools or createMemoryTools unless you need a custom store.
 export { createFileTools } from './tools/file-tools.js';
 
 // Usage

@@ -20,9 +20,11 @@ import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { loadSavedAgent } from './agents.js';
 import { createAgent } from '../agent.js';
-import { createFileTools } from '../tools/file-tools.js';
+import { createWorkspaceTools } from '../tools/workspace-tools.js';
+import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import type { Agent } from '../types.js';
+import type { ToolSet } from 'ai';
 
 export async function runScriptMode(args: ParsedArgs): Promise<void> {
   if (!args.file) {
@@ -66,12 +68,19 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     );
     const agentId = (exported.id as string) ?? 'script-agent';
 
-    // Respect --no-tools flag
-    let tools = undefined;
+    // Workspace tools on the cwd by default; memory tools opt-in.
+    let tools: ToolSet | undefined;
     if (!args.noTools) {
-      const memDir = (exported.memory as string) ?? args.memoryDir;
-      const store = new FilesystemMemoryStore(memDir, { readOnly: args.readOnly });
-      tools = createFileTools(store, agentId);
+      tools = createWorkspaceTools(args.workingDir, { readOnly: args.readOnly });
+      const wantMemory =
+        (exported.withMemory as boolean | undefined) ?? args.withMemory;
+      if (wantMemory) {
+        const memDir = (exported.memory as string) ?? args.memoryDir;
+        const memStore = new FilesystemMemoryStore(memDir, {
+          readOnly: args.readOnly,
+        });
+        tools = { ...tools, ...createMemoryTools(memStore, agentId) };
+      }
     }
 
     agent = createAgent({
@@ -145,10 +154,19 @@ async function runSavedAgent(
   const model = await resolveModel(saved.provider, saved.model);
   const agentId = saved.name;
 
-  let tools = undefined;
+  let tools: ToolSet | undefined;
   if (!saved.noTools) {
-    const store = new FilesystemMemoryStore(saved.memoryDir, { readOnly: saved.readOnly });
-    tools = createFileTools(store, agentId);
+    // Workspace tools default to the caller's cwd so saved agents see the
+    // project they were invoked against, not the dir where they were created.
+    tools = createWorkspaceTools(args.workingDir, {
+      readOnly: saved.readOnly || args.readOnly,
+    });
+    if (saved.withMemory || args.withMemory) {
+      const memStore = new FilesystemMemoryStore(saved.memoryDir, {
+        readOnly: saved.readOnly,
+      });
+      tools = { ...tools, ...createMemoryTools(memStore, agentId) };
+    }
   }
 
   const agent = createAgent({

@@ -13,20 +13,28 @@ import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { createAgent } from '../agent.js';
-import { createFileTools } from '../tools/file-tools.js';
+import { createWorkspaceTools } from '../tools/workspace-tools.js';
+import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
-import { InMemoryMemoryStore } from '../stores/in-memory.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
+import type { ToolSet } from 'ai';
 
 export async function runPromptMode(args: ParsedArgs): Promise<void> {
   const model = await resolveModel(args.provider, args.model);
 
-  // Set up memory store
-  const store = args.noTools
-    ? new InMemoryMemoryStore()
-    : new FilesystemMemoryStore(args.memoryDir, { readOnly: args.readOnly });
-
-  const tools = args.noTools ? undefined : createFileTools(store, 'cli-agent');
+  // Workspace tools see the working directory (cwd by default).
+  // Memory tools are opt-in via --with-memory and give the agent a
+  // private scratchpad scoped to its ID.
+  let tools: ToolSet | undefined;
+  if (!args.noTools) {
+    tools = createWorkspaceTools(args.workingDir, { readOnly: args.readOnly });
+    if (args.withMemory) {
+      const memStore = new FilesystemMemoryStore(args.memoryDir, {
+        readOnly: args.readOnly,
+      });
+      tools = { ...tools, ...createMemoryTools(memStore, 'cli-agent') };
+    }
+  }
 
   const agent = createAgent({
     id: 'cli-agent',

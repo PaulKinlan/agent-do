@@ -77,13 +77,24 @@ Options:
   --provider <name>      anthropic | google | openai | ollama (default: anthropic)
   --model <id>           Model ID (default: provider-specific)
   --system <prompt>      System prompt (default: "You are a helpful assistant.")
-  --memory <dir>         Memory directory (default: .agent-do/)
-  --read-only            No filesystem writes
+  --cwd <dir>            Working directory for workspace tools (default: current dir)
+  --memory <dir>         Memory directory for --with-memory (default: .agent-do/)
+  --with-memory          Enable memory tools (memory_read/write — agent scratchpad)
+  --read-only            Block all writes (workspace + memory)
   --max-iterations <n>   Max loop iterations (default: 20)
-  --no-tools             Disable file tools
+  --no-tools             Disable all file tools
   --verbose              Show thinking, tool calls, and per-step text (quiet by default)
   --json                 Output as JSON
   -h, --help             Show this help
+
+Tools:
+  Workspace tools (read_file, write_file, list_directory, grep_file, find_files,
+  edit_file, delete_file) are enabled by default, rooted at --cwd. They operate
+  on real project files — the agent sees what you see.
+
+  Memory tools (memory_read, memory_write, memory_list, memory_delete,
+  memory_search) are a separate, optional scratchpad for the agent's own notes.
+  Enable them with --with-memory. They're scoped per-agent and kept in --memory.
 
 Eval options:
   --output <format>      console | json | csv (default: console)

@@ -16,6 +16,11 @@ export interface SavedAgent {
   model?: string;
   systemPrompt: string;
   memoryDir: string;
+  /**
+   * Enable the agent's private memory tools (memory_read, memory_write, etc.).
+   * Workspace tools (read_file, write_file) are always enabled unless noTools.
+   */
+  withMemory?: boolean;
   readOnly: boolean;
   maxIterations: number;
   noTools: boolean;
@@ -79,6 +84,7 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
     model: args.model,
     systemPrompt: args.systemPrompt,
     memoryDir: args.memoryDir,
+    withMemory: args.withMemory,
     readOnly: args.readOnly,
     maxIterations: args.maxIterations,
     noTools: args.noTools,
@@ -100,10 +106,10 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
   console.log(`  Provider:     ${config.provider}`);
   console.log(`  Model:        ${config.model ?? '(provider default)'}`);
   console.log(`  System:       ${config.systemPrompt.slice(0, 60)}${config.systemPrompt.length > 60 ? '...' : ''}`);
-  console.log(`  Memory:       ${config.memoryDir}`);
+  console.log(`  Memory:       ${config.memoryDir}${config.withMemory ? '' : ' (disabled — pass --with-memory to enable)'}`);
   console.log(`  Max iters:    ${config.maxIterations}`);
   console.log(`  Read-only:    ${config.readOnly}`);
-  console.log(`  Tools:        ${config.noTools ? 'disabled' : 'enabled'}`);
+  console.log(`  Tools:        ${config.noTools ? 'disabled' : 'workspace (cwd)'}`);
   console.log();
   console.log(`Run it: npx agent-do run ${args.agentName} "your task"`);
 }

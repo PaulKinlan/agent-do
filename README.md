@@ -101,16 +101,37 @@ Options:
   --provider <name>      anthropic | google | openai | ollama (default: anthropic)
   --model <id>           Model ID (default: provider-specific)
   --system <prompt>      System prompt
-  --memory <dir>         Memory directory (default: .agent-do/)
-  --read-only            No filesystem writes
+  --cwd <dir>            Working directory for workspace tools (default: cwd)
+  --memory <dir>         Memory directory for --with-memory (default: .agent-do/)
+  --with-memory          Enable memory tools (agent scratchpad)
+  --read-only            Block all writes (workspace + memory)
   --max-iterations <n>   Max loop iterations (default: 20)
-  --no-tools             Disable file tools
+  --no-tools             Disable all file tools
   --verbose              Show tool calls
   --json                 JSON output
   --output <fmt>         console | json | csv (eval only)
   --compare <providers>  Compare providers (eval only, comma-separated)
   --concurrency <n>      Parallel eval cases (default: 1)
 ```
+
+### Tools: workspace vs memory
+
+agent-do splits file access into two distinct concepts so the agent
+knows whether it's touching your project or its own notes:
+
+- **Workspace tools** (`read_file`, `write_file`, `list_directory`,
+  `grep_file`, `find_files`, `edit_file`, `delete_file`) are enabled by
+  default and rooted at `--cwd` (defaults to the current directory).
+  This is what most CLI users want — the agent reads and modifies real
+  project files.
+- **Memory tools** (`memory_read`, `memory_write`, `memory_list`,
+  `memory_delete`, `memory_search`) are opt-in via `--with-memory`.
+  They give the agent a private, per-agent scratchpad under `--memory`
+  (default `.agent-do/`). Use memory when you want the agent to
+  remember notes or plans across runs without scribbling on the
+  project.
+
+Both respect `--read-only`. To disable all file access, use `--no-tools`.
 
 ### Piping
 
