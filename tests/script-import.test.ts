@@ -148,7 +148,33 @@ describe('importScriptFile', () => {
   it('rejects a non-existent file', async () => {
     await expect(
       importScriptFile('./missing.js', { yes: true }),
-    ).rejects.toThrow(/not found or unreadable/);
+    ).rejects.toThrow(/not found/);
+  });
+
+  it('rejects a symlink pointing outside cwd (Codex #66 P2)', async () => {
+    // Plant a file outside cwd, symlink it into cwd with a trusted-
+    // looking name. `path.resolve(rawPath)` stays inside cwd (the
+    // symlink path is inside) but realpath reveals the escape.
+    const outside = path.join(os.tmpdir(), `agent-do-escape-${process.pid}.mjs`);
+    fs.writeFileSync(outside, "export default { pwned: true };\n");
+    try {
+      fs.symlinkSync(outside, path.join(tmpDir, 'trusted.mjs'));
+      await expect(
+        importScriptFile('./trusted.mjs', { yes: true }),
+      ).rejects.toThrow(/outside the working directory/);
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  it('rejects a directory that has a script-like extension (isFile check)', async () => {
+    // With isFile() we reject directories explicitly. The old R_OK
+    // check would have passed a readable directory and then produced
+    // a less clear error at import time.
+    fs.mkdirSync(path.join(tmpDir, 'fake.mjs'));
+    await expect(
+      importScriptFile('./fake.mjs', { yes: true }),
+    ).rejects.toThrow(/not a regular file/);
   });
 
   it('rejects a disallowed extension', async () => {

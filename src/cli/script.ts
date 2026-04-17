@@ -80,6 +80,25 @@ function looksLikeScriptPath(arg: string): boolean {
  * checks for `--yes` in that case, so reaching here without a TTY means
  * the user passed `--script` but not `--yes` over a pipe.
  */
+/**
+ * Hard cap on a script file before we'll hash it for the confirmation
+ * banner. Per-PR-#66 Copilot: reading the whole file into memory just
+ * to compute a SHA-256 is wasteful for large files; cap at a safe
+ * upper bound and stream the hash instead of buffering.
+ */
+const SCRIPT_MAX_SIZE = 2 * 1024 * 1024; // 2 MB
+
+async function hashFileStreaming(filePath: string): Promise<string> {
+  const hasher = createHash('sha256');
+  const stream = fs.createReadStream(filePath);
+  await new Promise<void>((resolve, reject) => {
+    stream.on('data', (chunk) => hasher.update(chunk as Buffer));
+    stream.on('end', () => resolve());
+    stream.on('error', reject);
+  });
+  return hasher.digest('hex').slice(0, 16);
+}
+
 async function confirmScriptImport(filePath: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stderr.write(
@@ -88,8 +107,17 @@ async function confirmScriptImport(filePath: string): Promise<boolean> {
     return false;
   }
   const stat = await fs.promises.stat(filePath);
-  const content = await fs.promises.readFile(filePath);
-  const sha = createHash('sha256').update(content).digest('hex').slice(0, 16);
+  if (stat.size > SCRIPT_MAX_SIZE) {
+    process.stderr.write(
+      `[agent-do] Refusing script import: file is ${stat.size} bytes, limit is ${SCRIPT_MAX_SIZE}. ` +
+      `A script this large is almost certainly not an agent definition.\n`,
+    );
+    return false;
+  }
+  // Stream the SHA-256 rather than buffering the whole file. Lets the
+  // banner appear quickly on a 1 MB script instead of waiting for a
+  // full readFile round trip.
+  const sha = await hashFileStreaming(filePath);
   process.stderr.write(
     `[agent-do] About to import and execute a local script:\n` +
     `           path:   ${filePath}\n` +
@@ -112,29 +140,83 @@ async function confirmScriptImport(filePath: string): Promise<boolean> {
 }
 
 /**
+ * True iff `candidate` is the same as, or strictly inside, `base`.
+ * Uses `path.relative` so the check handles filesystem roots correctly
+ * (Codex #66 P2: `cwd === "/"` made the old `startsWith(cwd + sep)`
+ * check compose `"//"` and reject every legit path). A sibling whose
+ * name shares the base prefix also returns a relative path starting
+ * with `..` and is rejected.
+ */
+function withinCwd(candidate: string, base: string): boolean {
+  if (candidate === base) return true;
+  const rel = path.relative(base, candidate);
+  if (rel === '' || rel === '.') return true;
+  if (rel.startsWith('..')) return false;
+  return !path.isAbsolute(rel);
+}
+
+/**
  * Resolve, validate, and import a script path. Throws with a specific
  * error on each failure mode so tests can distinguish them.
  *
- * The containment check compares `resolvedPath` against
- * `cwd + path.sep` (not bare `startsWith`) so a sibling whose name shares
- * the cwd prefix (`/work/project` vs `/work/project-evil`) can't slip
- * through. Same logic as `FilesystemMemoryStore.withinBase` (#20).
+ * - Canonicalises the target via `fs.realpath` before the cwd-containment
+ *   check, so a `./trusted.mjs` that's actually a symlink to
+ *   `../outside.mjs` is detected and refused (Codex #66 P2).
+ * - `withinCwd` uses `path.relative` rather than a naive `startsWith`
+ *   so filesystem-root cwds (`/` on POSIX, `C:\` on Windows) don't
+ *   reject every legit child.
+ * - Requires the target to be a regular file (`stat().isFile()`).
+ *   `access(R_OK)` would also accept a readable directory or special
+ *   file, deferring the error to a confusing point inside `import()`.
  */
 export async function importScriptFile(
   rawPath: string,
   opts: { yes: boolean },
 ): Promise<Record<string, unknown>> {
-  const filePath = path.resolve(rawPath);
-  const cwd = path.resolve(process.cwd());
-  if (filePath !== cwd && !filePath.startsWith(cwd + path.sep)) {
+  const requested = path.resolve(rawPath);
+  // Canonicalise cwd too (macOS /var -> /private/var, etc.) so both
+  // sides of any comparison are realpathed — same canonical-vs-canonical
+  // invariant as the FilesystemMemoryStore trust-boundary fix (#64).
+  const cwd = await fs.promises.realpath(process.cwd());
+
+  // Fast-fail containment check on the non-canonical path. Catches the
+  // common `../escape.js` case (where the target doesn't exist) with a
+  // clear error before we try to realpath a non-existent file.
+  if (!withinCwd(requested, cwd)) {
+    throw new Error(
+      `Refusing to import "${requested}": path is outside the working directory (${cwd}).`,
+    );
+  }
+
+  // Now canonicalise the target to detect the symlink-escape case:
+  // `./trusted.mjs` points inside cwd string-wise but the symlink
+  // target is outside. If the path doesn't exist, realpath throws
+  // ENOENT — translate to the friendlier "not found" message.
+  let filePath: string;
+  try {
+    filePath = await fs.promises.realpath(requested);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`Script not found: ${requested}`);
+    }
+    throw err;
+  }
+  if (!withinCwd(filePath, cwd)) {
     throw new Error(
       `Refusing to import "${filePath}": path is outside the working directory (${cwd}).`,
     );
   }
+
+  let stat: fs.Stats;
   try {
-    await fs.promises.access(filePath, fs.constants.R_OK);
+    stat = await fs.promises.stat(filePath);
   } catch {
     throw new Error(`Script not found or unreadable: ${filePath}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      `Refusing to import "${filePath}": not a regular file (is it a directory or special file?).`,
+    );
   }
   if (!SCRIPT_EXTENSIONS.test(filePath)) {
     throw new Error(
