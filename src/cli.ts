@@ -81,9 +81,12 @@ Options:
   --memory <dir>         Memory directory for --with-memory (default: .agent-do/)
   --with-memory          Enable memory tools (memory_read/write — agent scratchpad)
   --read-only            Block all writes (workspace + memory)
+  --exclude <globs>      Extra deny-list patterns (gitignore-style, comma-separated)
+  --include-sensitive    Bypass built-in sensitive-file deny list (.env, .ssh, etc.)
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
-  --verbose              Show thinking, tool calls, and per-step text (quiet by default)
+  --verbose              Show thinking, tool calls, and per-step summaries (stderr)
+  --show-content         With --verbose: also print each tool's full result
   --json                 Output as JSON
   -h, --help             Show this help
 
@@ -92,9 +95,21 @@ Tools:
   edit_file, delete_file) are enabled by default, rooted at --cwd. They operate
   on real project files — the agent sees what you see.
 
+  Sensitive files are blocked by default (.env*, *.pem/*.key, .ssh/**, .aws/**,
+  .git/hooks/** and credential material). Writes to .git/** and node_modules/**
+  are blocked too. Add your own with --exclude (comma-separated globs) or a
+  .agent-doignore file at the working-directory root. --include-sensitive
+  opts out of the built-in defaults.
+
   Memory tools (memory_read, memory_write, memory_list, memory_delete,
   memory_search) are a separate, optional scratchpad for the agent's own notes.
   Enable them with --with-memory. They're scoped per-agent and kept in --memory.
+
+Logs:
+  In --verbose mode, each tool call emits a structured one-line summary to
+  stderr. The final answer still goes to stdout so you can pipe it. Full raw
+  tool output is withheld by default to keep secrets out of CI logs; pass
+  --show-content to include it.
 
 Eval options:
   --output <format>      console | json | csv (default: console)

@@ -19,6 +19,7 @@ import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { loadSavedAgent } from './agents.js';
+import { renderEvent, renderOptionsFromArgs } from './render.js';
 import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
@@ -96,6 +97,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       maxIterations: (exported.maxIterations as number) ?? args.maxIterations,
       permissions: { mode: 'accept-all' },
       usage: { enabled: true },
+      emitFullResult: args.showContent,
     });
   } else {
     throw new Error(
@@ -115,38 +117,13 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   }
 
   // Run the agent — quiet by default, only final answer printed
+  const renderOpts = renderOptionsFromArgs(args);
   for await (const event of agent.stream(task)) {
-    switch (event.type) {
-      case 'thinking':
-        if (args.verbose) {
-          process.stdout.write(event.content);
-        }
-        break;
-      case 'tool-call':
-        if (args.verbose) {
-          console.log(`\n[tool] ${event.toolName}(${JSON.stringify(event.toolArgs).slice(0, 100)})`);
-        }
-        break;
-      case 'tool-result':
-        if (args.verbose) {
-          console.log(`[result] ${String(event.toolResult).slice(0, 200)}`);
-        }
-        break;
-      case 'text':
-        if (args.verbose) {
-          console.log(event.content);
-        }
-        break;
-      case 'done':
-        if (!args.verbose) {
-          process.stdout.write(event.content);
-        }
-        process.stdout.write('\n');
-        break;
-      case 'error':
-        console.error(`Error: ${event.content}`);
-        process.exit(1);
-        break;
+    const { handled } = renderEvent(event, renderOpts);
+    if (handled) continue;
+    if (event.type === 'done') {
+      if (!args.verbose) process.stdout.write(event.content);
+      process.stdout.write('\n');
     }
   }
 }
@@ -184,6 +161,7 @@ async function runSavedAgent(
     maxIterations: saved.maxIterations,
     permissions: { mode: 'accept-all' },
     usage: { enabled: true },
+    emitFullResult: args.showContent,
   });
 
   const stdinContent = await readStdin();
@@ -195,28 +173,13 @@ async function runSavedAgent(
     );
   }
 
+  const renderOpts = renderOptionsFromArgs(args);
   for await (const event of agent.stream(task)) {
-    switch (event.type) {
-      case 'thinking':
-        if (args.verbose) process.stdout.write(event.content);
-        break;
-      case 'tool-call':
-        if (args.verbose) console.log(`\n[tool] ${event.toolName}(${JSON.stringify(event.toolArgs).slice(0, 100)})`);
-        break;
-      case 'tool-result':
-        if (args.verbose) console.log(`[result] ${String(event.toolResult).slice(0, 200)}`);
-        break;
-      case 'text':
-        if (args.verbose) console.log(event.content);
-        break;
-      case 'done':
-        if (!args.verbose) process.stdout.write(event.content);
-        process.stdout.write('\n');
-        break;
-      case 'error':
-        console.error(`Error: ${event.content}`);
-        process.exit(1);
-        break;
+    const { handled } = renderEvent(event, renderOpts);
+    if (handled) continue;
+    if (event.type === 'done') {
+      if (!args.verbose) process.stdout.write(event.content);
+      process.stdout.write('\n');
     }
   }
 }

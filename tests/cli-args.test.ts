@@ -8,6 +8,9 @@ describe('parseArgs', () => {
     expect(args.prompt).toBeUndefined();
     expect(args.provider).toBe('anthropic');
     expect(args.maxIterations).toBe(20);
+    expect(args.exclude).toEqual([]);
+    expect(args.includeSensitive).toBe(false);
+    expect(args.showContent).toBe(false);
   });
 
   it('parses a simple prompt', () => {
@@ -213,5 +216,21 @@ describe('parseArgs', () => {
   it('recognizes list subcommand', () => {
     const args = parseArgs(['list']);
     expect(args.command).toBe('list');
+  });
+
+  it('parses --exclude as comma-separated patterns (repeatable)', () => {
+    const args = parseArgs(['--exclude', 'secrets/**,*.cred', '--exclude', 'vendor/**']);
+    expect(args.exclude).toEqual(['secrets/**', '*.cred', 'vendor/**']);
+  });
+
+  it('parses --include-sensitive', () => {
+    const args = parseArgs(['--include-sensitive']);
+    expect(args.includeSensitive).toBe(true);
+  });
+
+  it('--show-content implies --verbose', () => {
+    const args = parseArgs(['--show-content']);
+    expect(args.showContent).toBe(true);
+    expect(args.verbose).toBe(true);
   });
 });

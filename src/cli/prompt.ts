@@ -12,6 +12,7 @@ import * as readline from 'node:readline';
 import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
+import { renderEvent, renderOptionsFromArgs } from './render.js';
 import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
@@ -49,6 +50,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     maxIterations: args.maxIterations,
     permissions: { mode: 'accept-all' },
     usage: { enabled: true },
+    // Only materialise the full ToolResult on `tool-result` events when
+    // the user explicitly asked for it (`--show-content`). Defaults to
+    // summary + data only so file contents don't leak into CI logs.
+    emitFullResult: args.showContent,
   });
 
   // Read stdin if piped
@@ -115,40 +120,15 @@ async function runOneShot(
   }
 
   // Streaming mode — quiet by default, only final answer printed
+  const renderOpts = renderOptionsFromArgs(args);
   for await (const event of agent.stream(task)) {
-    switch (event.type) {
-      case 'thinking':
-        if (args.verbose) {
-          process.stdout.write(event.content);
-        }
-        break;
-      case 'tool-call':
-        if (args.verbose) {
-          console.log(`\n[tool] ${event.toolName}(${truncateArgs(event.toolArgs)})`);
-        }
-        break;
-      case 'tool-result':
-        if (args.verbose) {
-          console.log(`[result] ${truncate(String(event.toolResult), 200)}`);
-        }
-        break;
-      case 'text':
-        // Per-step text — only show in verbose mode to avoid intermediate outputs
-        if (args.verbose) {
-          console.log(event.content);
-        }
-        break;
-      case 'done':
-        // Final answer — always print
-        if (!args.verbose) {
-          process.stdout.write(event.content);
-        }
-        process.stdout.write('\n');
-        break;
-      case 'error':
-        console.error(`Error: ${event.content}`);
-        process.exit(1);
-        break;
+    const { handled } = renderEvent(event, renderOpts);
+    if (handled) continue;
+    // The renderer leaves `done` for the caller so the final answer can
+    // go to stdout (scripts can pipe it) rather than stderr.
+    if (event.type === 'done') {
+      if (!args.verbose) process.stdout.write(event.content);
+      process.stdout.write('\n');
     }
   }
 }
@@ -172,6 +152,7 @@ async function runInteractive(
     });
   };
 
+  const renderOpts = renderOptionsFromArgs(args);
   while (true) {
     const input = await askQuestion();
     const trimmed = input.trim();
@@ -183,37 +164,12 @@ async function runInteractive(
     // user message from the task parameter, so adding it here would duplicate it
     let response = '';
     for await (const event of agent.stream(trimmed, undefined, history)) {
-      switch (event.type) {
-        case 'thinking':
-          if (args.verbose) {
-            process.stdout.write(event.content);
-          }
-          break;
-        case 'tool-call':
-          if (args.verbose) {
-            console.log(`\n[tool] ${event.toolName}(${truncateArgs(event.toolArgs)})`);
-          }
-          break;
-        case 'tool-result':
-          if (args.verbose) {
-            console.log(`[result] ${truncate(String(event.toolResult), 200)}`);
-          }
-          break;
-        case 'text':
-          if (args.verbose) {
-            console.log(event.content);
-          }
-          break;
-        case 'done':
-          response = event.content;
-          if (!args.verbose) {
-            process.stdout.write(response);
-          }
-          process.stdout.write('\n\n');
-          break;
-        case 'error':
-          console.error(`Error: ${event.content}\n`);
-          break;
+      const { handled } = renderEvent(event, renderOpts);
+      if (handled) continue;
+      if (event.type === 'done') {
+        response = event.content;
+        if (!args.verbose) process.stdout.write(response);
+        process.stdout.write('\n\n');
       }
     }
 
@@ -225,13 +181,4 @@ async function runInteractive(
   }
 
   rl.close();
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max) + '...' : s;
-}
-
-function truncateArgs(args: unknown): string {
-  const s = JSON.stringify(args);
-  return truncate(s, 100);
 }
