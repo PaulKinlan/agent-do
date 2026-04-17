@@ -115,9 +115,17 @@ export class FilesystemMemoryStore implements MemoryStore {
     try {
       await fsp.unlink(full);
     } catch (err) {
-      // Match the previous "no error if missing" behaviour so callers
-      // can treat delete as idempotent.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // Match the previous `existsSync` precheck behaviour: delete is
+      // idempotent for any path that doesn't refer to a real file. The
+      // pre-migration code silently returned on ENOENT and also on
+      // paths like `"file.txt/child"` (where `existsSync` returned
+      // false). async `unlink` surfaces the latter as `ENOTDIR` on
+      // POSIX, `ENOTDIR`/`ENOENT` on Windows — treat all three as
+      // "nothing to delete" so hallucinated nested paths from the
+      // model don't surface as tool errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
+      throw err;
     }
   }
 
@@ -130,18 +138,19 @@ export class FilesystemMemoryStore implements MemoryStore {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
-    // Stat each file in parallel — parallelism is bounded by the
-    // single readdir call (typically dozens, not thousands), so a
-    // simple Promise.all is the right shape here.
-    return Promise.all(
-      entries.map(async (e) => ({
-        name: e.name,
-        type: e.isDirectory() ? ('directory' as const) : ('file' as const),
-        size: e.isFile()
-          ? (await fsp.stat(path.join(full, e.name))).size
-          : undefined,
-      })),
-    );
+    // Bound stat concurrency. A naive `Promise.all(entries.map(stat))`
+    // queues a stat per file at once, which on a directory with
+    // thousands of entries pins the libuv threadpool (default 4) and
+    // stalls unrelated fs work. `FILE_STAT_CONCURRENCY` is small enough
+    // to avoid threadpool saturation yet large enough to get the
+    // benefits of async scheduling.
+    return pMap(entries, async (e) => ({
+      name: e.name,
+      type: e.isDirectory() ? ('directory' as const) : ('file' as const),
+      size: e.isFile()
+        ? (await fsp.stat(path.join(full, e.name))).size
+        : undefined,
+    }), FILE_STAT_CONCURRENCY);
   }
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
@@ -154,7 +163,14 @@ export class FilesystemMemoryStore implements MemoryStore {
       await fsp.stat(this.resolve(agentId, filePath));
       return true;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      // Mirror `fs.existsSync`: any path-shape error that means "no
+      // such file" — whether the leaf is missing (`ENOENT`) or a
+      // non-directory ancestor makes the path invalid (`ENOTDIR`) —
+      // should return false, not throw. This preserves the pre-migration
+      // contract the InMemoryMemoryStore also follows (`exists` never
+      // throws for well-typed input).
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
       throw err;
     }
   }
@@ -203,4 +219,38 @@ export class FilesystemMemoryStore implements MemoryStore {
       }
     }
   }
+}
+
+/**
+ * Node's libuv threadpool defaults to 4 workers; a wider pool of
+ * concurrent fs ops can starve unrelated work. 16 is a pragmatic
+ * middle ground — enough parallelism to hide per-stat latency on
+ * large dirs without pinning the threadpool.
+ */
+const FILE_STAT_CONCURRENCY = 16;
+
+/**
+ * Tiny concurrency-limited `Promise.all` equivalent. Preserves input
+ * order in the output array. No external dependency — the only place
+ * agent-do needs this is `list()`, so a bespoke ~15 lines beats
+ * pulling in `p-map`.
+ */
+async function pMap<T, R>(
+  items: T[],
+  mapper: (item: T, index: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(concurrency, items.length))
+    .fill(null)
+    .map(async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await mapper(items[i]!, i);
+      }
+    });
+  await Promise.all(workers);
+  return results;
 }
