@@ -239,6 +239,23 @@ describe('FilesystemMemoryStore', () => {
       await store.write('agent-1', 'readme.md', 'top');
       expect(await store.exists('agent-1', 'readme.md/child.txt')).toBe(false);
     });
+
+    it('read() normalises ENOTDIR to "File not found" (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      await expect(
+        store.read('agent-1', 'readme.md/child.txt'),
+      ).rejects.toThrow(/File not found/);
+    });
+
+    it('list() returns [] when an ancestor is a file (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      expect(await store.list('agent-1', 'readme.md')).toEqual([]);
+    });
+
+    it('search() returns [] when an ancestor is a file (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'findme here');
+      expect(await store.search('agent-1', 'findme', 'readme.md')).toEqual([]);
+    });
   });
 
   describe('async behaviour (#25)', () => {

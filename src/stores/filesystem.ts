@@ -88,7 +88,13 @@ export class FilesystemMemoryStore implements MemoryStore {
     try {
       return await fsp.readFile(full, 'utf-8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // ENOTDIR surfaces when an *ancestor* is a file (e.g. `readme.md/child.txt`).
+      // Pre-migration `existsSync` short-circuited that to false, so
+      // `read()` raised the normalised "File not found" error. Keep
+      // that contract so hallucinated nested paths don't leak raw
+      // platform errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
         throw new Error(`File not found: ${filePath}`);
       }
       throw err;
@@ -135,7 +141,12 @@ export class FilesystemMemoryStore implements MemoryStore {
     try {
       entries = await fsp.readdir(full, { withFileTypes: true });
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      // Same path-shape normalisation as read()/delete(): ENOTDIR
+      // (ancestor is a file) used to short-circuit via `existsSync`
+      // and return an empty list. Preserve that so `list('readme.md/')`
+      // doesn't become a hard error.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return [];
       throw err;
     }
     // Bound stat concurrency. A naive `Promise.all(entries.map(stat))`
@@ -192,7 +203,11 @@ export class FilesystemMemoryStore implements MemoryStore {
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      // Same contract as list(): ENOTDIR (ancestor is a file) used to
+      // short-circuit to zero results via `existsSync`. Preserve that
+      // so `search('readme.md/')` is a no-op, not a hard failure.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
       throw err;
     }
 
