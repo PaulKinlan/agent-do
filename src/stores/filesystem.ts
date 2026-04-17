@@ -24,9 +24,16 @@
  *       return true; // or false to block
  *     },
  *   });
+ *
+ * Implementation note: every method uses `node:fs/promises` (no
+ * `fs.*Sync` calls inside `async` functions). The original sync
+ * variants blocked the Node event loop for the full duration of any
+ * read or directory walk, which made the store unsafe for server /
+ * concurrent contexts. See issue #25.
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
@@ -38,8 +45,9 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   constructor(private baseDir: string, options?: FilesystemMemoryStoreOptions) {
     this.options = options || {};
-    // Only create the base directory if not in read-only mode
-    // so readOnly has zero write side effects
+    // The constructor stays synchronous because callers `new` the store
+    // outside of an async context. mkdir is the only side effect, and
+    // is gated on readOnly to keep that mode side-effect-free.
     if (!this.options.readOnly) {
       fs.mkdirSync(baseDir, { recursive: true });
     }
@@ -77,79 +85,121 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   async read(agentId: string, filePath: string): Promise<string> {
     const full = this.resolve(agentId, filePath);
-    if (!fs.existsSync(full)) throw new Error(`File not found: ${filePath}`);
-    return fs.readFileSync(full, 'utf-8');
+    try {
+      return await fsp.readFile(full, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      throw err;
+    }
   }
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
     const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, 'utf-8');
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.writeFile(full, content, 'utf-8');
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
     const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.appendFileSync(full, content, 'utf-8');
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.appendFile(full, content, 'utf-8');
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
     const full = this.resolve(agentId, filePath);
-    if (fs.existsSync(full)) fs.unlinkSync(full);
+    try {
+      await fsp.unlink(full);
+    } catch (err) {
+      // Match the previous "no error if missing" behaviour so callers
+      // can treat delete as idempotent.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
     const full = this.resolve(agentId, dirPath || '.');
-    if (!fs.existsSync(full)) return [];
-    return fs.readdirSync(full, { withFileTypes: true }).map(e => ({
-      name: e.name,
-      type: e.isDirectory() ? 'directory' as const : 'file' as const,
-      size: e.isFile() ? fs.statSync(path.join(full, e.name)).size : undefined,
-    }));
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(full, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    // Stat each file in parallel — parallelism is bounded by the
+    // single readdir call (typically dozens, not thousands), so a
+    // simple Promise.all is the right shape here.
+    return Promise.all(
+      entries.map(async (e) => ({
+        name: e.name,
+        type: e.isDirectory() ? ('directory' as const) : ('file' as const),
+        size: e.isFile()
+          ? (await fsp.stat(path.join(full, e.name))).size
+          : undefined,
+      })),
+    );
   }
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    fs.mkdirSync(this.resolve(agentId, dirPath), { recursive: true });
+    await fsp.mkdir(this.resolve(agentId, dirPath), { recursive: true });
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
-    return fs.existsSync(this.resolve(agentId, filePath));
+    try {
+      await fsp.stat(this.resolve(agentId, filePath));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
   }
 
   async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
     const searchDir = this.resolve(agentId, dirPath || '.');
-    this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
+    await this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
     return results;
   }
 
-  private searchRecursive(
-    dir: string, baseDir: string, pattern: string,
+  private async searchRecursive(
+    dir: string,
+    baseDir: string,
+    pattern: string,
     results: Array<{ path: string; line: string }>,
-  ): void {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  ): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= 100) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          this.searchRecursive(full, baseDir, pattern, results);
-        }
-      } else {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          const regex = new RegExp(pattern, 'gi');
-          for (const line of content.split('\n')) {
-            if (regex.test(line)) {
-              results.push({ path: path.relative(baseDir, full), line: line.trim() });
-              if (results.length >= 100) return;
-            }
-            regex.lastIndex = 0;
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        await this.searchRecursive(full, baseDir, pattern, results);
+        continue;
+      }
+      try {
+        const content = await fsp.readFile(full, 'utf-8');
+        const regex = new RegExp(pattern, 'gi');
+        for (const line of content.split('\n')) {
+          if (regex.test(line)) {
+            results.push({ path: path.relative(baseDir, full), line: line.trim() });
+            if (results.length >= 100) return;
           }
-        } catch { /* skip binary files */ }
+          regex.lastIndex = 0;
+        }
+      } catch {
+        /* skip binary / unreadable files */
       }
     }
   }

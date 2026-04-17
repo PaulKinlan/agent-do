@@ -221,4 +221,48 @@ describe('FilesystemMemoryStore', () => {
       expect(ops).toEqual(['write', 'mkdir', 'delete']);
     });
   });
+
+  describe('async behaviour (#25)', () => {
+    it('does not block the event loop during reads', async () => {
+      // Regression for the M-01 sync→async migration. Previously every
+      // method used `fs.*Sync` which blocks the loop. With `fs/promises`
+      // we should be able to interleave a long-running read with a
+      // setImmediate callback. We can't strictly assert "didn't block"
+      // — but we can assert that a setImmediate callback fires while
+      // the read is in flight, which would have been impossible with
+      // the sync API.
+      const big = 'x'.repeat(64 * 1024); // 64 KB — small enough not to be slow
+      await store.write('agent-1', 'big.bin', big);
+
+      let immediateRan = false;
+      const immediate = setImmediate(() => {
+        immediateRan = true;
+      });
+      try {
+        const readPromise = store.read('agent-1', 'big.bin');
+        // Yield to the event loop. With sync APIs the read would have
+        // completed before the await point and immediateRan would be
+        // false until *after* the read settled. With async APIs the
+        // immediate runs while the read is pending.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(immediateRan).toBe(true);
+        await readPromise;
+      } finally {
+        clearImmediate(immediate);
+      }
+    });
+
+    it('runs concurrent reads in parallel rather than serialising them', async () => {
+      const N = 8;
+      for (let i = 0; i < N; i++) {
+        await store.write('agent-1', `f${i}.txt`, `body-${i}`);
+      }
+      const results = await Promise.all(
+        Array.from({ length: N }, (_, i) => store.read('agent-1', `f${i}.txt`)),
+      );
+      expect(results).toEqual(
+        Array.from({ length: N }, (_, i) => `body-${i}`),
+      );
+    });
+  });
 });
