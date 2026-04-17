@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import YAML from 'yaml';
-import type { Skill, SkillStore } from './types.js';
+import type { Skill, SkillStore, SkillSearchResult } from './types.js';
 
 /**
  * Per-field schemas for the frontmatter block of a SKILL.md file.
@@ -245,18 +245,9 @@ export class InMemorySkillStore implements SkillStore {
     this.skills.delete(skillId);
   }
 
-  async search(
-    query: string,
-  ): Promise<
-    Array<{ id: string; name: string; description: string; url?: string }>
-  > {
+  async search(query: string): Promise<SkillSearchResult[]> {
     const lower = query.toLowerCase();
-    const results: Array<{
-      id: string;
-      name: string;
-      description: string;
-      url?: string;
-    }> = [];
+    const results: SkillSearchResult[] = [];
     for (const skill of this.skills.values()) {
       if (
         skill.name.toLowerCase().includes(lower) ||

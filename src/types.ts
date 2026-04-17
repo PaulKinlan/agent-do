@@ -47,17 +47,37 @@ export interface Skill {
   version?: string;
 }
 
-// Skill store interface
+/**
+ * A search result returned by `SkillStore.search()`.
+ *
+ * Deliberately does **not** include a `url` field. Earlier drafts of the
+ * interface carried `url?: string` and signalled "external skill registries
+ * are fine to wire up." That's an SSRF / supply-chain footgun (see #34): a
+ * hostile registry could return a URL the agent then auto-fetches with the
+ * user's credentials. If you need URL-backed skill registries, build them
+ * outside this interface, gate behind an explicit host allowlist, require
+ * HTTPS, and never auto-install — `install()` must always receive the
+ * verified content directly.
+ */
+export interface SkillSearchResult {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/**
+ * Storage interface for skill definitions.
+ *
+ * Implementations are expected to be local (in-memory, OPFS, IndexedDB,
+ * SQLite, …). External / network-backed implementations must not auto-fetch
+ * skill content from `search()` results — see {@link SkillSearchResult}.
+ */
 export interface SkillStore {
   list(): Promise<Skill[]>;
   get(skillId: string): Promise<Skill | undefined>;
   install(skill: Skill): Promise<void>;
   remove(skillId: string): Promise<void>;
-  search(
-    query: string,
-  ): Promise<
-    Array<{ id: string; name: string; description: string; url?: string }>
-  >;
+  search(query: string): Promise<SkillSearchResult[]>;
 }
 
 // Usage record

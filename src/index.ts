@@ -41,6 +41,7 @@ export { createOrchestrator } from './orchestrator.js';
 export type {
   ProgressEvent,
   Skill,
+  SkillSearchResult,
   SkillStore,
   UsageRecord,
   RunUsage,
