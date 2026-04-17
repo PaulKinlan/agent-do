@@ -91,10 +91,10 @@ export function buildSkillsPrompt(skills: Skill[]): string {
       ` id="${escapeAttr(skill.id)}"`;
     parts.push(`<skill ${attrs}>`);
     if (skill.description) {
-      parts.push(`Description: ${skill.description}`);
+      parts.push(`Description: ${escapeSkillBody(skill.description)}`);
       parts.push('');
     }
-    parts.push(skill.content);
+    parts.push(escapeSkillBody(skill.content));
     parts.push('</skill>');
     parts.push('');
   }
@@ -111,6 +111,28 @@ export function buildSkillsPrompt(skills: Skill[]): string {
  */
 function escapeAttr(value: string): string {
   return value.replace(/["<>\n\r]/g, ' ').slice(0, 128);
+}
+
+/**
+ * Neutralise `<skill>` / `</skill>` sequences in skill bodies so a
+ * hostile skill can't escape its container (Codex #67 P1 + Copilot).
+ *
+ * Without this, a skill whose `content` includes `</skill>` followed
+ * by jailbreak text would terminate the marker block early and move
+ * the attacker's instructions *outside* the guarded region — exactly
+ * what the structural isolation was added to prevent. Escaping both
+ * the opening and closing marker keeps the interpolation safe
+ * regardless of which side of the tag an attacker targets.
+ *
+ * We use a visible replacement rather than deleting the text, so the
+ * skill body remains readable to the model (and to a human reviewing
+ * the rendered prompt) — the attacker's text is still visible, just
+ * disarmed.
+ */
+function escapeSkillBody(value: string): string {
+  return value
+    .replace(/<\/skill\b/gi, '</ skill')
+    .replace(/<skill\b/gi, '< skill');
 }
 
 /**
@@ -187,16 +209,32 @@ const SKILL_ID_MAX = 64;
 const SKILL_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
 /**
- * Schema for inputs to `install_skill`. Enforced at the tool layer
- * regardless of who calls it (LLM or library user), so a malformed
- * install can't reach `store.install()`. Matches the saved-agent
+ * Schema for inputs to `install_skill`. Doubles as the tool's
+ * `inputSchema` surface so the model sees the same constraints the
+ * runtime validator enforces (Copilot #67 review: the original
+ * permissive schema meant the model could submit inputs that would
+ * only be rejected at execute time). Matches the saved-agent
  * validation shape from #22 for consistency.
  */
 const InstallSkillInputSchema = z.object({
-  id: z.string().regex(SKILL_ID_RE).max(SKILL_ID_MAX),
-  name: z.string().min(1).max(SKILL_NAME_MAX),
-  description: z.string().max(SKILL_DESCRIPTION_MAX),
-  content: z.string().max(SKILL_CONTENT_MAX),
+  id: z
+    .string()
+    .regex(SKILL_ID_RE)
+    .max(SKILL_ID_MAX)
+    .describe('Unique skill ID (kebab-case; alphanumerics, dashes, underscores only)'),
+  name: z
+    .string()
+    .min(1)
+    .max(SKILL_NAME_MAX)
+    .describe('Human-readable skill name'),
+  description: z
+    .string()
+    .max(SKILL_DESCRIPTION_MAX)
+    .describe('What the skill does'),
+  content: z
+    .string()
+    .max(SKILL_CONTENT_MAX)
+    .describe('The skill instructions/content (max 8 KB)'),
 });
 
 export interface CreateSkillToolsOptions {
@@ -283,16 +321,14 @@ export function createSkillTools(
   };
 
   if (options.allowInstall) {
+    // Reuse the strict schema as inputSchema so the model sees the
+    // same regex / length caps the execute body enforces (Copilot
+    // #67). Safe-parse is still called inside execute to turn any
+    // edge-case shape mismatch (e.g. prototype pollution from a
+    // future SDK path) into a clean error string rather than a throw.
     tools.install_skill = tool({
       description: 'Install a skill by providing its full definition.',
-      inputSchema: s(
-        z.object({
-          id: z.string().describe('Unique skill ID (kebab-case)'),
-          name: z.string().describe('Human-readable skill name'),
-          description: z.string().describe('What the skill does'),
-          content: z.string().describe('The skill instructions/content'),
-        }),
-      ),
+      inputSchema: s(InstallSkillInputSchema),
       execute: async (raw: unknown) => {
         const parsed = InstallSkillInputSchema.safeParse(raw);
         if (!parsed.success) {
