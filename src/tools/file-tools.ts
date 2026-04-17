@@ -14,6 +14,36 @@ import type { MemoryStore } from '../stores.js';
 const s = (schema: z.ZodType): any => schema;
 
 /**
+ * Produce a user-safe error string for file tools.
+ *
+ * Raw Node.js error messages leak absolute paths, directory structure, and
+ * user info into the model context. Map common `errno` codes to short,
+ * path-local strings that describe the problem without revealing host state.
+ */
+function sanitizeFileError(err: unknown, op: string, relPath?: string): string {
+  const where = relPath ? ` on ${relPath}` : '';
+  if (err instanceof Error) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // Preserve our own guard errors (e.g. "Path traversal not allowed") —
+    // they don't contain paths and the model benefits from seeing them.
+    if (!code && !/\//.test(err.message)) return `Error: ${err.message}`;
+    switch (code) {
+      case 'ENOENT': return `File not found${where}`;
+      case 'EACCES':
+      case 'EPERM':  return `Permission denied${where}`;
+      case 'EISDIR': return `Expected a file, got a directory${where}`;
+      case 'ENOTDIR': return `Expected a directory, got a file${where}`;
+      case 'EEXIST': return `File already exists${where}`;
+      case 'EMFILE':
+      case 'ENFILE': return `Too many open files — retry later`;
+      case 'EROFS':  return `Filesystem is read-only${where}`;
+      default:       return `Error during ${op}${where}`;
+    }
+  }
+  return `Error during ${op}${where}`;
+}
+
+/**
  * Create a set of file-manipulation tools backed by a MemoryStore.
  *
  * @param store - Any MemoryStore implementation (in-memory, filesystem, etc.)
@@ -33,7 +63,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
         try {
           return await store.read(agentId, path);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'read', path);
         }
       },
     }),
@@ -51,7 +81,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
           await store.write(agentId, path, content);
           return `Successfully wrote to ${path}`;
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'write', path);
         }
       },
     }),
@@ -79,7 +109,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
           await store.write(agentId, path, updated);
           return `Successfully edited ${path}`;
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'edit', path);
         }
       },
     }),
@@ -101,7 +131,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
             .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${e.name}`)
             .join('\n');
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'list', path);
         }
       },
     }),
@@ -118,7 +148,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
           await store.delete(agentId, path);
           return `Successfully deleted ${path}`;
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'delete', path);
         }
       },
     }),
@@ -141,7 +171,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
             .map((r) => `${r.path}: ${r.line}`)
             .join('\n');
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'grep', path);
         }
       },
     }),
@@ -162,7 +192,7 @@ export function createFileTools(store: MemoryStore, agentId: string): ToolSet {
           }
           return result.join('\n');
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return sanitizeFileError(err, 'find', path);
         }
       },
     }),
