@@ -24,9 +24,16 @@
  *       return true; // or false to block
  *     },
  *   });
+ *
+ * Implementation note: every method uses `node:fs/promises` (no
+ * `fs.*Sync` calls inside `async` functions). The original sync
+ * variants blocked the Node event loop for the full duration of any
+ * read or directory walk, which made the store unsafe for server /
+ * concurrent contexts. See issue #25.
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
@@ -39,8 +46,9 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   constructor(private baseDir: string, options?: FilesystemMemoryStoreOptions) {
     this.options = options || {};
-    // Only create the base directory if not in read-only mode
-    // so readOnly has zero write side effects
+    // The constructor stays synchronous because callers `new` the store
+    // outside of an async context. mkdir is the only side effect, and
+    // is gated on readOnly to keep that mode side-effect-free.
     if (!this.options.readOnly) {
       fs.mkdirSync(baseDir, { recursive: true });
     }
@@ -126,80 +134,153 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   async read(agentId: string, filePath: string): Promise<string> {
     const full = this.resolve(agentId, filePath);
-    if (!fs.existsSync(full)) throw new Error(`File not found: ${filePath}`);
-    return fs.readFileSync(full, 'utf-8');
+    try {
+      return await fsp.readFile(full, 'utf-8');
+    } catch (err) {
+      // ENOTDIR surfaces when an *ancestor* is a file (e.g. `readme.md/child.txt`).
+      // Pre-migration `existsSync` short-circuited that to false, so
+      // `read()` raised the normalised "File not found" error. Keep
+      // that contract so hallucinated nested paths don't leak raw
+      // platform errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      throw err;
+    }
   }
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
     const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, 'utf-8');
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.writeFile(full, content, 'utf-8');
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
     const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.appendFileSync(full, content, 'utf-8');
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.appendFile(full, content, 'utf-8');
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
     const full = this.resolve(agentId, filePath);
-    if (fs.existsSync(full)) fs.unlinkSync(full);
+    try {
+      await fsp.unlink(full);
+    } catch (err) {
+      // Match the previous `existsSync` precheck behaviour: delete is
+      // idempotent for any path that doesn't refer to a real file. The
+      // pre-migration code silently returned on ENOENT and also on
+      // paths like `"file.txt/child"` (where `existsSync` returned
+      // false). async `unlink` surfaces the latter as `ENOTDIR` on
+      // POSIX, `ENOTDIR`/`ENOENT` on Windows — treat all three as
+      // "nothing to delete" so hallucinated nested paths from the
+      // model don't surface as tool errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
+      throw err;
+    }
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
     const full = this.resolve(agentId, dirPath || '.');
-    if (!fs.existsSync(full)) return [];
-    return fs.readdirSync(full, { withFileTypes: true }).map(e => ({
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(full, { withFileTypes: true });
+    } catch (err) {
+      // Same path-shape normalisation as read()/delete(): ENOTDIR
+      // (ancestor is a file) used to short-circuit via `existsSync`
+      // and return an empty list. Preserve that so `list('readme.md/')`
+      // doesn't become a hard error.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+      throw err;
+    }
+    // Bound stat concurrency. A naive `Promise.all(entries.map(stat))`
+    // queues a stat per file at once, which on a directory with
+    // thousands of entries pins the libuv threadpool (default 4) and
+    // stalls unrelated fs work. `FILE_STAT_CONCURRENCY` is small enough
+    // to avoid threadpool saturation yet large enough to get the
+    // benefits of async scheduling.
+    return pMap(entries, async (e) => ({
       name: e.name,
-      type: e.isDirectory() ? 'directory' as const : 'file' as const,
-      size: e.isFile() ? fs.statSync(path.join(full, e.name)).size : undefined,
-    }));
+      type: e.isDirectory() ? ('directory' as const) : ('file' as const),
+      size: e.isFile()
+        ? (await fsp.stat(path.join(full, e.name))).size
+        : undefined,
+    }), FILE_STAT_CONCURRENCY);
   }
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    fs.mkdirSync(this.resolve(agentId, dirPath), { recursive: true });
+    await fsp.mkdir(this.resolve(agentId, dirPath), { recursive: true });
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
-    return fs.existsSync(this.resolve(agentId, filePath));
+    try {
+      await fsp.stat(this.resolve(agentId, filePath));
+      return true;
+    } catch (err) {
+      // Mirror `fs.existsSync`: any path-shape error that means "no
+      // such file" — whether the leaf is missing (`ENOENT`) or a
+      // non-directory ancestor makes the path invalid (`ENOTDIR`) —
+      // should return false, not throw. This preserves the pre-migration
+      // contract the InMemoryMemoryStore also follows (`exists` never
+      // throws for well-typed input).
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw err;
+    }
   }
 
   // (search) ───────────────────────────────────────────────────────
   async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
     const searchDir = this.resolve(agentId, dirPath || '.');
-    this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
+    await this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
     return results;
   }
 
-  private searchRecursive(
-    dir: string, baseDir: string, pattern: string,
+  private async searchRecursive(
+    dir: string,
+    baseDir: string,
+    pattern: string,
     results: Array<{ path: string; line: string }>,
-  ): void {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  ): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      // Same contract as list(): ENOTDIR (ancestor is a file) used to
+      // short-circuit to zero results via `existsSync`. Preserve that
+      // so `search('readme.md/')` is a no-op, not a hard failure.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
+      throw err;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= 100) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          this.searchRecursive(full, baseDir, pattern, results);
-        }
-      } else {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          const regex = new RegExp(pattern, 'gi');
-          for (const line of content.split('\n')) {
-            if (regex.test(line)) {
-              results.push({ path: path.relative(baseDir, full), line: line.trim() });
-              if (results.length >= 100) return;
-            }
-            regex.lastIndex = 0;
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        await this.searchRecursive(full, baseDir, pattern, results);
+        continue;
+      }
+      try {
+        const content = await fsp.readFile(full, 'utf-8');
+        const regex = new RegExp(pattern, 'gi');
+        for (const line of content.split('\n')) {
+          if (regex.test(line)) {
+            results.push({ path: path.relative(baseDir, full), line: line.trim() });
+            if (results.length >= 100) return;
           }
-        } catch { /* skip binary files */ }
+          regex.lastIndex = 0;
+        }
+      } catch {
+        /* skip binary / unreadable files */
       }
     }
   }
@@ -259,4 +340,38 @@ function realpathSafe(p: string): string {
     return p;
   }
   return suffix ? path.join(canonical, suffix) : canonical;
+}
+
+/**
+ * Node's libuv threadpool defaults to 4 workers; a wider pool of
+ * concurrent fs ops can starve unrelated work. 16 is a pragmatic
+ * middle ground — enough parallelism to hide per-stat latency on
+ * large dirs without pinning the threadpool.
+ */
+const FILE_STAT_CONCURRENCY = 16;
+
+/**
+ * Tiny concurrency-limited `Promise.all` equivalent. Preserves input
+ * order in the output array. No external dependency — the only place
+ * agent-do needs this is `list()`, so a bespoke ~15 lines beats
+ * pulling in `p-map`.
+ */
+async function pMap<T, R>(
+  items: T[],
+  mapper: (item: T, index: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(concurrency, items.length))
+    .fill(null)
+    .map(async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await mapper(items[i]!, i);
+      }
+    });
+  await Promise.all(workers);
+  return results;
 }
