@@ -1180,7 +1180,8 @@ If you ever need to publish without the workflow:
 
 ```bash
 npx changeset version   # applies pending changesets to package.json + CHANGELOG.md
-git commit -am "chore: release"
+git add -A
+git commit -m "chore: release"
 npm run release         # builds + npm publish via changeset
 git push --follow-tags
 ```
