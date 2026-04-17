@@ -25,19 +25,103 @@
 
 import type { ModelMessage } from 'ai';
 
-const TOOL_OUTPUT_BLOCK = /<tool_output\b([^>]*)>[\s\S]*?<\/tool_output>/g;
+const OPEN_PREFIX = '<tool_output';
+const CLOSE_TAG = '</tool_output>';
+// Matches one *opening* tag and captures its attributes (including a
+// trailing `/` for self-closing forms). Used only inside the manual
+// walker below — not as a global string-replace, because regex
+// non-greedy matching stops at the first `</tool_output>`, which is
+// wrong when a tool body legitimately contains that literal substring.
+const OPEN_TAG_RE = /<tool_output\b([^>]*)>/g;
 
 /**
  * Replace `<tool_output …>…</tool_output>` blocks in a string with
- * self-closing markers, preserving the opening tag's attributes so the
- * model retains context about *which* tool produced the redacted body.
+ * self-closing `<tool_output … redacted="stale"/>` markers, preserving
+ * the opening tag's attributes so the model retains context about
+ * *which* tool produced the redacted body.
  *
- * The replacement is idempotent — markers we've already redacted (which
- * are self-closing and contain no `</tool_output>` closer) are left
- * alone by the regex.
+ * Why hand-rolled instead of regex? Codex flagged on PR #58 that a
+ * non-greedy regex stops at the first `</tool_output>` it sees — so a
+ * body that legitimately contains the literal `</tool_output>` string
+ * (any file mentioning the marker) only gets partially redacted, and
+ * trailing injected content survives. This walker scans for the
+ * *last* close tag before either the next opening tag or end of
+ * string, which is the right boundary in the realistic case.
+ *
+ * Behaviours:
+ * - Idempotent — already-redacted self-closing markers (`<tool_output
+ *   … redacted="stale"/>`) are detected by their `/>` ending and
+ *   passed through unchanged.
+ * - Fast path — strings with no `<tool_output` substring at all are
+ *   returned by reference (important for the structural-sharing
+ *   guarantee in {@link redactToolOutputBlocks}).
+ * - Malformed input — an opening tag without any matching closer
+ *   before the next opening or end is preserved verbatim rather than
+ *   silently swallowed.
+ *
+ * Pathological case worth knowing about: if a tool body contains a
+ * `<tool_output …>` *opening* tag literally (rare — would require the
+ * agent to be reading its own transcript), the walker treats the
+ * inner tag as a new block and partially redacts. That's bounded
+ * (worst case: one extra opening tag stays verbatim) and the
+ * realistic injection vector is body-with-`</tool_output>`, which is
+ * handled correctly.
  */
 export function redactToolOutputBlocksInString(s: string): string {
-  return s.replace(TOOL_OUTPUT_BLOCK, '<tool_output$1 redacted="stale"/>');
+  // Fast path — preserves reference identity for the structural-
+  // sharing guarantee that downstream callers rely on.
+  if (!s.includes(OPEN_PREFIX)) return s;
+
+  const out: string[] = [];
+  let pos = 0;
+  let didReplace = false;
+
+  while (pos < s.length) {
+    OPEN_TAG_RE.lastIndex = pos;
+    const openMatch = OPEN_TAG_RE.exec(s);
+    if (!openMatch) {
+      out.push(s.slice(pos));
+      break;
+    }
+
+    const openIdx = openMatch.index;
+    const tagEnd = openIdx + openMatch[0].length;
+    const rawAttrs = openMatch[1] ?? '';
+
+    // Already redacted (self-closing): pass through.
+    if (openMatch[0].endsWith('/>')) {
+      out.push(s.slice(pos, tagEnd));
+      pos = tagEnd;
+      continue;
+    }
+
+    // Find the next *opening* tag (so we don't swallow a sibling
+    // block) to bound the close search.
+    OPEN_TAG_RE.lastIndex = tagEnd;
+    const nextOpen = OPEN_TAG_RE.exec(s);
+    OPEN_TAG_RE.lastIndex = 0; // reset for the next outer loop iteration
+    const searchUpper = nextOpen ? nextOpen.index : s.length;
+
+    // The matching close is the *last* `</tool_output>` strictly
+    // before `searchUpper`. lastIndexOf returns -1 if none.
+    const closeIdx = s.lastIndexOf(CLOSE_TAG, searchUpper - 1);
+    if (closeIdx < tagEnd) {
+      // Malformed: opening tag with no closer before the next opening
+      // or end. Preserve verbatim so we don't drop trailing text.
+      out.push(s.slice(pos, tagEnd));
+      pos = tagEnd;
+      continue;
+    }
+
+    out.push(s.slice(pos, openIdx));
+    out.push(`<tool_output${rawAttrs} redacted="stale"/>`);
+    pos = closeIdx + CLOSE_TAG.length;
+    didReplace = true;
+  }
+
+  // Preserve reference identity when nothing was rewritten — keeps
+  // the structural-sharing guarantee for the recursive walker.
+  return didReplace ? out.join('') : s;
 }
 
 /**
@@ -47,18 +131,39 @@ export function redactToolOutputBlocksInString(s: string): string {
  * union (`{type:'text',value:string}`), or a nested object — and we
  * want to redact regardless of the exact shape.
  *
- * Returns a new value tree; the input is untouched.
+ * **Structural sharing:** when no descendant string was rewritten, the
+ * walker returns the *original* value (same reference) rather than a
+ * fresh copy. This means {@link stripStaleToolOutputs} only counts a
+ * message as "rewritten" when its content actually changed — the
+ * `rewritten` count is honest, and we avoid allocating new arrays /
+ * objects on every redaction pass for messages that don't contain any
+ * `<tool_output>` blocks. (Copilot flagged this on PR #58.)
  */
 export function redactToolOutputBlocks(value: unknown): unknown {
   if (typeof value === 'string') return redactToolOutputBlocksInString(value);
-  if (Array.isArray(value)) return value.map(redactToolOutputBlocks);
+
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = new Array<unknown>(value.length);
+    for (let i = 0; i < value.length; i++) {
+      const next = redactToolOutputBlocks(value[i]);
+      if (next !== value[i]) changed = true;
+      out[i] = next;
+    }
+    return changed ? out : value;
+  }
+
   if (value !== null && typeof value === 'object') {
+    let changed = false;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = redactToolOutputBlocks(v);
+      const next = redactToolOutputBlocks(v);
+      if (next !== v) changed = true;
+      out[k] = next;
     }
-    return out;
+    return changed ? out : value;
   }
+
   return value;
 }
 
@@ -119,13 +224,20 @@ export function cutoffForKeepWindow(
   iterationStarts: readonly number[],
   keepWindow: number,
 ): number {
-  if (!Number.isFinite(keepWindow)) return 0;
-  if (keepWindow >= iterationStarts.length) return 0;
-  if (keepWindow <= 0) {
+  // Coerce to integer up front. A fractional value (e.g. 1.5 from a
+  // parsed config) used to fall through to a non-integer property
+  // lookup that returned `undefined` and silently disabled redaction.
+  // Codex + Copilot both flagged this on PR #58. Treat it predictably
+  // as "round down" so the option behaves like the user expects.
+  const window = Number.isFinite(keepWindow) ? Math.floor(keepWindow) : keepWindow;
+
+  if (!Number.isFinite(window)) return 0;
+  if (window >= iterationStarts.length) return 0;
+  if (window <= 0) {
     // Treat 0 / negative as "redact everything older than the current
     // iteration about to run" — same as `keepWindow = 1` semantically,
     // since the in-progress iteration hasn't yet pushed its messages.
     return iterationStarts[iterationStarts.length - 1] ?? 0;
   }
-  return iterationStarts[iterationStarts.length - keepWindow] ?? 0;
+  return iterationStarts[iterationStarts.length - window] ?? 0;
 }
