@@ -18,11 +18,13 @@ describe('createWorkspaceTools', () => {
     await fs.promises.rm(workDir, { recursive: true, force: true });
   });
 
-  async function exec(toolName: string, args: Record<string, unknown>, options?: { readOnly?: boolean }) {
+  async function exec(toolName: string, args: Record<string, unknown>, options?: { readOnly?: boolean }): Promise<string> {
     const tools = createWorkspaceTools(workDir, options);
     const tool = tools[toolName];
     if (!tool || !tool.execute) throw new Error(`Tool ${toolName} not found`);
-    return (tool.execute as Function)(args, {}) as Promise<string>;
+    const raw = await (tool.execute as Function)(args, {});
+    // Tools now return a ToolResult; legacy tests care about the model view.
+    return typeof raw === 'string' ? raw : (raw.modelContent as string);
   }
 
   it('sees existing files in the working directory', async () => {
@@ -51,7 +53,7 @@ describe('createWorkspaceTools', () => {
 
   it('blocks path traversal outside the working directory', async () => {
     const result = await exec('read_file', { path: '../etc-passwd' });
-    expect(result).toMatch(/Path traversal|not found/i);
+    expect(result).toMatch(/Path traversal not allowed|File not found/i);
   });
 
   it('find_files lists nested files', async () => {
