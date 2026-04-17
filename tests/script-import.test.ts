@@ -151,6 +151,42 @@ describe('importScriptFile', () => {
     ).rejects.toThrow(/not found/);
   });
 
+  it('accepts a legit script when cwd is reached via a symlink (Codex #66 follow-up)', async () => {
+    // Codex re-review on #66: if the shell cwd is a symlink path
+    // (e.g. `/var/...` on macOS, which realpath resolves to
+    // `/private/var/...`), the fast-fail containment check used to
+    // compare non-canonical `requested` against canonical `cwd` and
+    // reject every legit script. The realpathSafe-based fix
+    // canonicalises ancestors of `requested` too.
+    const linkedRoot = path.join(os.tmpdir(), `agent-do-linked-${process.pid}`);
+    // Skip gracefully if we can't create a symlink (e.g. in a CI
+    // sandbox that forbids it); no point in a flaky test.
+    try {
+      fs.symlinkSync(tmpDir, linkedRoot);
+    } catch {
+      return;
+    }
+    try {
+      const originalCwdLocal = process.cwd();
+      fs.writeFileSync(
+        path.join(tmpDir, 'legit.mjs'),
+        'export default { ok: true };\n',
+      );
+      try {
+        process.chdir(linkedRoot);
+        const mod = await importScriptFile('./legit.mjs', { yes: true });
+        expect((mod.default as Record<string, unknown>).ok).toBe(true);
+      } finally {
+        process.chdir(originalCwdLocal);
+      }
+    } finally {
+      // Symlinks need `unlink`, not `rmSync` (which refuses to delete
+      // a directory-symlink without `recursive: true` and would then
+      // recurse into the real directory we don't want to touch).
+      try { fs.unlinkSync(linkedRoot); } catch { /* already gone */ }
+    }
+  });
+
   it('rejects a symlink pointing outside cwd (Codex #66 P2)', async () => {
     // Plant a file outside cwd, symlink it into cwd with a trusted-
     // looking name. `path.resolve(rawPath)` stays inside cwd (the

@@ -169,29 +169,61 @@ function withinCwd(candidate: string, base: string): boolean {
  *   `access(R_OK)` would also accept a readable directory or special
  *   file, deferring the error to a confusing point inside `import()`.
  */
+/**
+ * Canonicalise the deepest existing ancestor of `p` and re-append the
+ * unresolved suffix. Used for the fast-fail containment check so we
+ * compare canonical-to-canonical even when the leaf doesn't exist.
+ *
+ * Codex follow-up on PR #66: without this, the shell cwd is realpathed
+ * (`/private/var/tmp/...` on macOS) while `requested` stays at
+ * `/var/tmp/...`, producing spurious "outside working directory"
+ * rejections for safe scripts. This mirrors the `realpathSafe` helper
+ * in `FilesystemMemoryStore` (#64).
+ */
+async function realpathSafe(p: string): Promise<string> {
+  let suffix = '';
+  let current = p;
+  // Walk up until realpath succeeds. `access` is cheaper than realpath
+  // for a negative check, and its ENOENT behaviour matches ours.
+  while (true) {
+    try {
+      const canonical = await fs.promises.realpath(current);
+      return suffix ? path.join(canonical, suffix) : canonical;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      const parent = path.dirname(current);
+      if (parent === current) return p; // hit root without resolving
+      suffix = path.join(path.basename(current), suffix);
+      current = parent;
+    }
+  }
+}
+
 export async function importScriptFile(
   rawPath: string,
   opts: { yes: boolean },
 ): Promise<Record<string, unknown>> {
   const requested = path.resolve(rawPath);
   // Canonicalise cwd too (macOS /var -> /private/var, etc.) so both
-  // sides of any comparison are realpathed — same canonical-vs-canonical
+  // sides of the comparison are realpathed — same canonical-vs-canonical
   // invariant as the FilesystemMemoryStore trust-boundary fix (#64).
   const cwd = await fs.promises.realpath(process.cwd());
 
-  // Fast-fail containment check on the non-canonical path. Catches the
-  // common `../escape.js` case (where the target doesn't exist) with a
-  // clear error before we try to realpath a non-existent file.
-  if (!withinCwd(requested, cwd)) {
+  // Canonicalise the *ancestors* of `requested` so the fast-fail
+  // containment check also compares canonical-to-canonical. Without
+  // this the check rejects valid in-tree scripts when the shell cwd
+  // is a symlink path (Codex #66 follow-up).
+  const canonicalRequested = await realpathSafe(requested);
+  if (!withinCwd(canonicalRequested, cwd)) {
     throw new Error(
       `Refusing to import "${requested}": path is outside the working directory (${cwd}).`,
     );
   }
 
-  // Now canonicalise the target to detect the symlink-escape case:
-  // `./trusted.mjs` points inside cwd string-wise but the symlink
-  // target is outside. If the path doesn't exist, realpath throws
-  // ENOENT — translate to the friendlier "not found" message.
+  // Now canonicalise the target fully to detect the symlink-escape
+  // case: `./trusted.mjs` points inside cwd string-wise but the
+  // symlink target is outside. If the path doesn't exist, realpath
+  // throws ENOENT — translate to the friendlier "not found" message.
   let filePath: string;
   try {
     filePath = await fs.promises.realpath(requested);

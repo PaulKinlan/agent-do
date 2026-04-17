@@ -117,8 +117,10 @@ npx agent-do run code-reviewer "Review this function"
 # List saved agents
 npx agent-do list
 
-# Run a custom agent script (.js files, or .ts with tsx loader)
-npx agent-do run my-agent.js "Do something"
+# Run a custom agent script (.js/.mjs/.cjs/.ts files).
+# --script is required to import local JavaScript/TypeScript; see
+# "Script mode" below for the security reasoning.
+npx agent-do run ./my-agent.ts --script "Do something"
 
 # Run eval cases
 npx agent-do eval evals/basic.ts
@@ -131,7 +133,7 @@ npx agent-do eval evals/ --compare anthropic,google,openai --output json
 
 ```
 npx agent-do [options] [prompt]          One-shot or interactive
-npx agent-do run <file> [task]           Run agent script
+npx agent-do run <name|file> [task]      Run a saved agent OR a script file
 npx agent-do eval <file|dir> [options]   Run evals
 
 Options:
@@ -148,11 +150,44 @@ Options:
   --no-tools             Disable all file tools
   --verbose              Show per-step thinking + tool summaries (stderr)
   --show-content         With --verbose: also include each tool's full result
+  --script               Required for `run <path>` to import local JS/TS files
+  -y, --yes              Skip the interactive confirmation for --script
   --json                 JSON output
   --output <fmt>         console | json | csv (eval only)
   --compare <providers>  Compare providers (eval only, comma-separated)
   --concurrency <n>      Parallel eval cases (default: 1)
 ```
+
+### Script mode: `run <path> --script`
+
+`agent-do run <arg>` resolves saved-agent names by default. To run a
+local JavaScript or TypeScript file as an agent, pass `--script`
+explicitly:
+
+```bash
+npx agent-do run ./my-agent.ts --script "Do something"
+```
+
+Importing an arbitrary JS/TS file runs its top-level code with your
+user privileges — the same trust model as running any local script.
+The `--script` flag is a deliberate speed bump so that:
+
+- A missed saved-agent lookup (typo, stale name) fails with a clear
+  error instead of silently `import()`-ing a stray file that happens
+  to match the name.
+- Social-engineering vectors like "download this helper script, then
+  run `agent-do run helper.js`" require an explicit opt-in.
+
+When `--script` is passed:
+
+- The path must point inside `--cwd` (symlinks and `..` escapes are
+  rejected after canonicalisation).
+- Only `.js`/`.mjs`/`.cjs`/`.ts`/`.mts`/`.cts` extensions are allowed.
+- The file must be a regular file (no directories, no special files).
+- A banner prints the path, size, and SHA-256 prefix, then asks
+  `Continue? [y/N]`. Pass `-y`/`--yes` to skip the prompt (required
+  in non-TTY contexts — CI, piped input — since there's nowhere to
+  type the answer).
 
 ### Tools: workspace vs memory
 
