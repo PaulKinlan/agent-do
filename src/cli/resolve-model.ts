@@ -121,22 +121,31 @@ type ProviderPackage =
 
 /**
  * Dynamically import a provider SDK and assert the expected factory
- * export is present. The `expectedExport` check defends against three
- * realistic supply-chain scenarios (see issue #40):
+ * export is present. This check only detects **export-surface
+ * mismatches** — it is not a tamper-proof guard. `import()` has
+ * already executed the target module's top-level code by the time we
+ * inspect `mod`, so a hostile replacement that still exports the
+ * expected factory will pass and its side effects have already run.
  *
- * 1. **Tampered installation** — a transitive update replaces the
- *    upstream package's contents without changing the public API
- *    shape; the missing factory is caught at import time.
- * 2. **Dependency-confusion / typosquat** — a malicious package
- *    masquerading as `@ai-sdk/foo` won't have the SDK's signature
- *    factory function and is rejected before it can ever be invoked.
- * 3. **Future refactors** — if anyone wires `--provider <pkg>` to take
- *    user input, the literal-union type on `pkg` blocks arbitrary
- *    strings at compile time.
+ * What the check *does* catch:
+ *
+ * 1. **Incompatible / broken installs** — an installed package that
+ *    doesn't expose the expected factory (e.g. renamed between major
+ *    versions, partially installed, wrong lockfile resolution).
+ * 2. **Typosquat / dependency-confusion packages whose export shape
+ *    doesn't match** — the weaker end of that attack class; a
+ *    typosquat that perfectly mimics the SDK's public API is not
+ *    detected here.
+ * 3. **Future user-input wiring** — if anyone later exposes
+ *    `--provider <pkg>`, the literal-union type on `pkg` rejects
+ *    arbitrary strings at compile time so untrusted packages can't
+ *    reach this code path.
  *
  * The shape check is deliberately minimal — `typeof export === 'function'`
- * — because the SDK's full surface area shifts between minor versions
- * and richer validation would create false positives.
+ * — because the SDK's full surface shifts between minor versions and
+ * richer validation would create false positives. Real tamper
+ * resistance requires lockfile integrity, npm audit, and pinned
+ * dependencies at the project level (see docs/supply-chain.md).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function tryImport(
@@ -169,14 +178,16 @@ async function tryImport(
   }
 
   if (typeof mod[expectedExport] !== 'function') {
-    // The package loaded but doesn't expose the factory we need. This
-    // could be a tampered install, a typosquat, or simply an upstream
-    // breaking change. Either way, refuse to invoke an unfamiliar shape.
+    // The package loaded but doesn't expose the factory we need.
+    // Most commonly this is an SDK version mismatch (export renamed
+    // or split across packages), a partially-installed package, or an
+    // unexpected replacement. Reinstalling doesn't fix a version-mismatch
+    // root cause, so suggest verifying the installed version first.
     throw new Error(
       `Provider SDK "${pkg}" is missing the expected export "${expectedExport}". ` +
-      `This usually means the installed package has been tampered with, replaced ` +
-      `by a typosquat, or has had a breaking change. Reinstall from a trusted ` +
-      `source: \`npm install ${pkg}\`.`,
+      `Verify that you have a compatible "${pkg}" version installed (check ` +
+      `package.json and the lockfile for the resolved version). If the version ` +
+      `is correct, reinstall from a trusted source: \`npm install ${pkg}\`.`,
     );
   }
 

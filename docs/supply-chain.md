@@ -46,20 +46,30 @@ sensitive deployment-identity material.
 ### Provider-validated dynamic import (#40)
 
 `src/cli/resolve-model.ts` uses `await import()` to load the provider
-SDK on demand. After import, we check that the expected factory export
-(e.g. `createAnthropic`) is a function before invoking it. This blocks:
+SDK on demand. After the import resolves, we check that the expected
+factory export (e.g. `createAnthropic`) is a function before invoking
+it. This is an **export-surface sanity check**, not a tamper-proof
+guard — by the time the check runs, the imported module's top-level
+code has already executed. What it catches:
 
-1. Tampered installations where the upstream package contents are
-   replaced without changing the public API shape.
-2. Dependency-confusion / typosquats where a malicious package
-   masquerades as `@ai-sdk/foo`.
-3. Future refactors that wire `--provider <pkg>` to user input — the
-   `tryImport` `pkg` parameter is typed as a literal union, so
-   arbitrary strings are rejected at compile time.
+1. **Broken or substituted installs** where the imported package no
+   longer exposes the expected factory export (renamed across a major
+   version, partial install, bad lockfile resolution).
+2. **Dependency-confusion / typosquat packages whose export shape does
+   not match `@ai-sdk/foo`'s API.** A typosquat that perfectly mimics
+   the SDK's public surface is *not* caught here — lockfile integrity
+   and `npm audit` are the real defences against that.
+3. **Future refactors that wire `--provider <pkg>` to user input** —
+   the `tryImport` `pkg` parameter is typed as a literal union, so
+   arbitrary strings are rejected at compile time and never reach
+   `import()`.
 
-The shape check is deliberately minimal (`typeof === 'function'`)
+The runtime check is deliberately minimal (`typeof === 'function'`)
 because the SDK's full API shifts between minor versions and richer
-validation would create false positives.
+validation would create false positives. A tampered or malicious
+package that still exports the expected factory passes this check;
+the real integrity story lives in the lockfile + `npm audit`
+verification step below.
 
 ## Verifying a release
 
