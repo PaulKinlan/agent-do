@@ -175,6 +175,18 @@ export interface AgentConfig {
   systemPrompt?: string; // Raw system prompt (CLAUDE.md content)
   tools?: ToolSet;
   skills?: SkillStore;
+  /**
+   * Expose the privileged `install_skill` tool to the model (#24, H-05).
+   *
+   * Default **`false`**: the LLM cannot install skills, only search /
+   * list / remove. Because installed skills get concatenated into the
+   * system prompt on every subsequent run sharing the same store, a
+   * prompt-injected agent with install access could rewrite its own
+   * future instructions — a persistent jailbreak. Set `true` only when
+   * the caller also runs a human-in-the-loop permission layer
+   * (`permissions: { mode: 'ask' }` or `hooks.onPreToolUse`).
+   */
+  allowSkillInstall?: boolean;
   maxIterations?: number;
   innerStepLimit?: number;
   hooks?: AgentHooks;
@@ -186,11 +198,56 @@ export interface AgentConfig {
       perRun?: number;
       perDay?: number;
     };
+    /**
+     * Hard cap multiplier for in-step cost checking (#31, M-07).
+     *
+     * `limits.perRun` is enforced in two layers with different timing:
+     *
+     * - **Soft limit (`perRun`)**: `UsageTracker.checkLimits()` runs
+     *   at the top of each outer iteration. If an iteration's last
+     *   step pushes cumulative cost over the soft limit, the loop
+     *   breaks cleanly before the *next* iteration starts. One
+     *   iteration's worth of spend may still be in flight when the
+     *   soft check runs.
+     *
+     * - **Hard cap (`perRun × hardLimitMultiplier`)**: the per-step
+     *   `onStepFinish` hook records each model step's usage and
+     *   aborts the in-progress `streamText` call via AbortSignal as
+     *   soon as cumulative cost crosses the hard cap. This bounds
+     *   mid-iteration overshoot even in worst-case step chains.
+     *
+     * Default: `1.25` — gives the soft-limit check a comfortable
+     * chance to fire between iterations before the hard cap does.
+     */
+    hardLimitMultiplier?: number;
     onLimitExceeded?: (event: {
       type: string;
       spent: number;
       limit: number;
     }) => Promise<boolean>;
+  };
+  /**
+   * Per-run tool-call caps (#27, M-03).
+   *
+   * Without these, a runaway or prompt-injected agent can invoke thousands
+   * of tool calls in a single outer iteration — `maxIterations` caps the
+   * outer loop but `innerStepLimit` × unbounded-calls-per-step doesn't.
+   *
+   * - `maxToolCalls`: total cap across the entire run. Once exceeded,
+   *   the wrapper returns a blocked `ToolResult` (with `reason:
+   *   'tool-limit-run'`) rather than throwing; the model sees the
+   *   error and can produce a final answer instead of crashing the
+   *   loop.
+   * - `maxToolCallsPerIteration`: resets at the start of each outer
+   *   iteration. Same blocked-ToolResult semantics. Defends against
+   *   tight per-iteration fan-out.
+   *
+   * Omit to disable (default). A sensible safe pair is `maxToolCalls: 100,
+   * maxToolCallsPerIteration: 25`.
+   */
+  toolLimits?: {
+    maxToolCalls?: number;
+    maxToolCallsPerIteration?: number;
   };
   signal?: AbortSignal;
   /**

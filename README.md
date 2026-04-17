@@ -596,8 +596,39 @@ const agent = createAgent({
 ```
 
 When a `SkillStore` is provided, the agent gets:
-- Installed skill content injected into the system prompt
-- Auto-generated tools: `search_skills`, `install_skill`, `list_skills`, `remove_skill`
+- Installed skill content injected into the system prompt, wrapped in
+  `<skill>…</skill>` markers with a preamble instructing the model to
+  treat the body as reference data rather than overriding
+  instructions.
+- Auto-generated tools: `search_skills`, `list_skills`, `remove_skill`.
+  The `install_skill` tool is **not** exposed by default — see below.
+
+### `allowSkillInstall` (privileged)
+
+The LLM-facing `install_skill` tool lets the model write skills into
+the backing `SkillStore`. Because installed skills get injected into
+every subsequent run's system prompt, a prompt-injected agent with
+install access could plant a persistent jailbreak across sessions.
+
+Set `allowSkillInstall: true` on the agent config to expose
+`install_skill` to the model. Default is `false` — library callers
+install skills themselves (via `skills.install(...)`) and the agent
+only searches / lists / removes them.
+
+```ts
+const agent = createAgent({
+  // ...
+  skills,
+  allowSkillInstall: true, // opt-in: model can persist new skills
+});
+```
+
+Inputs to `install_skill` are validated by a strict schema (id matches
+`/^[a-zA-Z0-9_-]+$/`, content ≤ 8 KB, name ≤ 64 chars, description ≤
+256 chars) regardless of who calls the tool, and any `<skill>` or
+`</skill>` sequences inside the skill body are neutralised before the
+prompt is rendered so the structural isolation can't be broken from
+inside.
 
 ### Parsing SKILL.md files
 
@@ -628,9 +659,16 @@ interface SkillStore {
   get(skillId: string): Promise<Skill | undefined>;
   install(skill: Skill): Promise<void>;
   remove(skillId: string): Promise<void>;
-  search(query: string): Promise<Array<{ id: string; name: string; description: string; url?: string }>>;
+  search(query: string): Promise<Array<{ id: string; name: string; description: string }>>;
 }
 ```
+
+`SkillSearchResult` deliberately has no `url` field — an external
+registry returning a URL would turn skill search into an SSRF / auto-
+fetch footgun (see issue #34). If you wire up a network-backed store,
+host allowlisting and explicit installation must happen outside
+`search()`; `install()` should only receive content the caller has
+already verified.
 
 ## Lifecycle Hooks
 

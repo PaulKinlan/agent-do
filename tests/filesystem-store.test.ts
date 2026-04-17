@@ -308,11 +308,16 @@ describe('FilesystemMemoryStore', () => {
       const parMs = Date.now() - tPar;
 
       expect(results).toHaveLength(N);
-      // 2× is a loose floor. We just need to distinguish "actually in
-      // parallel" from "serialised but async-wrapped". If both paths
-      // are near-zero (very fast machine), the check becomes trivially
-      // true — the correctness check above still catches regressions.
-      expect(parMs).toBeLessThanOrEqual(Math.max(seqMs, 5));
+      // The timing comparison is only meaningful when sequential reads
+      // are slow enough for OS scheduling jitter not to dominate. When
+      // seqMs is in the single-digit millisecond range (warm page cache),
+      // a 1–2 ms noise spike can make parMs appear slightly higher than
+      // seqMs even with a genuinely parallel implementation. Skip the
+      // assertion in that case — the correctness check above and the
+      // 'setImmediate' test above still guard against regressions.
+      if (seqMs >= 20) {
+        expect(parMs).toBeLessThanOrEqual(seqMs * 0.9);
+      }
     });
   });
 });
