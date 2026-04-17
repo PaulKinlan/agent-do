@@ -58,11 +58,34 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   let agent: Agent;
 
   if (typeof exported.run === 'function' && typeof exported.stream === 'function') {
-    // It's an Agent instance
+    // It's an Agent instance. The script already built its own
+    // permissions surface — the CLI can't retrofit `--accept-all` /
+    // `--allow` / the prompt handler onto a pre-built agent, so warn
+    // the operator that the CLI policy is NOT in force. (Codex #68
+    // P1: silently ignoring the flags was worse than not applying
+    // them in the first place; now the operator sees the mismatch.)
+    if (!args.json && (args.acceptAll || args.allow.length > 0)) {
+      process.stderr.write(
+        `[agent-do] Note: ${args.file} exports a pre-built Agent instance, so ` +
+        `--accept-all and --allow have no effect. Export a config object instead ` +
+        `if you want the CLI permission policy to apply.\n`,
+      );
+    }
     agent = exported as unknown as Agent;
   } else if (exported.model && exported.id) {
-    // It's an AgentConfig — create agent from it
-    agent = createAgent(exported as any);
+    // It's an AgentConfig — create agent from it. Inject CLI
+    // permissions unless the config explicitly sets its own. Codex
+    // #68 P1: without this, a config-object export silently inherits
+    // the old "accept-all" default when the CLI caller expected the
+    // new ask policy.
+    const cfg = { ...(exported as Record<string, unknown>) };
+    if (cfg.permissions === undefined) {
+      cfg.permissions = buildCliPermissions({
+        acceptAll: args.acceptAll,
+        allow: args.allow,
+      });
+    }
+    agent = createAgent(cfg as any);
   } else if (exported.systemPrompt || exported.name) {
     // Simple config — resolve model from provider/args
     const model = await resolveModel(
