@@ -23,6 +23,34 @@ npm install agent-do
 
 Peer dependency: `ai` (Vercel AI SDK v6+).
 
+The CLI ships with `@ai-sdk/anthropic`, `@ai-sdk/google`, and `@ai-sdk/openai`
+bundled so `npx agent-do` works out of the box. These are declared as optional
+peers for library consumers — if you only use one provider, npm won't complain
+about the others being missing, but the CLI covers them all.
+
+### Using a different provider
+
+The CLI only knows about `anthropic`, `google`, `openai`, and `ollama`. For
+any other provider (Mistral, Groq, Cohere, OpenRouter, Bedrock, xAI, etc.),
+install the SDK and use agent-do as a library:
+
+```bash
+npm install agent-do @ai-sdk/mistral
+```
+
+```ts
+import { createAgent } from 'agent-do';
+import { createMistral } from '@ai-sdk/mistral';
+
+const agent = createAgent({
+  model: createMistral()('mistral-large-latest'),
+});
+await agent.run('your task');
+```
+
+Any Vercel AI SDK `LanguageModel` works — see
+[sdk.vercel.ai/providers](https://sdk.vercel.ai/providers) for the full list.
+
 ## CLI
 
 Run agents from the command line with zero config:

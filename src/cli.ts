@@ -95,6 +95,17 @@ Environment:
   GOOGLE_GENERATIVE_AI_API_KEY   Required for Google models
   OPENAI_API_KEY         Required for OpenAI models
 
+Other providers:
+  The CLI ships with Anthropic, Google, OpenAI, and Ollama built in.
+  For Mistral, Groq, Cohere, OpenRouter, Bedrock, etc., import agent-do
+  as a library and pass any Vercel AI SDK LanguageModel:
+
+    import { Agent } from 'agent-do';
+    import { createMistral } from '@ai-sdk/mistral';
+    const agent = new Agent({ model: createMistral()('mistral-large-latest') });
+
+  See https://sdk.vercel.ai/providers for the full list.
+
 Examples:
   npx agent-do "What is TypeScript?"
   npx agent-do create code-reviewer --provider anthropic --system "Review code for bugs"

@@ -53,8 +53,19 @@ export async function resolveModel(
     }
     default:
       throw new Error(
-        `Unknown provider "${provider}". ` +
-        `Available: ${Object.keys(DEFAULT_MODELS).join(', ')}`,
+        `Unknown provider "${provider}".\n` +
+        `The CLI supports: ${Object.keys(DEFAULT_MODELS).join(', ')}.\n` +
+        `\n` +
+        `For other providers (Mistral, Groq, Cohere, OpenRouter, Bedrock, etc.),\n` +
+        `use agent-do as a library and pass any Vercel AI SDK LanguageModel:\n` +
+        `\n` +
+        `  import { Agent } from 'agent-do';\n` +
+        `  import { createMistral } from '@ai-sdk/mistral';\n` +
+        `\n` +
+        `  const agent = new Agent({ model: createMistral()('mistral-large-latest') });\n` +
+        `  await agent.run('your task');\n` +
+        `\n` +
+        `See: https://sdk.vercel.ai/providers for the full provider list.`,
       );
   }
 }
@@ -64,8 +75,17 @@ async function tryImport(pkg: string, provider: string): Promise<any> {
     return await import(pkg);
   } catch {
     throw new Error(
-      `Provider "${provider}" requires "${pkg}" to be installed.\n` +
-      `Run: npm install ${pkg}`,
+      `Provider "${provider}" needs "${pkg}" installed alongside agent-do.\n` +
+      `\n` +
+      `  npm install ${pkg}\n` +
+      `\n` +
+      `If you're running via npx, install agent-do first so providers resolve:\n` +
+      `\n` +
+      `  npm install -g agent-do ${pkg}\n` +
+      `\n` +
+      `To use a provider the CLI doesn't support (Mistral, Groq, Cohere, etc.),\n` +
+      `import agent-do as a library and pass the Vercel AI SDK model directly.\n` +
+      `See: https://sdk.vercel.ai/providers`,
     );
   }
 }
