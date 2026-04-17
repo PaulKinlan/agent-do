@@ -1127,6 +1127,87 @@ The [`examples/`](examples/) directory contains runnable examples:
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
+## Releasing
+
+Version management uses [Changesets](https://github.com/changesets/changesets).
+Releases are **manual** by design — publishing requires short-lived
+npm credentials that the maintainer mints ahead of time, so nothing
+lives in CI as a long-lived token.
+
+### Recording a change
+
+When you make a change that should appear in the next release, record
+a changeset describing it:
+
+```bash
+npm run changeset
+```
+
+The CLI asks whether the change is a **major** / **minor** / **patch**
+bump and writes a markdown file in `.changeset/`. Commit that file
+alongside your code change. The changeset body becomes an entry in
+`CHANGELOG.md` at release time.
+
+Rules of thumb for pre-1.0:
+
+- **patch** — bug fixes, internal refactors, doc updates
+- **minor** — new features, non-breaking API additions, security fixes
+  that don't change the public API
+- **major** — save for the 1.0 cut; until then, breaking changes can
+  ride in **minor**
+
+Not every PR needs a changeset. If a change doesn't affect what gets
+shipped to npm consumers (CI config, internal tests, comment tweaks),
+skip it.
+
+### Cutting a release
+
+Once one or more changesets are sitting in `.changeset/` on the branch
+you want to cut from (usually `main`):
+
+```bash
+# Mint a short-lived npm token, then either:
+npm login                            # interactive, stays in ~/.npmrc for this session
+# or:
+export NPM_TOKEN=npm_…               # paste the token
+
+npm run release
+```
+
+`npm run release` executes `scripts/release.sh`, which walks the whole
+manual flow in one go:
+
+1. **Preconditions** — dirty tree aborts, zero pending changesets
+   aborts.
+2. **Quality gate** — `typecheck` + `test` + `build`.
+3. **Apply changesets** — `changeset version` bumps `package.json` and
+   prepends entries to `CHANGELOG.md`. The script prints the diff so
+   you can eyeball it.
+4. **Commit** — `chore: release vX.Y.Z` on the current branch.
+5. **Publish** — `changeset publish` pushes to npm (with provenance)
+   and creates the git tag.
+6. **Push** — commit + tag to `origin/<current-branch>`.
+
+Any failure stops the script. Steps are idempotent enough that you can
+usually re-run after fixing the cause.
+
+After publish, open <https://github.com/PaulKinlan/agent-do/releases>
+and (optionally) create a GitHub release from the fresh tag with the
+CHANGELOG body pasted in.
+
+### Commit message format
+
+**Not required.** Changesets determines the semver impact from the
+`.changeset/*.md` files, not from commit messages, so commits can be
+whatever shape fits the change. Conventional-commit prefixes
+(`feat:`, `fix:`, `chore:`) are fine but not enforced.
+
+The one discipline to keep is: *any PR that changes user-facing
+behaviour needs a changeset*. If that ever drifts, the cheapest
+enforcement is a CI check that fails PRs which touch `src/` without
+adding a file in `.changeset/` — happy to wire that up if it becomes
+a problem.
+
 ## License
 
 Apache 2.0

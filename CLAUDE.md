@@ -54,6 +54,68 @@ demos/              — comprehensive end-to-end demo applications
 5. **Types** — export all public types from `src/types.ts` and re-export from `src/index.ts`.
 6. **No internal dependencies** — this package must NOT reference any private/internal packages. It is standalone.
 7. **llms.txt** — update `llms.txt` if you add new exports or change the API surface.
+8. **Changesets** — see below.
+
+## Changesets (release discipline)
+
+This repo uses [Changesets](https://github.com/changesets/changesets)
+for version management. Releases are **cut manually** via
+`npm run release` (see `scripts/release.sh`). There is no automated
+publish workflow because the maintainer doesn't want a long-lived
+`NPM_TOKEN` in CI.
+
+### When to add a changeset
+
+**Every change that affects what ships to npm consumers needs a
+changeset.** That covers:
+
+- Anything touching `src/` (runtime behaviour, types, new exports, bug
+  fixes, refactors that change output).
+- New `package.json` `files`/`exports`/`bin` entries.
+- Dependency version bumps that consumers will see in their lockfile
+  (anything in `dependencies` or `peerDependencies`).
+- README changes that correct a documented API (the README ships in
+  the tarball).
+
+Skip the changeset when the change is **not** shipped:
+
+- `tests/`, `examples/`, `demos/` — not in the `files` allowlist.
+- `.github/`, `docs/`, `AGENTS.md`, `CLAUDE.md` — dev-only metadata.
+- `scripts/`, `.changeset/config.json`, `vitest.config.ts` — tooling.
+- `devDependencies` bumps — consumers don't see these.
+
+If you're unsure whether a change is user-facing: add a changeset. An
+extra `patch` entry in the CHANGELOG is cheap; a missed feature is
+not.
+
+### How to add one
+
+```bash
+npm run changeset
+```
+
+Pick the bump level following the pre-1.0 rule of thumb:
+
+- **patch** — bug fixes, internal refactors that don't change behaviour,
+  error-message tweaks, doc-on-public-API corrections.
+- **minor** — new features, non-breaking API additions, security fixes
+  (even breaking ones, while we're pre-1.0).
+- **major** — reserved for the 1.0 cut. Pre-1.0, breaking changes ride
+  in **minor**.
+
+Write the body as a short user-facing changelog entry (not "refactored
+loop.ts", but "`streamAgentLoop` now yields a new `step-complete`
+event"). It lands verbatim in `CHANGELOG.md` at release time.
+
+Commit the `.changeset/*.md` file in the **same commit or PR as the
+code change** — never separately — so history and CHANGELOG stay
+aligned.
+
+### Commit message format
+
+Not required. Changesets determines the bump from `.changeset/*.md`,
+not from commit prefixes, so `feat:`/`fix:`/`chore:` are optional.
+Write commits however makes the history readable.
 
 ## Demos vs Examples
 
