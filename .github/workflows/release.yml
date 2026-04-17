@@ -56,7 +56,7 @@ jobs:
         run: npm ci
 
       - name: Create release PR or publish to npm
-        uses: changesets/action@v1
+        uses: changesets/action@v1.4.9
         with:
           # Opens/updates the Version PR when there are pending changesets.
           version: npm run version
