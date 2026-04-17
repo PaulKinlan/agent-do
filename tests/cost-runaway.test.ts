@@ -167,14 +167,22 @@ describe('M-07: buildOnStepFinish', () => {
     const config = baseConfig({
       usage: { enabled: false, pricing, limits: { perRun: 1 } },
     });
-    expect(buildOnStepFinish(config, tracker, ctrl)).toBeUndefined();
+    expect(buildOnStepFinish(config, tracker, ctrl, 0)).toBeUndefined();
   });
 
-  it('returns undefined when no perRun limit is set', () => {
+  it('records step usage even without a perRun limit (PR #65 review)', () => {
+    // The hook became the authoritative per-step recorder so that
+    // mid-iteration aborts land in the tracker. It therefore fires
+    // for any usage-tracking-enabled config, just skips the abort
+    // branch when no hard cap is configured.
     const tracker = new UsageTracker({ pricing });
     const ctrl = new AbortController();
     const config = baseConfig({ usage: { pricing } });
-    expect(buildOnStepFinish(config, tracker, ctrl)).toBeUndefined();
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    expect(hook).toBeDefined();
+    hook!(stepWithUsage(10, 20));
+    expect(tracker.getSummary().records).toHaveLength(1);
+    expect(ctrl.signal.aborted).toBe(false);
   });
 
   it('aborts the controller when projected cost crosses the hard cap', () => {
@@ -188,7 +196,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1, // hard cap == soft cap
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl);
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
     expect(hook).toBeDefined();
 
     // Step cost: 10/1M × 1000 + 20/1M × 1000 = $0.03.
@@ -210,7 +218,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1.25, // hard = 1.25
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl);
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
     hook!(stepWithUsage(10, 20)); // $0.03 projected, well under 1.25
     expect(ctrl.signal.aborted).toBe(false);
   });
@@ -228,7 +236,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1, // hard = 0.03
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl);
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
     // Next step adds $0.03, so projected = 0.02 + 0.03 = 0.05 >= 0.03.
     hook!(stepWithUsage(10, 20));
     expect(ctrl.signal.aborted).toBe(true);
@@ -244,7 +252,7 @@ describe('M-07: buildOnStepFinish', () => {
         limits: { perRun: 0.03 }, // cost equals limit → soft trip, not hard
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl);
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
     // Projected 0.03 < 0.03 × 1.25 = 0.0375 → no abort.
     hook!(stepWithUsage(10, 20));
     expect(ctrl.signal.aborted).toBe(false);
@@ -257,8 +265,51 @@ describe('M-07: buildOnStepFinish', () => {
       model: mockModel({ responses: [{ text: 'x' }], modelId: 'cap-test' }),
       usage: { pricing, limits: { perRun: 0.0001 }, hardLimitMultiplier: 1 },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl);
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
     hook!({}); // no usage
     expect(ctrl.signal.aborted).toBe(false);
+  });
+
+  it('accumulates across inner steps in the same iteration (Codex #65 P1)', () => {
+    // Before this fix, the hook only projected against cross-iteration
+    // totals, so N small inner steps could each stay under the cap
+    // while cumulatively exceeding it. The new implementation records
+    // each step into the tracker so the running total reflects
+    // intra-iteration accumulation.
+    const tracker = new UsageTracker({ pricing });
+    const ctrl = new AbortController();
+    const config = baseConfig({
+      model: mockModel({ responses: [{ text: 'x' }], modelId: 'cap-test' }),
+      usage: {
+        pricing,
+        limits: { perRun: 0.04 }, // per-step cost is $0.03
+        hardLimitMultiplier: 1,
+      },
+    });
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    hook!(stepWithUsage(10, 20)); // running total $0.03 < cap 0.04
+    expect(ctrl.signal.aborted).toBe(false);
+    hook!(stepWithUsage(10, 20)); // running total $0.06 >= cap 0.04
+    expect(ctrl.signal.aborted).toBe(true);
+  });
+
+  it('records the aborted step before tripping (Codex #65 P2)', () => {
+    // The abort-causing step must be in the tracker, otherwise
+    // RunResult.usage undercounts the actual spend at termination.
+    const tracker = new UsageTracker({ pricing });
+    const ctrl = new AbortController();
+    const config = baseConfig({
+      model: mockModel({ responses: [{ text: 'x' }], modelId: 'cap-test' }),
+      usage: {
+        pricing,
+        limits: { perRun: 0.01 }, // trip on first step ($0.03 > 0.01)
+        hardLimitMultiplier: 1,
+      },
+    });
+    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    hook!(stepWithUsage(10, 20));
+    expect(ctrl.signal.aborted).toBe(true);
+    expect(tracker.getSummary().records).toHaveLength(1);
+    expect(tracker.getSummary().totalCost).toBeCloseTo(0.03, 5);
   });
 });

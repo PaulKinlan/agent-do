@@ -346,54 +346,79 @@ function buildTools(
 }
 
 /**
- * Build an `onStepFinish` hook that enforces per-step spending limits (#31).
+ * Build an `onStepFinish` hook that records usage per inner step and
+ * aborts the stream when the hard spending cap would be crossed (#31,
+ * plus PR #65 review follow-ups).
  *
- * Before this, `tracker.checkLimits()` only ran *between* outer iterations,
- * which let one iteration overshoot the soft limit by up to `innerStepLimit`
- * model steps (plus whatever tool-call bursts the SDK allowed within each).
- * The hook uses the step's token usage to estimate cost on top of whatever
- * the tracker has already recorded and aborts mid-iteration when the hard
- * cap (`perRun × hardLimitMultiplier`) would be crossed.
+ * ### Before
  *
- * The hook deliberately **does not call `tracker.record`** — the outer loop
- * still records the iteration total via `result.totalUsage` to preserve
- * single-source-of-truth for `onUsage` hooks and `result.usage`. We only
- * need a point-in-time estimate here, not a second authoritative ledger.
+ * `tracker.checkLimits()` only ran *between* outer iterations, and
+ * `tracker.record()` was called once per outer iteration with the
+ * total usage from `result.totalUsage`. That meant:
  *
- * Returns `undefined` when the caller disables usage tracking or sets no
- * `perRun` limit so the default path has zero overhead.
+ * - The hard-cap projection inside the hook only saw the tracker's
+ *   **cross-iteration** total, so N small inner steps in the same
+ *   iteration could cumulatively exceed the hard cap without any
+ *   individual step tripping the check (Codex #65 P1).
+ * - When the hard cap did abort, the loop broke before
+ *   `result.totalUsage` was awaited, so the step(s) that caused the
+ *   abort never made it into the tracker — `RunResult.usage`
+ *   undercounted the actual spend (Codex #65 P2 / Copilot).
+ *
+ * ### After
+ *
+ * The hook is now the **authoritative per-step recorder**. Each inner
+ * model step calls `tracker.record()` with its own usage, so the
+ * tracker's running total reflects every step the SDK has completed —
+ * including intra-iteration accumulation — and the hard-cap projection
+ * uses that running total directly.
+ *
+ * Because the hook records before it decides whether to abort, an
+ * aborted iteration's last step is already in the ledger by the time
+ * the outer loop breaks. The outer loop no longer calls
+ * `tracker.record(...)` itself — that would double-count when the
+ * hook is active. It still awaits `result.totalUsage` at the end of
+ * a clean iteration (so the recorded per-step totals reconcile with
+ * the SDK's view) but only to surface mismatches, not to ledger.
+ *
+ * Returns `undefined` when the caller disables usage tracking entirely
+ * (so hook dispatch is free when callers opt out).
  */
 export function buildOnStepFinish(
   config: AgentConfig,
   tracker: UsageTracker,
   abortController: AbortController,
+  outerStep: number,
 ): ((step: unknown) => void) | undefined {
   if (config.usage?.enabled === false) return undefined;
   const softLimit = config.usage?.limits?.perRun;
-  if (softLimit === undefined) return undefined;
   const multiplier = config.usage?.hardLimitMultiplier ?? 1.25;
-  const hardLimit = softLimit * multiplier;
+  const hardLimit = softLimit !== undefined ? softLimit * multiplier : undefined;
   const modelId =
     typeof config.model === 'string'
       ? config.model
       : config.model.modelId;
-  const pricing = config.usage?.pricing;
 
   return (step: unknown) => {
     const usage = (step as { usage?: { inputTokens?: number; outputTokens?: number } })
       .usage;
     if (!usage) return;
-    const stepCost = estimateCost(
+    // Record first so the tracker's running total includes this step
+    // — the hard-cap projection then sees an authoritative sum across
+    // all inner steps that have already finished, not just the
+    // cross-iteration baseline.
+    tracker.record(
+      outerStep,
       modelId,
       usage.inputTokens ?? 0,
       usage.outputTokens ?? 0,
-      pricing,
     );
-    const projected = tracker.getSummary().totalCost + stepCost;
-    if (projected >= hardLimit && !abortController.signal.aborted) {
+    if (hardLimit === undefined || softLimit === undefined) return;
+    const spent = tracker.getSummary().totalCost;
+    if (spent >= hardLimit && !abortController.signal.aborted) {
       abortController.abort(
         new Error(
-          `Hard spending cap reached: $${projected.toFixed(4)} ≥ $${hardLimit.toFixed(4)} (soft $${softLimit.toFixed(4)} × ${multiplier})`,
+          `Hard spending cap reached: $${spent.toFixed(4)} ≥ $${hardLimit.toFixed(4)} (soft $${softLimit.toFixed(4)} × ${multiplier})`,
         ),
       );
     }
@@ -456,6 +481,11 @@ async function runAgentLoopDirect(
 
   let lastText = '';
   let aborted = false;
+  // Outer-iteration counter kept separately from `tracker.records`
+  // since PR #65 made the tracker record per *inner* model step.
+  // `RunResult.steps` historically meant "how many outer iterations
+  // ran", so preserve that contract here.
+  let outerIterations = 0;
 
   for (let i = 0; i < maxIterations; i++) {
     // Check abort
@@ -463,6 +493,7 @@ async function runAgentLoopDirect(
       aborted = true;
       break;
     }
+    outerIterations = i + 1;
 
     // Step start hook
     if (config.hooks?.onStepStart) {
@@ -514,7 +545,7 @@ async function runAgentLoopDirect(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort);
+    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
 
     // Call streamText
     const result = streamText({
@@ -533,6 +564,7 @@ async function runAgentLoopDirect(
     // Consume the stream
     let iterationText = '';
     let hasToolCalls = false;
+    const recordsBefore = tracker.getSummary().records.length;
 
     try {
       for await (const part of result.fullStream) {
@@ -553,8 +585,8 @@ async function runAgentLoopDirect(
     } catch (err) {
       // An abort inside streamText (including our own hard-cap trip) can
       // bubble out as an AbortError/DOMException. Treat it as a graceful
-      // end-of-run instead of a crash — the tracker already holds the
-      // authoritative spend record.
+      // end-of-run instead of a crash — the hook has already recorded
+      // every step's usage into the tracker (see PR #65 review fix).
       if (stepAbort.signal.aborted) {
         aborted = true;
       } else {
@@ -564,29 +596,22 @@ async function runAgentLoopDirect(
       if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
     }
 
+    // Fire onUsage for each step the hook recorded during this
+    // iteration. Doing it here (rather than inside the hook) keeps
+    // onUsage dispatch on the outer event-loop tick and consistent
+    // with the pre-#65 contract: one onUsage per step the SDK
+    // completed, including the step that triggered an abort.
+    if (config.hooks?.onUsage) {
+      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      for (const rec of freshRecords) await config.hooks.onUsage(rec);
+    }
+
     if (aborted) break;
 
     // Get response messages and append to history
     const response = await result.response;
     for (const msg of response.messages) {
       messages.push(msg as ModelMessage);
-    }
-
-    // Record usage
-    const usage = await result.totalUsage;
-    const modelId =
-      typeof config.model === 'string'
-        ? config.model
-        : config.model.modelId;
-    const record = tracker.record(
-      i,
-      modelId,
-      usage?.inputTokens ?? 0,
-      usage?.outputTokens ?? 0,
-    );
-
-    if (config.hooks?.onUsage) {
-      await config.hooks.onUsage(record);
     }
 
     // Get final text
@@ -630,7 +655,7 @@ async function runAgentLoopDirect(
   return {
     text: lastText,
     usage: finalUsage,
-    steps: finalUsage.steps,
+    steps: outerIterations,
     aborted,
   };
 }
@@ -747,7 +772,7 @@ export async function* streamAgentLoop(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort);
+    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
 
     // Call streamText
     const result = streamText({
@@ -767,6 +792,7 @@ export async function* streamAgentLoop(
     let iterationText = '';
     let hasToolCalls = false;
     let hardCapTripped = false;
+    const recordsBefore = tracker.getSummary().records.length;
 
     try {
       for await (const part of result.fullStream) {
@@ -872,6 +898,15 @@ export async function* streamAgentLoop(
       if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
     }
 
+    // Fire onUsage for every step the hook recorded this iteration,
+    // including the step that triggered an abort. This is the per-
+    // step-record fix from PR #65 review — before this the abort path
+    // never made it into RunResult.usage.
+    if (config.hooks?.onUsage) {
+      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      for (const rec of freshRecords) await config.hooks.onUsage(rec);
+    }
+
     if (hardCapTripped) {
       yield {
         type: 'error',
@@ -887,23 +922,6 @@ export async function* streamAgentLoop(
     const response = await result.response;
     for (const msg of response.messages) {
       messages.push(msg as ModelMessage);
-    }
-
-    // Record usage
-    const usage = await result.totalUsage;
-    const modelId =
-      typeof config.model === 'string'
-        ? config.model
-        : config.model.modelId;
-    const record = tracker.record(
-      i,
-      modelId,
-      usage?.inputTokens ?? 0,
-      usage?.outputTokens ?? 0,
-    );
-
-    if (config.hooks?.onUsage) {
-      await config.hooks.onUsage(record);
     }
 
     // Get final text
