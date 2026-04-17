@@ -1,7 +1,60 @@
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
+import YAML from 'yaml';
 import type { Skill, SkillStore } from './types.js';
+
+/**
+ * Per-field schemas for the frontmatter block of a SKILL.md file.
+ *
+ * Validating field-by-field (rather than the whole object at once) means a
+ * single bad value — e.g. `version: 2` landing as a YAML number — only
+ * drops that one field, leaving the rest of the metadata intact. Each
+ * schema uses `z.coerce.string()` so numeric/boolean YAML values are
+ * stringified rather than rejected. Length caps are upper bounds; oversize
+ * values are dropped. Unknown keys are preserved by callers that want them
+ * but ignored for the typed `Skill` fields.
+ *
+ * See issue #37 — the previous hand-rolled parser silently truncated
+ * values at colons and dropped multiline fields.
+ */
+const SKILL_FIELD_SCHEMAS = {
+  name: z.coerce.string().min(1).max(128),
+  description: z.coerce.string().max(512),
+  author: z.coerce.string().max(128),
+  version: z.coerce.string().max(32),
+} as const;
+
+type SkillMeta = Partial<Record<keyof typeof SKILL_FIELD_SCHEMAS, string>>;
+
+/**
+ * Pull the known frontmatter fields out of a parsed YAML object.
+ *
+ * - Lowercases keys so `Name:` / `DESCRIPTION:` still parse (matching the
+ *   pre-v0.1.4 behaviour).
+ * - Validates each field independently, so one bad field doesn't lose the
+ *   others.
+ * - Skips prototype-pollution keys defensively.
+ */
+function extractSkillMeta(raw: unknown): SkillMeta {
+  if (typeof raw !== 'object' || raw === null) return {};
+
+  const lowered: Record<string, unknown> = Object.create(null);
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+    lowered[k.toLowerCase()] = v;
+  }
+
+  const out: SkillMeta = {};
+  for (const field of Object.keys(SKILL_FIELD_SCHEMAS) as Array<keyof typeof SKILL_FIELD_SCHEMAS>) {
+    const value = lowered[field];
+    if (value === undefined || value === null) continue;
+    const parsed = SKILL_FIELD_SCHEMAS[field].safeParse(value);
+    if (parsed.success) out[field] = parsed.data;
+    // else: skip this field only, keep the others
+  }
+  return out;
+}
 
 /**
  * Build a system prompt section from a list of skills.
@@ -55,14 +108,16 @@ export function parseSkillMd(content: string, id?: string): Skill {
   const frontmatter = match[1];
   const body = match[2];
 
-  const meta: Record<string, string> = {};
-  for (const line of frontmatter.split('\n')) {
-    const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
-    if (!kv) continue;
-    const key = kv[1].toLowerCase();
-    const value = kv[2].replace(/^["']|["']$/g, '').trim();
-    meta[key] = value;
+  // Proper YAML parsing. On parse error (malformed frontmatter) fall back
+  // to an empty object so the body is still returned rather than the whole
+  // skill being dropped. Per-field validation happens in extractSkillMeta.
+  let rawMeta: unknown = {};
+  try {
+    rawMeta = YAML.parse(frontmatter) ?? {};
+  } catch {
+    rawMeta = {};
   }
+  const meta = extractSkillMeta(rawMeta);
 
   const skillId =
     id ||

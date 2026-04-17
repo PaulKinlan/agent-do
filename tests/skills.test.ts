@@ -48,6 +48,108 @@ Content here.`;
     expect(skill.id).toBe('my-cool-skill');
     expect(skill.name).toBe('My Cool Skill');
   });
+
+  it('preserves quoted values that contain colons', () => {
+    const content = `---
+name: "Helpful: gets things done"
+description: "Role: assistant; style: terse"
+---
+
+body`;
+    const skill = parseSkillMd(content, 'helpful');
+    expect(skill.name).toBe('Helpful: gets things done');
+    expect(skill.description).toBe('Role: assistant; style: terse');
+  });
+
+  it('preserves multiline description via YAML folded/literal blocks', () => {
+    const content = `---
+name: Multi
+description: |
+  line one
+  line two
+---
+
+body`;
+    const skill = parseSkillMd(content, 'multi');
+    expect(skill.description).toContain('line one');
+    expect(skill.description).toContain('line two');
+  });
+
+  it('falls back to empty meta on malformed YAML without dropping the body', () => {
+    const content = `---
+name: "unterminated
+---
+
+body goes here`;
+    const skill = parseSkillMd(content, 'broken');
+    expect(skill.id).toBe('broken');
+    expect(skill.content).toBe('body goes here');
+  });
+
+  it('keeps valid fields when a single field has the wrong type', () => {
+    // YAML parses bare `2` as a number; the old implementation dropped the
+    // entire metadata object when that happened. Per-field validation keeps
+    // the other fields.
+    const content = `---
+name: Numbery
+description: Has a bad version
+version: 2
+---
+
+body`;
+    const skill = parseSkillMd(content, 'numbery');
+    expect(skill.name).toBe('Numbery');
+    expect(skill.description).toBe('Has a bad version');
+    // 2 coerces to "2" via z.coerce.string — acceptable. The important
+    // thing is we didn't lose name / description.
+    expect(skill.version).toBe('2');
+  });
+
+  it('drops only the oversize field, not sibling fields', () => {
+    const big = 'x'.repeat(1000);
+    const content = `---
+name: Valid
+description: ${big}
+---
+
+body`;
+    const skill = parseSkillMd(content, 'valid');
+    expect(skill.name).toBe('Valid');
+    // description exceeds 512 cap → dropped, not allowed to nuke `name`.
+    expect(skill.description).toBe('');
+  });
+
+  it('is case-insensitive for frontmatter keys (Name:, DESCRIPTION:)', () => {
+    // The pre-v0.1.4 parser lowercased keys. Restore that so SKILL.md
+    // files written with capitalised keys still parse.
+    const content = `---
+Name: Capitalised
+DESCRIPTION: Yelling header
+Author: Them
+---
+
+body`;
+    const skill = parseSkillMd(content, 'cap');
+    expect(skill.name).toBe('Capitalised');
+    expect(skill.description).toBe('Yelling header');
+    expect(skill.author).toBe('Them');
+  });
+
+  it('ignores prototype-pollution keys in frontmatter', () => {
+    // Not possible to embed `__proto__` via standard YAML keys without
+    // quoting, but belt-and-braces: if it does get through, skip it.
+    const content = `---
+name: Safe
+"__proto__":
+  polluted: true
+---
+
+body`;
+    const skill = parseSkillMd(content, 'safe');
+    expect(skill.name).toBe('Safe');
+    // No prototype side effects:
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });
 
 describe('buildSkillsPrompt', () => {
