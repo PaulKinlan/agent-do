@@ -82,14 +82,19 @@ export class FilesystemMemoryStore implements MemoryStore {
    *    is `/` or a Windows drive root the `sep` concatenation turns
    *    into `//` / `C:\\` and rejects legitimate children.
    */
-  private resolve(agentId: string, filePath: string): string {
+  private async resolve(agentId: string, filePath: string): Promise<string> {
     validateAgentId(agentId);
     // Canonicalise base up front so every later comparison is
     // canonical-vs-canonical. If baseDir is itself a symlink the
     // realpath walk resolves to the target; without this the
     // `withinBase(canonical, base)` check would reject every path.
-    const base = realpathSafe(path.resolve(this.baseDir));
-    const agentDir = realpathSafe(path.resolve(base, agentId));
+    //
+    // All three realpath walks are async (Codex #64 follow-up): the
+    // store is on the hot path for every tool call, and sync fs
+    // calls here blocked the event loop under concurrent load —
+    // reintroducing the very behaviour #25 moved away from.
+    const base = await realpathSafe(path.resolve(this.baseDir));
+    const agentDir = await realpathSafe(path.resolve(base, agentId));
     if (!withinBase(agentDir, base)) {
       throw new Error('Path traversal not allowed (agentId)');
     }
@@ -100,7 +105,7 @@ export class FilesystemMemoryStore implements MemoryStore {
     if (!withinBase(resolved, agentDir)) {
       throw new Error('Path traversal not allowed');
     }
-    const canonical = realpathSafe(resolved);
+    const canonical = await realpathSafe(resolved);
     if (!withinBase(canonical, agentDir)) {
       throw new Error('Path traversal via symlink not allowed');
     }
@@ -108,13 +113,13 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   /** Returns the canonicalized relative path for use in callbacks. */
-  private canonicalRelativePath(agentId: string, filePath: string): string {
-    const resolved = this.resolve(agentId, filePath);
+  private async canonicalRelativePath(agentId: string, filePath: string): Promise<string> {
+    const resolved = await this.resolve(agentId, filePath);
     // Use the canonical agentDir (matching `resolve()`'s own
     // canonicalisation) so the relative path has no spurious `..`
     // segments when baseDir or agentDir contain symlinks.
-    const base = realpathSafe(path.resolve(this.baseDir));
-    const agentDir = realpathSafe(path.resolve(base, agentId));
+    const base = await realpathSafe(path.resolve(this.baseDir));
+    const agentDir = await realpathSafe(path.resolve(base, agentId));
     return path.relative(agentDir, resolved);
   }
 
@@ -124,7 +129,7 @@ export class FilesystemMemoryStore implements MemoryStore {
     }
     if (this.options.onBeforeWrite) {
       // Pass the canonicalized path so policies can't be bypassed with ../
-      const canonicalPath = this.canonicalRelativePath(agentId, filePath);
+      const canonicalPath = await this.canonicalRelativePath(agentId, filePath);
       const allowed = await Promise.resolve(this.options.onBeforeWrite(agentId, canonicalPath, op));
       if (!allowed) {
         throw new Error(`Write blocked by onBeforeWrite callback (attempted ${op} on ${canonicalPath})`);
@@ -133,7 +138,7 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   async read(agentId: string, filePath: string): Promise<string> {
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     try {
       return await fsp.readFile(full, 'utf-8');
     } catch (err) {
@@ -152,21 +157,21 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     await fsp.mkdir(path.dirname(full), { recursive: true });
     await fsp.writeFile(full, content, 'utf-8');
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     await fsp.mkdir(path.dirname(full), { recursive: true });
     await fsp.appendFile(full, content, 'utf-8');
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     try {
       await fsp.unlink(full);
     } catch (err) {
@@ -185,7 +190,7 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
-    const full = this.resolve(agentId, dirPath || '.');
+    const full = await this.resolve(agentId, dirPath || '.');
     let entries: fs.Dirent[];
     try {
       entries = await fsp.readdir(full, { withFileTypes: true });
@@ -215,12 +220,12 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    await fsp.mkdir(this.resolve(agentId, dirPath), { recursive: true });
+    await fsp.mkdir(await this.resolve(agentId, dirPath), { recursive: true });
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
     try {
-      await fsp.stat(this.resolve(agentId, filePath));
+      await fsp.stat(await this.resolve(agentId, filePath));
       return true;
     } catch (err) {
       // Mirror `fs.existsSync`: any path-shape error that means "no
@@ -238,8 +243,9 @@ export class FilesystemMemoryStore implements MemoryStore {
   // (search) ───────────────────────────────────────────────────────
   async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
-    const searchDir = this.resolve(agentId, dirPath || '.');
-    await this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
+    const searchDir = await this.resolve(agentId, dirPath || '.');
+    const agentRoot = await this.resolve(agentId, '.');
+    await this.searchRecursive(searchDir, agentRoot, pattern, results);
     return results;
   }
 
@@ -304,42 +310,59 @@ export class FilesystemMemoryStore implements MemoryStore {
 function withinBase(candidate: string, base: string): boolean {
   if (candidate === base) return true;
   const rel = path.relative(base, candidate);
-  // rel starting with `..` means the candidate is *above* or
-  // alongside base. rel being an absolute path means the inputs are
-  // on different roots (Windows drive letters). Either way it's not
-  // inside base.
   if (rel === '' || rel === '.') return true;
-  if (rel.startsWith('..')) return false;
+  // Match only real parent-segment references, not arbitrary names
+  // that happen to start with `..` (Codex #64 follow-up: `..cache` or
+  // `..notes` are valid child directories, and `rel.startsWith('..')`
+  // rejected them as traversal). A traversal `rel` is either exactly
+  // `..` or starts with `../` / `..\` — test for the separator.
+  if (rel === '..' || rel.startsWith('..' + path.sep)) return false;
+  // rel being an absolute path means the inputs are on different
+  // roots (Windows drive letters).
   return !path.isAbsolute(rel);
 }
 
 /**
- * `fs.realpathSync(path)` requires the path to exist. For a fresh
- * write, the leaf doesn't exist yet — realpath would throw. Walk up
- * to the deepest existing ancestor, canonicalise that, and re-append
- * the unresolved suffix so we still detect symlinks anywhere in the
+ * `fsp.realpath(path)` requires the path to exist. For a fresh write
+ * the leaf doesn't exist yet — realpath would throw. Walk up to the
+ * deepest existing ancestor, canonicalise that, and re-append the
+ * unresolved suffix so we still detect symlinks anywhere in the
  * existing portion of the path.
  *
- * Returns the input unchanged if the deepest ancestor doesn't exist
- * (e.g. baseDir itself is missing) — the caller's containment check
- * is still authoritative.
+ * Async (Codex #64 follow-up): the previous sync version used
+ * `existsSync` + `realpathSync` on every `resolve()` call, which is
+ * on the hot path for every tool invocation. Under concurrent agent
+ * load those sync calls block the event loop and reintroduce the
+ * blocking-I/O behaviour the store moved away from in #25. Using
+ * `fsp.realpath` directly (which throws ENOENT if the leaf is
+ * missing) and only walking up on ENOENT keeps the common "leaf
+ * exists" path to a single async call.
+ *
+ * Returns the input unchanged if no ancestor exists (e.g. baseDir
+ * itself is missing) — the caller's containment check is still
+ * authoritative.
  */
-function realpathSafe(p: string): string {
+async function realpathSafe(p: string): Promise<string> {
   let suffix = '';
   let current = p;
-  while (!fs.existsSync(current)) {
-    const parent = path.dirname(current);
-    if (parent === current) return p;
-    suffix = path.join(path.basename(current), suffix);
-    current = parent;
+  while (true) {
+    try {
+      const canonical = await fsp.realpath(current);
+      return suffix ? path.join(canonical, suffix) : canonical;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        // Unknown error — don't swallow it silently; return the input
+        // so the caller's containment check stays authoritative and
+        // the raw error surfaces on the next real I/O call.
+        return p;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return p; // hit root without resolving
+      suffix = path.join(path.basename(current), suffix);
+      current = parent;
+    }
   }
-  let canonical: string;
-  try {
-    canonical = fs.realpathSync(current);
-  } catch {
-    return p;
-  }
-  return suffix ? path.join(canonical, suffix) : canonical;
 }
 
 /**

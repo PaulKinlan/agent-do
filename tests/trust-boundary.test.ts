@@ -18,7 +18,7 @@ afterEach(() => {
 // ─── #20 H-01: path traversal in FilesystemMemoryStore.resolve() ──────────────
 
 describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () => {
-  it('rejects sibling directory whose name shares the base prefix', () => {
+  it('rejects sibling directory whose name shares the base prefix', async () => {
     // Regression for the specific bug PR #64 fixed: the old check was
     // `resolved.startsWith(baseDir)` without a separator. Given
     // baseDir `<tmp>/agent`, a `../agent-evil/secret` traversal
@@ -36,12 +36,12 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     const store = new FilesystemMemoryStore(baseDir);
     // Valid agentId, traversal-shaped filePath: the filePath path of
     // the check is what has to catch this.
-    expect(() =>
+    await expect(
       store['resolve']('agent-1', '../../agent-evil/secret'),
-    ).toThrow(/Path traversal/);
+    ).rejects.toThrow(/Path traversal/);
   });
 
-  it('rejects symlinks pointing outside the base directory', () => {
+  it('rejects symlinks pointing outside the base directory', async () => {
     const baseDir = path.join(tmpDir, 'sandbox');
     fs.mkdirSync(baseDir);
     const agentDir = path.join(baseDir, 'agent-1');
@@ -55,12 +55,12 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     fs.symlinkSync(outside, path.join(agentDir, 'escape'));
 
     const store = new FilesystemMemoryStore(baseDir);
-    expect(() => store['resolve']('agent-1', 'escape/leak.txt')).toThrow(
-      /symlink not allowed/,
-    );
+    await expect(
+      store['resolve']('agent-1', 'escape/leak.txt'),
+    ).rejects.toThrow(/symlink not allowed/);
   });
 
-  it('rejects symlinks even when planted at the agent root level', () => {
+  it('rejects symlinks even when planted at the agent root level', async () => {
     const baseDir = path.join(tmpDir, 'sandbox');
     fs.mkdirSync(baseDir);
     fs.symlinkSync(tmpDir, path.join(baseDir, 'agent-2'));
@@ -71,27 +71,41 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     // error is "Path traversal not allowed (agentId)" rather than
     // the symlink-specific message. Either outcome is correct —
     // both block the escape.
-    expect(() => store['resolve']('agent-2', 'leak.txt')).toThrow(
-      /Path traversal|symlink not allowed/,
-    );
+    await expect(
+      store['resolve']('agent-2', 'leak.txt'),
+    ).rejects.toThrow(/Path traversal|symlink not allowed/);
   });
 
-  it('still allows ordinary paths under the base', () => {
+  it('still allows ordinary paths under the base', async () => {
     const baseDir = path.join(tmpDir, 'sandbox');
     const store = new FilesystemMemoryStore(baseDir);
     // Should not throw; resolve() returns an absolute path inside baseDir.
-    // Use `realpathSafe` on baseDir (via fs.realpathSync when it exists)
-    // because macOS /var -> /private/var symlinks cause `path.resolve`
-    // to disagree with the resolve() output once we canonicalise
-    // everything (PR #64 fix). The relative-path check is robust to
+    // Use realpath on baseDir because macOS /var -> /private/var symlinks
+    // cause `path.resolve` to disagree with the resolve() output once
+    // we canonicalise everything. The relative-path check is robust to
     // the indirection.
-    const out = store['resolve']('agent-1', 'notes.md');
+    const out = await store['resolve']('agent-1', 'notes.md');
     const rel = path.relative(fs.realpathSync(baseDir), out);
     expect(rel).not.toMatch(/^\.\./);
     expect(path.isAbsolute(rel)).toBe(false);
   });
 
-  it('rejects cross-agent traversal (PR #64 Copilot)', () => {
+  it('allows child names that start with `..` (Codex #64 follow-up)', async () => {
+    // `..cache` and `..notes` are valid child dirs — the old
+    // `rel.startsWith('..')` check rejected them as traversal. The
+    // fixed check only matches `..` exactly or followed by a path
+    // separator.
+    const baseDir = path.join(tmpDir, 'sandbox');
+    const store = new FilesystemMemoryStore(baseDir);
+    await expect(
+      store['resolve']('agent-1', '..cache/file.txt'),
+    ).resolves.toMatch(/\.\.cache/);
+    await expect(
+      store['resolve']('agent-1', '..notes'),
+    ).resolves.toMatch(/\.\.notes/);
+  });
+
+  it('rejects cross-agent traversal (PR #64 Copilot)', async () => {
     // `filePath = "../a2/secret"` resolves to a path inside baseDir
     // but outside the requesting agent's own directory. The fixed
     // resolve() checks containment against agentDir, not baseDir.
@@ -102,12 +116,12 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     fs.writeFileSync(path.join(a2, 'secret'), 'tenant-2');
 
     const store = new FilesystemMemoryStore(baseDir);
-    expect(() =>
+    await expect(
       store['resolve']('a1', '../a2/secret'),
-    ).toThrow(/Path traversal/);
+    ).rejects.toThrow(/Path traversal/);
   });
 
-  it('handles a symlinked baseDir (Codex #64 P2)', () => {
+  it('handles a symlinked baseDir (Codex #64 P2)', async () => {
     // baseDir itself is a symlink. The earlier fix canonicalised the
     // target but not the base, so every in-base path failed `withinBase`
     // because the realpath landed on a different string than the raw
@@ -119,30 +133,32 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
 
     const store = new FilesystemMemoryStore(linkedBase);
     // Normal read/write through a linked base must not throw.
-    expect(() => store['resolve']('a1', 'notes.md')).not.toThrow();
+    await expect(
+      store['resolve']('a1', 'notes.md'),
+    ).resolves.toBeTypeOf('string');
   });
 
-  it('handles a filesystem-root baseDir (PR #64 Copilot)', () => {
+  it('handles a filesystem-root baseDir (PR #64 Copilot)', async () => {
     // When base is `/` (or a Windows drive root), `base + sep` becomes
     // `//` — the old naive startsWith would reject every legitimate
     // path. The `path.relative`-based `withinBase` handles this.
     // We can't actually test with `/` in a sandboxed test, but we can
-    // test the helper via a base that IS its own filesystem root
-    // segment: `tmpDir` already has a root ancestor, so use that.
-    // Easier: construct a store at tmpDir and just verify a resolve
-    // under it works — the root case is proven by withinBase's
-    // path.relative implementation (no startsWith(base + sep) anywhere).
+    // at least verify the helper works at tmpDir without issue.
     const store = new FilesystemMemoryStore(tmpDir);
-    expect(() => store['resolve']('a1', 'notes.md')).not.toThrow();
+    await expect(
+      store['resolve']('a1', 'notes.md'),
+    ).resolves.toBeTypeOf('string');
   });
 
-  it('canonicalises non-existent paths via deepest existing ancestor', () => {
+  it('canonicalises non-existent paths via deepest existing ancestor', async () => {
     // Fresh write: <base>/agent-1/never-existed/yet.txt. realpath would
     // throw on this path; the helper walks up to the existing ancestor
     // (baseDir, which exists), realpaths that, then re-appends the suffix.
     const baseDir = path.join(tmpDir, 'sandbox');
     const store = new FilesystemMemoryStore(baseDir);
-    expect(() => store['resolve']('agent-1', 'never-existed/yet.txt')).not.toThrow();
+    await expect(
+      store['resolve']('agent-1', 'never-existed/yet.txt'),
+    ).resolves.toBeTypeOf('string');
   });
 });
 
