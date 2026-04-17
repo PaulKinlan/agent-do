@@ -12,6 +12,7 @@
  */
 
 import type { MemoryStore, FileEntry } from '../stores.js';
+import { buildLineMatcher } from './search-matcher.js';
 
 interface FileNode {
   type: 'file' | 'directory';
@@ -130,11 +131,16 @@ export class InMemoryMemoryStore implements MemoryStore {
     const startNode = segments.length > 0 ? this.navigate(root, segments, false) : root;
     if (!startNode) return results;
 
-    // The in-memory store has historically used literal substring
-    // matching. Honour the new `regex: true` opt-in for parity with
-    // the filesystem store; defaults stay literal so existing callers
-    // see no behaviour change.
-    const matcher = buildInMemoryMatcher(pattern, options?.regex === true);
+    // Parity with the filesystem store: literal (case-insensitive)
+    // substring by default, regex mode via `options.regex = true`.
+    //
+    // NOTE: this changes the prior case-*sensitive* `line.includes(pattern)`
+    // behaviour to case-*insensitive* matching. The shift was introduced
+    // by the shared matcher (Copilot flagged the stale comment in #63);
+    // if any caller relied on case sensitivity they need to match
+    // case explicitly in the pattern or switch to regex mode with a
+    // case-sensitive flag wrapper.
+    const matcher = buildLineMatcher(pattern, { asRegex: options?.regex === true });
     const prefix = path ? path.replace(/\/$/, '') + '/' : '';
     this.searchNode(startNode, prefix, matcher, results);
     return results;
@@ -159,45 +165,3 @@ export class InMemoryMemoryStore implements MemoryStore {
   }
 }
 
-/**
- * Build a per-line matcher for the in-memory store. Mirrors the
- * filesystem store's defaults: literal substring (case-insensitive)
- * unless `regex: true` is opted into. Same nested-quantifier guard
- * and length cap apply.
- */
-const MAX_REGEX_PATTERN_LENGTH = 256;
-const NESTED_QUANTIFIER_RE = /\([^)]*[+*][^)]*\)[+*?]/;
-
-function buildInMemoryMatcher(
-  pattern: string,
-  asRegex: boolean,
-): (line: string) => boolean {
-  if (!asRegex) {
-    const needle = pattern.toLowerCase();
-    return (line) => line.toLowerCase().includes(needle);
-  }
-  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
-    throw new Error(
-      `Regex pattern too long (${pattern.length} > ${MAX_REGEX_PATTERN_LENGTH} chars).`,
-    );
-  }
-  if (NESTED_QUANTIFIER_RE.test(pattern)) {
-    throw new Error(
-      'Regex pattern rejected: contains a nested quantifier (e.g. "(a+)+") ' +
-      'that can cause catastrophic backtracking. Rewrite without nested ' +
-      'quantifiers, or use literal mode (omit `regex: true`).',
-    );
-  }
-  let re: RegExp;
-  try {
-    re = new RegExp(pattern, 'gi');
-  } catch (err) {
-    throw new Error(
-      `Invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  return (line) => {
-    re.lastIndex = 0;
-    return re.test(line);
-  };
-}

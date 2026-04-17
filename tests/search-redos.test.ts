@@ -42,14 +42,20 @@ describe('store.search literal mode (default)', () => {
       expect(r[0]!.line).toBe('a.b');
     });
 
-    it('handles a pathological regex pattern as literal text without hanging', async () => {
+    it('handles a pathological regex pattern as literal text without compiling it', async () => {
       await store.write('a', 'safe.txt', 'just some content');
-      // The classic catastrophic-backtracking pattern. In literal mode
-      // it's just a substring lookup — no backtracking, no hang.
-      const start = Date.now();
+      // Per Copilot's #63 review: a wall-clock timeout is flaky on busy
+      // CI. Assert the *intended* property instead — literal mode
+      // never builds a RegExp, so the pattern is a pure substring
+      // lookup and no backtracking can occur. We prove this by writing
+      // file content that contains the pattern verbatim: in literal
+      // mode it should match; if anyone accidentally switched the
+      // default back to regex, `(a+)+$` wouldn't match the literal
+      // string `(a+)+$` and this assertion would fail loudly.
+      await store.write('a', 'pattern.txt', '(a+)+$');
       const r = await store.search('a', '(a+)+$');
-      expect(Date.now() - start).toBeLessThan(100);
-      expect(r).toHaveLength(0);
+      expect(r).toHaveLength(1);
+      expect(r[0]!.line).toBe('(a+)+$');
     });
   });
 
@@ -94,16 +100,16 @@ describe('store.search regex mode (opt-in)', () => {
   });
 
   it('rejects nested-quantifier patterns before compiling them', async () => {
-    await store.write('a', 'note.txt', 'aaaaaaaaaaaaaaaaaaaaaaaaaa!');
-    // The canonical catastrophic pattern. Without the heuristic,
-    // executing this against the matching line would hang the loop.
-    const start = Date.now();
+    // CodeQL would flag `aaaa…!` + `(a+)+$` as a catastrophic-input
+    // test fixture. That's the whole point — we *want* to prove the
+    // guard rejects the pattern before the engine sees the input. The
+    // shorter content below is still pathologically shaped for any
+    // future regression where the guard is dropped, without being
+    // flagged as an accidental live ReDoS vector.
+    await store.write('a', 'note.txt', 'aaaaaaaaa!');
     await expect(
       store.search('a', '(a+)+$', undefined, { regex: true }),
     ).rejects.toThrow(/nested quantifier|catastrophic backtracking/i);
-    // The reject should be near-instant — the safety check fires
-    // before `new RegExp` is even called.
-    expect(Date.now() - start).toBeLessThan(100);
   });
 
   it('rejects more variations of nested quantifiers', async () => {
@@ -111,8 +117,31 @@ describe('store.search regex mode (opt-in)', () => {
     for (const pat of cases) {
       await expect(
         store.search('a', pat, undefined, { regex: true }),
-      ).rejects.toThrow(/nested quantifier/);
+      ).rejects.toThrow(/nested quantifier|catastrophic backtracking/i);
     }
+  });
+
+  it('rejects alternation-with-trailing-quantifier shapes (Codex #63 P1)', async () => {
+    // Codex review on PR #63: `(a|a?)+` and similar alternation-overlap
+    // patterns bypassed the original nested-quantifier-only check and
+    // could still hang the loop on inputs like `aaaa…!`. The expanded
+    // heuristic in src/stores/search-matcher.ts catches both shapes.
+    const cases = ['(a|a?)+', '(a|aa)*', '(ab|a)+', '(x|x+)+'];
+    for (const pat of cases) {
+      await expect(
+        store.search('a', pat, undefined, { regex: true }),
+      ).rejects.toThrow(/catastrophic backtracking/i);
+    }
+  });
+
+  it('accepts long literal patterns (no 256-char cap in literal mode)', async () => {
+    // Codex + Copilot review on PR #63: the schema cap + store cap
+    // were both regex-only, so a safe literal search of >256 chars
+    // (pasted error signature etc.) should still work.
+    const needle = 'q'.repeat(400);
+    await store.write('a', 'note.txt', `prefix ${needle} suffix`);
+    const r = await store.search('a', needle);
+    expect(r).toHaveLength(1);
   });
 
   it('returns a clean error for invalid regex syntax (does not throw uncaught)', async () => {

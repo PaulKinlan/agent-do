@@ -287,8 +287,14 @@ export function createFileTools(
         'use a regular expression — patterns are checked for catastrophic backtracking ' +
         'before compiling and rejected if too long or shaped like (a+)+.',
       inputSchema: s(
+        // The 256-char cap is a regex-mode guard (ReDoS surface scales
+        // with pattern length); literal substring searches safely
+        // accept longer strings (e.g. a pasted error signature). The
+        // store-level `buildLineMatcher` applies the cap only in regex
+        // mode, so lifting it here keeps the tool schema aligned with
+        // the underlying policy. See PR #63 review.
         z.object({
-          pattern: z.string().max(256).describe('The text pattern to search for. Literal substring by default.'),
+          pattern: z.string().describe('The text pattern to search for. Literal substring by default.'),
           path: z.string().optional().describe('Directory to search within (defaults to root)'),
           regex: z.boolean().optional().describe('Treat pattern as a regex (opt-in; safety-checked)'),
         }),
