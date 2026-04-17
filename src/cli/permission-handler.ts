@@ -84,9 +84,15 @@ export function buildCliPermissions(
     if (READ_ONLY_TOOLS.has(req.toolName)) return true;
     if (sessionApproved.has(req.toolName)) return true;
 
-    if (!stdin.isTTY) {
+    // Both sides must be a TTY. Codex #68 P2: if only stdin is a TTY
+    // but stderr is redirected (e.g. `2>agent.log`), the prompt text
+    // goes to the log file — the operator sees the agent "hang" at
+    // the question and has no idea what to do. Fail closed in that
+    // case and tell them to use `--accept-all` / `--allow`.
+    if (!stdin.isTTY || !stderr.isTTY) {
       stderr.write(
-        `\n[agent-do] Denying destructive call ${req.toolName} — non-interactive session. ` +
+        `\n[agent-do] Denying destructive call ${req.toolName} — non-interactive session ` +
+        `(stdin ${stdin.isTTY ? 'OK' : 'not a TTY'}, stderr ${stderr.isTTY ? 'OK' : 'not a TTY'}). ` +
         `Pass --accept-all or --allow ${req.toolName} to auto-approve.\n`,
       );
       return false;
@@ -120,20 +126,37 @@ export function buildCliPermissions(
   };
 }
 
+/** Maximum length of any single string value inside the args preview. */
+const PREVIEW_VALUE_MAX = 80;
+/** Overall cap on the rendered preview string. */
+const PREVIEW_MAX = 120;
+
 /**
- * One-line preview of the tool args for the prompt. Truncates long
- * values so a prompt-injected agent can't flood the operator's terminal
- * with thousands of lines before showing the question.
+ * One-line preview of the tool args for the prompt. Per Copilot #68:
+ * the earlier implementation called `JSON.stringify(args)` on the full
+ * payload and only truncated afterwards, which for a `write_file`
+ * content argument near the 1 MB cap meant allocating ~1 MB of JSON
+ * just to slice off 117 bytes of it.
+ *
+ * The new approach pre-truncates each string leaf to `PREVIEW_VALUE_MAX`
+ * before serialising, and caps the final string at `PREVIEW_MAX`. Work
+ * is bounded by the number of keys in the args object, not by the size
+ * of any single value.
  */
 function previewArgs(args: unknown): string {
   if (args === undefined || args === null) return '';
   let text: string;
   try {
-    text = JSON.stringify(args);
+    text = JSON.stringify(args, (_key, value) => {
+      if (typeof value === 'string' && value.length > PREVIEW_VALUE_MAX) {
+        return value.slice(0, PREVIEW_VALUE_MAX - 3) + '...';
+      }
+      return value;
+    });
   } catch {
     text = String(args);
   }
-  if (text.length > 120) text = text.slice(0, 117) + '...';
+  if (text.length > PREVIEW_MAX) text = text.slice(0, PREVIEW_MAX - 3) + '...';
   return text;
 }
 

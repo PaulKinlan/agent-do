@@ -47,7 +47,9 @@ describe('buildCliPermissions', () => {
     return r as unknown as NodeJS.ReadStream;
   }
 
-  function mockStderr(): { stream: NodeJS.WriteStream; written: string[] } {
+  function mockStderr(
+    isTTY = true,
+  ): { stream: NodeJS.WriteStream; written: string[] } {
     const written: string[] = [];
     const w = new Writable({
       write(chunk: Buffer | string, _enc, cb) {
@@ -55,6 +57,7 @@ describe('buildCliPermissions', () => {
         cb();
       },
     });
+    (w as unknown as { isTTY: boolean }).isTTY = isTTY;
     return { stream: w as unknown as NodeJS.WriteStream, written };
   }
 
@@ -100,6 +103,25 @@ describe('buildCliPermissions', () => {
       acceptAll: false,
       allow: [],
       stdin: mockStdin(false),
+      stderr,
+    });
+    const ok = await cfg.onPermissionRequest!({
+      toolName: 'write_file',
+      args: { path: 'a.txt' },
+    });
+    expect(ok).toBe(false);
+    expect(written.join('')).toMatch(/non-interactive/);
+  });
+
+  it('denies when stderr is redirected even if stdin is a TTY (Codex #68 P2)', async () => {
+    // If only stdin is a TTY but stderr is piped to a file (common:
+    // `agent-do ... 2>log`), the prompt goes to the log and the
+    // operator appears to see the agent hang. Fail closed.
+    const { stream: stderr, written } = mockStderr(false);
+    const cfg = buildCliPermissions({
+      acceptAll: false,
+      allow: [],
+      stdin: mockStdin(true, ['y']), // would answer yes if we prompted
       stderr,
     });
     const ok = await cfg.onPermissionRequest!({
@@ -188,6 +210,32 @@ describe('buildCliPermissions', () => {
     expect(promptText).toMatch(/\.\.\./);
     expect(promptText.length).toBeLessThan(huge.length + 500);
   });
+
+  it('truncates per-value, not just the final string (Copilot #68)', async () => {
+    // A write_file with a 1 MB `content` argument used to be fully
+    // stringified before truncation — allocating ~1 MB just to slice
+    // it. The new implementation caps each string leaf at 80 chars
+    // via a JSON.stringify replacer so large payloads never enter
+    // the final buffer.
+    const { stream: stderr, written } = mockStderr();
+    const stdin = mockStdin(true, ['n']);
+    const cfg = buildCliPermissions({
+      acceptAll: false,
+      allow: [],
+      stdin,
+      stderr,
+    });
+    const megabyte = 'x'.repeat(1024 * 1024);
+    await cfg.onPermissionRequest!({
+      toolName: 'write_file',
+      args: { path: 'a.txt', content: megabyte },
+    });
+    const promptText = written.join('');
+    // The prompt must stay bounded even though the value was 1 MB.
+    expect(promptText.length).toBeLessThan(500);
+    // The path must still be visible (not truncated to an ellipsis).
+    expect(promptText).toContain('a.txt');
+  });
 });
 
 // ─── #17 C-01: evaluatePermission end-to-end ────────────────────────────
@@ -210,8 +258,3 @@ describe('buildCliPermissions + evaluatePermission integration', () => {
     expect(await evaluatePermission('delete_file', {}, cfg)).toBe(true);
   });
 });
-
-// Coverage note: the end-to-end "stdin-pipe non-TTY refuses write" test
-// lives in the unit-level test above; writing it through evaluatePermission
-// would re-test the evaluatePermission branching rather than the handler.
-it.skip('placeholder for future end-to-end pipe test via runAgentLoop', () => {});
