@@ -48,6 +48,43 @@ Content here.`;
     expect(skill.id).toBe('my-cool-skill');
     expect(skill.name).toBe('My Cool Skill');
   });
+
+  it('preserves quoted values that contain colons', () => {
+    const content = `---
+name: "Helpful: gets things done"
+description: "Role: assistant; style: terse"
+---
+
+body`;
+    const skill = parseSkillMd(content, 'helpful');
+    expect(skill.name).toBe('Helpful: gets things done');
+    expect(skill.description).toBe('Role: assistant; style: terse');
+  });
+
+  it('preserves multiline description via YAML folded/literal blocks', () => {
+    const content = `---
+name: Multi
+description: |
+  line one
+  line two
+---
+
+body`;
+    const skill = parseSkillMd(content, 'multi');
+    expect(skill.description).toContain('line one');
+    expect(skill.description).toContain('line two');
+  });
+
+  it('falls back to empty meta on malformed YAML without dropping the body', () => {
+    const content = `---
+name: "unterminated
+---
+
+body goes here`;
+    const skill = parseSkillMd(content, 'broken');
+    expect(skill.id).toBe('broken');
+    expect(skill.content).toBe('body goes here');
+  });
 });
 
 describe('buildSkillsPrompt', () => {

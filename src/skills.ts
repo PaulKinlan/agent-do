@@ -1,7 +1,23 @@
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
+import YAML from 'yaml';
 import type { Skill, SkillStore } from './types.js';
+
+/**
+ * Schema for the frontmatter block of a SKILL.md file.
+ *
+ * Unknown keys are allowed (forward-compatible with community skills), but
+ * required fields are typed and length-limited. See issue #37 for the
+ * rationale — the previous hand-rolled parser silently truncated values at
+ * colons and dropped multiline fields.
+ */
+const SkillFrontmatterSchema = z.object({
+  name: z.string().max(128).optional(),
+  description: z.string().max(512).optional(),
+  author: z.string().max(128).optional(),
+  version: z.string().max(32).optional(),
+}).passthrough();
 
 /**
  * Build a system prompt section from a list of skills.
@@ -55,14 +71,17 @@ export function parseSkillMd(content: string, id?: string): Skill {
   const frontmatter = match[1];
   const body = match[2];
 
-  const meta: Record<string, string> = {};
-  for (const line of frontmatter.split('\n')) {
-    const kv = line.match(/^(\w[\w-]*):\s*(.+)$/);
-    if (!kv) continue;
-    const key = kv[1].toLowerCase();
-    const value = kv[2].replace(/^["']|["']$/g, '').trim();
-    meta[key] = value;
+  // Proper YAML parsing. On parse error (malformed frontmatter) or schema
+  // failure, fall back to an empty metadata object so the body is still
+  // returned rather than the whole skill being dropped.
+  let rawMeta: unknown = {};
+  try {
+    rawMeta = YAML.parse(frontmatter) ?? {};
+  } catch {
+    rawMeta = {};
   }
+  const parsed = SkillFrontmatterSchema.safeParse(rawMeta);
+  const meta = parsed.success ? parsed.data : {};
 
   const skillId =
     id ||
