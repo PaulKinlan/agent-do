@@ -18,10 +18,28 @@ import type {
 
 // ── Cache Control ──
 
-function isAnthropicModel(model: LanguageModel): boolean {
-  if (typeof model === 'string') return model.includes('anthropic') || model.includes('claude');
-  return model.provider === 'anthropic' || model.provider?.includes('anthropic') ||
-    model.modelId?.includes('anthropic') || model.modelId?.includes('claude');
+export function isAnthropicModel(model: LanguageModel): boolean {
+  if (typeof model === 'string') {
+    // Anthropic-minted IDs start with `claude-`; OpenRouter-style IDs start with `anthropic/`.
+    // The old substring check flagged ids where "claude" appeared mid-string (e.g.
+    // `x-claude-parody` from another vendor); prefix matching avoids that.
+    return isAnthropicIdString(model);
+  }
+  // Vercel AI SDK providers expose a structured string like "anthropic.chat" or "openai.responses".
+  // When provider is populated it is authoritative — trust it and ignore modelId even if the
+  // modelId contains "claude" (e.g. a non-Anthropic vendor finetune). Only fall back to modelId
+  // when the provider field is missing entirely.
+  const provider = typeof model.provider === 'string' ? model.provider : undefined;
+  if (provider !== undefined) return provider.startsWith('anthropic');
+  const modelId = typeof model.modelId === 'string' ? model.modelId : undefined;
+  // Share the string-branch rules so OpenRouter-style ids like `anthropic/claude-sonnet-4-6`
+  // still match when an object model exposes them via `modelId` without a provider. Dropping
+  // this would silently skip cache headers for valid Anthropic models.
+  return modelId !== undefined && isAnthropicIdString(modelId);
+}
+
+function isAnthropicIdString(id: string): boolean {
+  return id === 'anthropic' || id.startsWith('anthropic/') || id.startsWith('claude-');
 }
 
 /**
