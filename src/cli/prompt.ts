@@ -13,14 +13,27 @@ import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { renderEvent, renderOptionsFromArgs } from './render.js';
+import { emitSandboxWarning } from './warnings.js';
 import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
+import { buildCliPermissions } from './permission-handler.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 
 export async function runPromptMode(args: ParsedArgs): Promise<void> {
+  // Emit the sandbox warning first — before model init or stdin reads —
+  // so the user sees it the moment they invoke the command, not after a
+  // long piped read blocks on EOF. In prompt mode the args directly
+  // determine whether tools are enabled, so it's safe to derive from
+  // them (unlike script mode — see runSavedAgent below).
+  emitSandboxWarning({
+    toolsEnabled: !args.noTools,
+    readOnly: args.readOnly,
+    json: args.json,
+  });
+
   const model = await resolveModel(args.provider, args.model);
 
   // Workspace tools see the working directory (cwd by default).
@@ -48,7 +61,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     systemPrompt: args.systemPrompt,
     tools,
     maxIterations: args.maxIterations,
-    permissions: { mode: 'accept-all' },
+    permissions: buildCliPermissions({
+      acceptAll: args.acceptAll,
+      allow: args.allow,
+    }),
     usage: { enabled: true },
     // Only materialise the full ToolResult on `tool-result` events when
     // the user explicitly asked for it (`--show-content`). Defaults to

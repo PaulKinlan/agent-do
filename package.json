@@ -1,6 +1,6 @@
 {
   "name": "agent-do",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
@@ -44,10 +44,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/google": "^3.0.0",
-    "@ai-sdk/openai": "^3.0.0",
-    "ai": "^6.0.0",
+    "@ai-sdk/anthropic": "3.0.71",
+    "@ai-sdk/google": "3.0.64",
+    "@ai-sdk/openai": "3.0.53",
+    "ai": "^6.0.168",
     "ignore": "^7.0.5",
     "yaml": "^2.8.3",
     "zod": "^3.23.0"
@@ -72,7 +72,7 @@
     "@types/node": "^25.6.0",
     "typedoc": "^0.28.0",
     "typedoc-plugin-markdown": "^4.4.0",
-    "typescript": "^5.5.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.4"
   }
 }

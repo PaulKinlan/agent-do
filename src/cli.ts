@@ -62,6 +62,10 @@ function printHelp(): void {
   console.log(`
 agent-do — run AI agents from the command line
 
+⚠️  WARNING: agent-do is NOT sandboxed. The agent can read, write, edit, and
+    delete files in your working directory. Use --read-only to block writes
+    or --no-tools to disable all file access. Proceed with caution.
+
 Usage:
   npx agent-do [options] [prompt]          One-shot task or interactive chat
   npx agent-do create <name> [options]     Create a reusable agent config

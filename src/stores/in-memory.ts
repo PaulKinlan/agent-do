@@ -12,6 +12,7 @@
  */
 
 import type { MemoryStore, FileEntry } from '../stores.js';
+import { buildLineMatcher } from './search-matcher.js';
 
 interface FileNode {
   type: 'file' | 'directory';
@@ -118,33 +119,49 @@ export class InMemoryMemoryStore implements MemoryStore {
     return this.navigate(root, segments, false) !== undefined;
   }
 
-  async search(agentId: string, pattern: string, path?: string): Promise<Array<{ path: string; line: string }>> {
+  async search(
+    agentId: string,
+    pattern: string,
+    path?: string,
+    options?: import('../stores.js').SearchOptions,
+  ): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
     const root = this.getRoot(agentId);
     const segments = path ? this.parsePath(path) : [];
     const startNode = segments.length > 0 ? this.navigate(root, segments, false) : root;
     if (!startNode) return results;
 
+    // Parity with the filesystem store: literal (case-insensitive)
+    // substring by default, regex mode via `options.regex = true`.
+    //
+    // NOTE: this changes the prior case-*sensitive* `line.includes(pattern)`
+    // behaviour to case-*insensitive* matching. The shift was introduced
+    // by the shared matcher (Copilot flagged the stale comment in #63);
+    // if any caller relied on case sensitivity they need to match
+    // case explicitly in the pattern or switch to regex mode with a
+    // case-sensitive flag wrapper.
+    const matcher = buildLineMatcher(pattern, { asRegex: options?.regex === true });
     const prefix = path ? path.replace(/\/$/, '') + '/' : '';
-    this.searchNode(startNode, prefix, pattern, results);
+    this.searchNode(startNode, prefix, matcher, results);
     return results;
   }
 
   private searchNode(
-    node: FileNode, currentPath: string, pattern: string,
+    node: FileNode, currentPath: string, matcher: (line: string) => boolean,
     results: Array<{ path: string; line: string }>,
   ): void {
     if (node.type === 'file' && node.content) {
       for (const line of node.content.split('\n')) {
-        if (line.includes(pattern)) {
+        if (matcher(line)) {
           results.push({ path: currentPath.replace(/\/$/, ''), line });
         }
       }
     }
     if (node.children) {
       for (const [name, child] of node.children) {
-        this.searchNode(child, currentPath + name + (child.type === 'directory' ? '/' : ''), pattern, results);
+        this.searchNode(child, currentPath + name + (child.type === 'directory' ? '/' : ''), matcher, results);
       }
     }
   }
 }
+

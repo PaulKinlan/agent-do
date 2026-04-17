@@ -2,6 +2,43 @@
 
 Provider-agnostic autonomous agent loop for JavaScript. Built on the [Vercel AI SDK](https://sdk.vercel.ai/), it drives any `LanguageModel` through a tool-use loop until the task is complete.
 
+## ⚠️ No sandbox
+
+**agent-do is not sandboxed within its working directory: when file
+tools are enabled, the agent can read, write, edit, and delete files
+under that directory.**
+
+By default, file tools operate on files reachable from the working
+directory (`--cwd`, defaulting to the current directory). Path-traversal
+guards prevent the agent from escaping that root, but within that scope
+a misbehaving prompt or unintended tool call can cause permanent data
+loss.
+
+`--read-only` blocks writes, deletes, and edits — but the agent can
+still **read, list, and grep** every file in the working directory and
+send its contents to the model provider. If a directory contains
+secrets you don't want exposed, use `--no-tools` instead.
+
+The CLI prints a one-line warning to stderr on every run that has
+file tools enabled, so the blast radius is visible up front. The
+warning text adapts to the resolved configuration (read-only vs full
+read/write), and a saved agent's `noTools` / `readOnly` settings win
+over CLI flags so you don't get a misleading "no tools" warning when a
+saved config silently re-enables them.
+
+**Before using agent-do, especially the CLI:**
+- Understand what the agent will do before it runs — review the task
+  and system prompt carefully.
+- Run with `--read-only` to prevent writes, deletes, and edits while
+  still letting the agent reason about files.
+- Run with `--no-tools` to disable all file access entirely (including
+  reads).
+- Always work in a directory you are comfortable giving the agent
+  full access to.
+- Keep important files backed up or under version control.
+
+There is no undo. Proceed with caution.
+
 ## Features
 
 - **Provider-agnostic** -- works with any Vercel AI SDK `LanguageModel` (OpenAI, Anthropic, Google, Mistral, Ollama, etc.)
@@ -80,8 +117,10 @@ npx agent-do run code-reviewer "Review this function"
 # List saved agents
 npx agent-do list
 
-# Run a custom agent script (.js files, or .ts with tsx loader)
-npx agent-do run my-agent.js "Do something"
+# Run a custom agent script (.js/.mjs/.cjs/.ts files).
+# --script is required to import local JavaScript/TypeScript; see
+# "Script mode" below for the security reasoning.
+npx agent-do run ./my-agent.ts --script "Do something"
 
 # Run eval cases
 npx agent-do eval evals/basic.ts
@@ -94,7 +133,7 @@ npx agent-do eval evals/ --compare anthropic,google,openai --output json
 
 ```
 npx agent-do [options] [prompt]          One-shot or interactive
-npx agent-do run <file> [task]           Run agent script
+npx agent-do run <name|file> [task]      Run a saved agent OR a script file
 npx agent-do eval <file|dir> [options]   Run evals
 
 Options:
@@ -111,11 +150,44 @@ Options:
   --no-tools             Disable all file tools
   --verbose              Show per-step thinking + tool summaries (stderr)
   --show-content         With --verbose: also include each tool's full result
+  --script               Required for `run <path>` to import local JS/TS files
+  -y, --yes              Skip the interactive confirmation for --script
   --json                 JSON output
   --output <fmt>         console | json | csv (eval only)
   --compare <providers>  Compare providers (eval only, comma-separated)
   --concurrency <n>      Parallel eval cases (default: 1)
 ```
+
+### Script mode: `run <path> --script`
+
+`agent-do run <arg>` resolves saved-agent names by default. To run a
+local JavaScript or TypeScript file as an agent, pass `--script`
+explicitly:
+
+```bash
+npx agent-do run ./my-agent.ts --script "Do something"
+```
+
+Importing an arbitrary JS/TS file runs its top-level code with your
+user privileges — the same trust model as running any local script.
+The `--script` flag is a deliberate speed bump so that:
+
+- A missed saved-agent lookup (typo, stale name) fails with a clear
+  error instead of silently `import()`-ing a stray file that happens
+  to match the name.
+- Social-engineering vectors like "download this helper script, then
+  run `agent-do run helper.js`" require an explicit opt-in.
+
+When `--script` is passed:
+
+- The path must point inside `--cwd` (symlinks and `..` escapes are
+  rejected after canonicalisation).
+- Only `.js`/`.mjs`/`.cjs`/`.ts`/`.mts`/`.cts` extensions are allowed.
+- The file must be a regular file (no directories, no special files).
+- A banner prints the path, size, and SHA-256 prefix, then asks
+  `Continue? [y/N]`. Pass `-y`/`--yes` to skip the prompt (required
+  in non-TTY contexts — CI, piped input — since there's nowhere to
+  type the answer).
 
 ### Tools: workspace vs memory
 
@@ -378,6 +450,20 @@ const result = await agent.run('What is 2 + 3?');
 
 The agent loops automatically: it calls tools, feeds results back to the model, and continues until the model responds with text only (no tool calls) or hits `maxIterations` (default: 20).
 
+### History hygiene
+
+Between iterations, the loop replaces older `<tool_output>...</tool_output>`
+blocks in the conversation history with self-closing `redacted="stale"`
+markers. This keeps the model's view of what happened (which tool ran,
+on what path) but drops the body, so injected content from a poisoned
+file can't keep influencing the model on every subsequent step. It also
+keeps token spend bounded as iterations accumulate.
+
+Tune the window with `AgentConfig.historyKeepWindow` (default `1` —
+only the most recent iteration's tool outputs flow in full to the next
+call). Set to `Infinity` to restore the historical
+"everything-stays-in-context" behaviour.
+
 ## File Tools
 
 `createFileTools()` generates a set of file-manipulation tools backed by any `MemoryStore`:
@@ -545,8 +631,39 @@ const agent = createAgent({
 ```
 
 When a `SkillStore` is provided, the agent gets:
-- Installed skill content injected into the system prompt
-- Auto-generated tools: `search_skills`, `install_skill`, `list_skills`, `remove_skill`
+- Installed skill content injected into the system prompt, wrapped in
+  `<skill>…</skill>` markers with a preamble instructing the model to
+  treat the body as reference data rather than overriding
+  instructions.
+- Auto-generated tools: `search_skills`, `list_skills`, `remove_skill`.
+  The `install_skill` tool is **not** exposed by default — see below.
+
+### `allowSkillInstall` (privileged)
+
+The LLM-facing `install_skill` tool lets the model write skills into
+the backing `SkillStore`. Because installed skills get injected into
+every subsequent run's system prompt, a prompt-injected agent with
+install access could plant a persistent jailbreak across sessions.
+
+Set `allowSkillInstall: true` on the agent config to expose
+`install_skill` to the model. Default is `false` — library callers
+install skills themselves (via `skills.install(...)`) and the agent
+only searches / lists / removes them.
+
+```ts
+const agent = createAgent({
+  // ...
+  skills,
+  allowSkillInstall: true, // opt-in: model can persist new skills
+});
+```
+
+Inputs to `install_skill` are validated by a strict schema (id matches
+`/^[a-zA-Z0-9_-]+$/`, content ≤ 8 KB, name ≤ 64 chars, description ≤
+256 chars) regardless of who calls the tool, and any `<skill>` or
+`</skill>` sequences inside the skill body are neutralised before the
+prompt is rendered so the structural isolation can't be broken from
+inside.
 
 ### Parsing SKILL.md files
 
@@ -577,9 +694,16 @@ interface SkillStore {
   get(skillId: string): Promise<Skill | undefined>;
   install(skill: Skill): Promise<void>;
   remove(skillId: string): Promise<void>;
-  search(query: string): Promise<Array<{ id: string; name: string; description: string; url?: string }>>;
+  search(query: string): Promise<Array<{ id: string; name: string; description: string }>>;
 }
 ```
+
+`SkillSearchResult` deliberately has no `url` field — an external
+registry returning a URL would turn skill search into an SSRF / auto-
+fetch footgun (see issue #34). If you wire up a network-backed store,
+host allowlisting and explicit installation must happen outside
+`search()`; `install()` should only receive content the caller has
+already verified.
 
 ## Lifecycle Hooks
 

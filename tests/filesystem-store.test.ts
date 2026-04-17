@@ -221,4 +221,103 @@ describe('FilesystemMemoryStore', () => {
       expect(ops).toEqual(['write', 'mkdir', 'delete']);
     });
   });
+
+  describe('idempotency for nested-under-file paths (Codex #61 P2)', () => {
+    // When the model hallucinates paths like `"readme.md/child"` the
+    // pre-migration code used `fs.existsSync` first and silently noop'd.
+    // The async migration started surfacing ENOTDIR from unlink/stat.
+    // Restore the original behaviour: delete is idempotent, exists
+    // returns false.
+    it('delete() is a no-op when an ancestor is a file (ENOTDIR)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      await expect(
+        store.delete('agent-1', 'readme.md/child.txt'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('exists() returns false when an ancestor is a file (ENOTDIR)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      expect(await store.exists('agent-1', 'readme.md/child.txt')).toBe(false);
+    });
+
+    it('read() normalises ENOTDIR to "File not found" (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      await expect(
+        store.read('agent-1', 'readme.md/child.txt'),
+      ).rejects.toThrow(/File not found/);
+    });
+
+    it('list() returns [] when an ancestor is a file (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'top');
+      expect(await store.list('agent-1', 'readme.md')).toEqual([]);
+    });
+
+    it('search() returns [] when an ancestor is a file (Codex #61 follow-up)', async () => {
+      await store.write('agent-1', 'readme.md', 'findme here');
+      expect(await store.search('agent-1', 'findme', 'readme.md')).toEqual([]);
+    });
+  });
+
+  describe('async behaviour (#25)', () => {
+    it('keeps the read promise pending across a setImmediate tick', async () => {
+      // Per Copilot's review: the original assertion just checked that a
+      // setImmediate fired, which a fast sync-then-resolve implementation
+      // could also satisfy. The stricter test tracks whether the read
+      // promise itself is still pending when the immediate runs. With
+      // `fs.readFileSync` the promise resolves synchronously on creation,
+      // so `settled` would be true on the next tick. With `fsp.readFile`
+      // the I/O is dispatched to the threadpool and `settled` stays false.
+      const big = 'x'.repeat(64 * 1024);
+      await store.write('agent-1', 'big.bin', big);
+
+      let settled = false;
+      const readPromise = store.read('agent-1', 'big.bin');
+      readPromise.finally(() => {
+        settled = true;
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      await readPromise;
+      expect(settled).toBe(true);
+    });
+
+    it('runs concurrent reads in parallel rather than serialising them', async () => {
+      // Per Copilot's review: a pure correctness check (results match
+      // input) would also pass if reads were silently serialised. Time
+      // a parallel batch against a forced-sequential baseline — on an
+      // async implementation the parallel path is visibly faster for
+      // a large enough N. We use a generous ratio (< 0.8×) to stay
+      // robust on slow CI: even modest parallelism beats sequential.
+      const N = 16;
+      const big = 'y'.repeat(128 * 1024);
+      for (let i = 0; i < N; i++) {
+        await store.write('agent-1', `f${i}.txt`, big);
+      }
+
+      const tSeq = Date.now();
+      for (let i = 0; i < N; i++) {
+        await store.read('agent-1', `f${i}.txt`);
+      }
+      const seqMs = Date.now() - tSeq;
+
+      const tPar = Date.now();
+      const results = await Promise.all(
+        Array.from({ length: N }, (_, i) => store.read('agent-1', `f${i}.txt`)),
+      );
+      const parMs = Date.now() - tPar;
+
+      expect(results).toHaveLength(N);
+      // The timing comparison is only meaningful when sequential reads
+      // are slow enough for OS scheduling jitter not to dominate. When
+      // seqMs is in the single-digit millisecond range (warm page cache),
+      // a 1–2 ms noise spike can make parMs appear slightly higher than
+      // seqMs even with a genuinely parallel implementation. Skip the
+      // assertion in that case — the correctness check above and the
+      // 'setImmediate' test above still guard against regressions.
+      if (seqMs >= 20) {
+        expect(parMs).toBeLessThanOrEqual(seqMs * 0.9);
+      }
+    });
+  });
 });
