@@ -1,0 +1,200 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { parseArgs } from '../src/cli/args.js';
+import { runScriptMode, importScriptFile } from '../src/cli/script.js';
+import type { ParsedArgs } from '../src/cli/args.js';
+
+// ─── #19 C-03: CLI flag surface ──────────────────────────────────────────
+
+describe('parseArgs: --script and --yes', () => {
+  it('defaults both to false', () => {
+    const args = parseArgs([]);
+    expect(args.script).toBe(false);
+    expect(args.yes).toBe(false);
+  });
+
+  it('parses --script', () => {
+    const args = parseArgs(['run', './a.ts', '--script']);
+    expect(args.script).toBe(true);
+  });
+
+  it('parses --yes and -y', () => {
+    expect(parseArgs(['run', './a.ts', '--yes']).yes).toBe(true);
+    expect(parseArgs(['run', './a.ts', '-y']).yes).toBe(true);
+  });
+});
+
+// ─── #19 C-03: path-vs-name disambiguation ──────────────────────────────
+
+function baseArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
+  return {
+    command: 'run',
+    provider: 'anthropic',
+    systemPrompt: '',
+    workingDir: process.cwd(),
+    memoryDir: '.agent-do',
+    withMemory: false,
+    readOnly: false,
+    maxIterations: 20,
+    noTools: true, // keep the sandbox tight in tests
+    verbose: false,
+    showContent: false,
+    json: false,
+    help: false,
+    exclude: [],
+    includeSensitive: false,
+    output: 'console',
+    concurrency: 1,
+    script: false,
+    yes: false,
+    ...overrides,
+  };
+}
+
+describe('runScriptMode dispatcher', () => {
+  let tmpDir: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-do-script-'));
+    process.chdir(tmpDir);
+  });
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('treats saved-agent-shaped names as saved agents, not scripts', async () => {
+    // No saved agent exists and no file either — must fail with the
+    // saved-agent error, *not* fall through to an import attempt.
+    await expect(
+      runScriptMode(baseArgs({ file: 'nonexistent-agent' })),
+    ).rejects.toThrow(/No saved agent "nonexistent-agent"/);
+  });
+
+  it('refuses to import a script path without --script', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'evil.js'),
+      "throw new Error('should never import');",
+    );
+    await expect(
+      runScriptMode(baseArgs({ file: './evil.js' })),
+    ).rejects.toThrow(/requires --script/);
+  });
+
+  it('refuses a script outside cwd even with --script', async () => {
+    // Relative path that escapes cwd.
+    await expect(
+      runScriptMode(
+        baseArgs({ file: '../escape.js', script: true, yes: true }),
+      ),
+    ).rejects.toThrow(/outside the working directory/);
+  });
+
+  it('refuses an extension that isn\'t in the allowlist', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'evil.sh'), 'echo pwn');
+    // `.sh` is not a script extension — the dispatcher falls through to
+    // the saved-agent branch because it doesn't look like a path *nor*
+    // a script extension... except it *does* start with `./`. Which
+    // means it hits the --script gate first.
+    await expect(
+      runScriptMode(
+        baseArgs({ file: './evil.sh', script: true, yes: true }),
+      ),
+    ).rejects.toThrow(/only .* files are allowed/);
+  });
+
+  it('does not attempt to import when saved-agent lookup fails (no silent fallback)', async () => {
+    // Plant a file named `security-reviewer.js` in cwd — the old code
+    // path would import it after the saved-agent lookup missed. The
+    // fix leaves the saved-agent branch alone because `security-reviewer`
+    // doesn't look like a path.
+    const planted = path.join(tmpDir, 'security-reviewer.js');
+    fs.writeFileSync(
+      planted,
+      "throw new Error('silent fallback import happened!');",
+    );
+    await expect(
+      runScriptMode(baseArgs({ file: 'security-reviewer' })),
+    ).rejects.toThrow(/No saved agent/);
+  });
+});
+
+// ─── #19 C-03: importScriptFile unit coverage ───────────────────────────
+
+describe('importScriptFile', () => {
+  let tmpDir: string;
+  let originalCwd: string;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-do-import-'));
+    process.chdir(tmpDir);
+  });
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('rejects a path escaping cwd via ../', async () => {
+    await expect(
+      importScriptFile('../outside.js', { yes: true }),
+    ).rejects.toThrow(/outside the working directory/);
+  });
+
+  it('rejects a non-existent file', async () => {
+    await expect(
+      importScriptFile('./missing.js', { yes: true }),
+    ).rejects.toThrow(/not found or unreadable/);
+  });
+
+  it('rejects a disallowed extension', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'nope.txt'), 'data');
+    await expect(
+      importScriptFile('./nope.txt', { yes: true }),
+    ).rejects.toThrow(/only .* files are allowed/);
+  });
+
+  it('imports a valid .mjs file with --yes', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'good.mjs'),
+      'export default { name: "from-script", ok: true };\n',
+    );
+    const mod = await importScriptFile('./good.mjs', { yes: true });
+    expect((mod.default as Record<string, unknown>).ok).toBe(true);
+    expect((mod.default as Record<string, unknown>).name).toBe('from-script');
+  });
+
+  it('refuses in non-TTY context without --yes', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'a.mjs'),
+      'export default { name: "x" };\n',
+    );
+    // vitest runs non-interactively; stdin is not a TTY. Without --yes,
+    // confirmScriptImport returns false and importScriptFile throws.
+    // Mock stdin.isTTY to guarantee non-TTY semantics regardless of env.
+    const originalIsTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: false,
+      configurable: true,
+    });
+    const stderrSpy = vi
+      .spyOn(process.stderr, 'write')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation(() => true) as any;
+    try {
+      await expect(
+        importScriptFile('./a.mjs', { yes: false }),
+      ).rejects.toThrow(/Aborted by user/);
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+      stderrSpy.mockRestore();
+    }
+  });
+});

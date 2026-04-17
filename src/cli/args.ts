@@ -42,6 +42,18 @@ export interface ParsedArgs {
   output: 'console' | 'json' | 'csv';
   compare?: string[];
   concurrency: number;
+  /**
+   * Opt-in for script-file import (#19, C-03). Without this flag, `run
+   * <path>` refuses to `await import()` a local file. Only saved-agent
+   * names are accepted unless the user explicitly says "yes I know what
+   * I'm doing, run arbitrary code from this path."
+   */
+  script: boolean;
+  /**
+   * Skip interactive confirmation when `--script` is passed. Required for
+   * non-TTY contexts (CI, shell piping) that can't prompt.
+   */
+  yes: boolean;
 }
 
 /**
@@ -69,6 +81,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     includeSensitive: false,
     output: 'console',
     concurrency: 1,
+    script: false,
+    yes: false,
   };
 
   const positional: string[] = [];
@@ -148,6 +162,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (isNaN(args.concurrency) || args.concurrency < 1) {
         throw new Error('--concurrency must be a positive integer');
       }
+    } else if (arg === '--script') {
+      args.script = true;
+    } else if (arg === '-y' || arg === '--yes') {
+      args.yes = true;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}. Use --help for usage.`);
     } else {
