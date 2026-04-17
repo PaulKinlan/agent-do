@@ -2,6 +2,43 @@
 
 Provider-agnostic autonomous agent loop for JavaScript. Built on the [Vercel AI SDK](https://sdk.vercel.ai/), it drives any `LanguageModel` through a tool-use loop until the task is complete.
 
+## ⚠️ No sandbox
+
+**agent-do is not sandboxed within its working directory: when file
+tools are enabled, the agent can read, write, edit, and delete files
+under that directory.**
+
+By default, file tools operate on files reachable from the working
+directory (`--cwd`, defaulting to the current directory). Path-traversal
+guards prevent the agent from escaping that root, but within that scope
+a misbehaving prompt or unintended tool call can cause permanent data
+loss.
+
+`--read-only` blocks writes, deletes, and edits — but the agent can
+still **read, list, and grep** every file in the working directory and
+send its contents to the model provider. If a directory contains
+secrets you don't want exposed, use `--no-tools` instead.
+
+The CLI prints a one-line warning to stderr on every run that has
+file tools enabled, so the blast radius is visible up front. The
+warning text adapts to the resolved configuration (read-only vs full
+read/write), and a saved agent's `noTools` / `readOnly` settings win
+over CLI flags so you don't get a misleading "no tools" warning when a
+saved config silently re-enables them.
+
+**Before using agent-do, especially the CLI:**
+- Understand what the agent will do before it runs — review the task
+  and system prompt carefully.
+- Run with `--read-only` to prevent writes, deletes, and edits while
+  still letting the agent reason about files.
+- Run with `--no-tools` to disable all file access entirely (including
+  reads).
+- Always work in a directory you are comfortable giving the agent
+  full access to.
+- Keep important files backed up or under version control.
+
+There is no undo. Proceed with caution.
+
 ## Features
 
 - **Provider-agnostic** -- works with any Vercel AI SDK `LanguageModel` (OpenAI, Anthropic, Google, Mistral, Ollama, etc.)

@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { ParsedArgs } from './args.js';
 import { resolveModel, resolveCompareProviders } from './resolve-model.js';
+import { emitSandboxWarning } from './warnings.js';
 import { runEvals } from '../eval/runner.js';
 import type { EvalSuiteConfig, RunEvalsOptions } from '../eval/types.js';
 
@@ -20,6 +21,17 @@ export async function runEvalMode(args: ParsedArgs): Promise<void> {
   if (!args.file) {
     throw new Error('Usage: npx agent-do eval <file|dir>');
   }
+
+  // Eval suites can define their own tools per case, so the truth is
+  // suite-dependent. The CLI flags are a reasonable upper bound — if the
+  // user passed `--no-tools`, file access is genuinely off everywhere;
+  // otherwise we warn so an operator running an unfamiliar suite isn't
+  // surprised by file mutations.
+  emitSandboxWarning({
+    toolsEnabled: !args.noTools,
+    readOnly: args.readOnly,
+    json: args.json,
+  });
 
   const target = path.resolve(args.file);
   const suites = await loadSuites(target);

@@ -20,6 +20,7 @@ import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { loadSavedAgent } from './agents.js';
 import { renderEvent, renderOptionsFromArgs } from './render.js';
+import { emitSandboxWarning } from './warnings.js';
 import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
@@ -69,11 +70,25 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     );
     const agentId = (exported.id as string) ?? 'script-agent';
 
+    // Resolve the *effective* tool flags from the export → args
+    // fallback chain. Use those for both the wiring and the sandbox
+    // warning, so a script that overrides `noTools: false` doesn't
+    // get its file access silently waved through without a warning.
+    const effectiveNoTools =
+      (exported.noTools as boolean | undefined) ?? args.noTools;
+    const effectiveReadOnly =
+      (exported.readOnly as boolean | undefined) ?? args.readOnly;
+    emitSandboxWarning({
+      toolsEnabled: !effectiveNoTools,
+      readOnly: effectiveReadOnly,
+      json: args.json,
+    });
+
     // Workspace tools on the cwd by default; memory tools opt-in.
     let tools: ToolSet | undefined;
-    if (!args.noTools) {
+    if (!effectiveNoTools) {
       tools = createWorkspaceTools(args.workingDir, {
-        readOnly: args.readOnly,
+        readOnly: effectiveReadOnly,
         exclude: args.exclude,
         includeSensitive: args.includeSensitive,
       });
@@ -82,7 +97,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       if (wantMemory) {
         const memDir = (exported.memory as string) ?? args.memoryDir;
         const memStore = new FilesystemMemoryStore(memDir, {
-          readOnly: args.readOnly,
+          readOnly: effectiveReadOnly,
         });
         tools = { ...tools, ...createMemoryTools(memStore, agentId) };
       }
@@ -138,12 +153,25 @@ async function runSavedAgent(
   const model = await resolveModel(saved.provider, saved.model);
   const agentId = saved.name;
 
+  // Resolve effective flags BEFORE the warning, otherwise (per Codex's
+  // P2 on PR #47) `npx agent-do run <saved> --no-tools` would suppress
+  // the warning while a saved agent with `noTools: false` still ran
+  // with full file access. Saved-agent config wins because that's
+  // what actually drives `tools` below.
+  const effectiveNoTools = saved.noTools;
+  const effectiveReadOnly = saved.readOnly || args.readOnly;
+  emitSandboxWarning({
+    toolsEnabled: !effectiveNoTools,
+    readOnly: effectiveReadOnly,
+    json: args.json,
+  });
+
   let tools: ToolSet | undefined;
-  if (!saved.noTools) {
+  if (!effectiveNoTools) {
     // Workspace tools default to the caller's cwd so saved agents see the
     // project they were invoked against, not the dir where they were created.
     tools = createWorkspaceTools(args.workingDir, {
-      readOnly: saved.readOnly || args.readOnly,
+      readOnly: effectiveReadOnly,
       exclude: args.exclude,
       includeSensitive: args.includeSensitive,
     });
