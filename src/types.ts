@@ -175,6 +175,18 @@ export interface AgentConfig {
   systemPrompt?: string; // Raw system prompt (CLAUDE.md content)
   tools?: ToolSet;
   skills?: SkillStore;
+  /**
+   * Expose the privileged `install_skill` tool to the model (#24, H-05).
+   *
+   * Default **`false`**: the LLM cannot install skills, only search /
+   * list / remove. Because installed skills get concatenated into the
+   * system prompt on every subsequent run sharing the same store, a
+   * prompt-injected agent with install access could rewrite its own
+   * future instructions — a persistent jailbreak. Set `true` only when
+   * the caller also runs a human-in-the-loop permission layer
+   * (`permissions: { mode: 'ask' }` or `hooks.onPreToolUse`).
+   */
+  allowSkillInstall?: boolean;
   maxIterations?: number;
   innerStepLimit?: number;
   hooks?: AgentHooks;

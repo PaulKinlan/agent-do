@@ -334,9 +334,12 @@ function buildTools(
     }
   }
 
-  // Add skill tools if a store is provided
+  // Add skill tools if a store is provided. `install_skill` is only
+  // registered when `allowSkillInstall` is explicitly set — see #24.
   if (config.skills) {
-    const skillTools = createSkillTools(config.skills);
+    const skillTools = createSkillTools(config.skills, {
+      allowInstall: config.allowSkillInstall === true,
+    });
     for (const [name, t] of Object.entries(skillTools)) {
       tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
     }
