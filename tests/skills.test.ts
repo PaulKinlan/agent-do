@@ -242,6 +242,25 @@ describe('InMemorySkillStore', () => {
     const all = await store.search('');
     expect(all).toHaveLength(2);
   });
+
+  it('search results never carry a `url` field (#34: SSRF / supply-chain guard)', async () => {
+    // Earlier drafts of SkillSearchResult included `url?: string`, which
+    // signalled "external skill registries are fine to wire up." That's
+    // an SSRF footgun — a hostile registry could return a URL that the
+    // agent then auto-fetches with the user's credentials. The field is
+    // gone from the public type; this test guards against accidental
+    // re-introduction by an InMemorySkillStore subclass.
+    const store = new InMemorySkillStore();
+    await store.install({
+      id: 'x',
+      name: 'X',
+      description: 'd',
+      content: 'c',
+    });
+    const [r] = await store.search('x');
+    expect(r).toEqual({ id: 'x', name: 'X', description: 'd' });
+    expect((r as Record<string, unknown>).url).toBeUndefined();
+  });
 });
 
 describe('createSkillTools', () => {
