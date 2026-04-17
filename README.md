@@ -1127,6 +1127,67 @@ The [`examples/`](examples/) directory contains runnable examples:
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
+## Releasing
+
+Version management uses [Changesets](https://github.com/changesets/changesets).
+
+### Recording a change
+
+When you make a change that should appear in the next release, create a
+changeset describing it:
+
+```bash
+npx changeset
+```
+
+The CLI asks whether the change is a **major** / **minor** / **patch**
+bump and writes a markdown file in `.changeset/`. Commit that file
+alongside the change. The changeset body becomes an entry in
+`CHANGELOG.md` at release time.
+
+Rules of thumb for pre-1.0:
+
+- **patch** — bug fixes, internal refactors, doc updates
+- **minor** — new features, non-breaking API additions, security fixes
+  that don't change the public API
+- **major** — save for the 1.0 cut; until then, breaking changes can
+  ride in **minor**
+
+### Cutting a release
+
+The `.github/workflows/release.yml` workflow runs on every push to
+`main`:
+
+1. If there are pending changeset files, it opens (or updates) a
+   **"Version PR"** that bumps `package.json` and writes the
+   `CHANGELOG.md` entries. Review the PR, merge it when ready.
+2. After the Version PR is merged (main now has a bumped version and
+   no pending changesets), the next run publishes to npm via
+   `changeset publish`, creates a git tag, and opens a GitHub release
+   with the changelog body.
+
+Secrets the workflow needs:
+
+- `NPM_TOKEN` — npm **automation** token for the `agent-do` package.
+  Create at <https://www.npmjs.com/settings> → Access Tokens → Generate
+  New Token → Automation. Add under Repository Settings → Secrets and
+  variables → Actions.
+- `GITHUB_TOKEN` is provided automatically.
+
+### Manual publish fallback
+
+If you ever need to publish without the workflow:
+
+```bash
+npx changeset version   # applies pending changesets to package.json + CHANGELOG.md
+git commit -am "chore: release"
+npm run release         # builds + npm publish via changeset
+git push --follow-tags
+```
+
+`npm run release` runs `npm run build` first, and the `prepublishOnly`
+hook runs `typecheck` + `test` + `build` as a final safety net.
+
 ## License
 
 Apache 2.0

@@ -1,0 +1,71 @@
+name: Release
+
+# Two roles, depending on what lands on main:
+#
+# 1. **"Version PR"**: when there are pending changeset files in
+#    `.changeset/`, the action opens (or updates) a PR that bumps
+#    package.json + writes CHANGELOG.md entries from those files.
+#    That PR is the review surface for a release — look at the
+#    generated version, the changelog, and the list of consumed
+#    changesets before merging.
+#
+# 2. **Publish**: when main has a bumped package.json and no
+#    pending changesets (i.e. the version PR has been merged), the
+#    action runs `npm run release` which builds and `changeset
+#    publish`es to npm, then tags + creates a GitHub release.
+#
+# Secrets required:
+#   NPM_TOKEN — npm automation token with publish rights for
+#               `agent-do`. Create at https://www.npmjs.com/settings
+#               → Access Tokens → Generate New Token (Automation).
+#   GITHUB_TOKEN is provided automatically by GitHub Actions.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create tags + releases
+  pull-requests: write # open / update the version PR
+  id-token: write # npm provenance
+
+jobs:
+  release:
+    # Skip on forks — secrets aren't available there and the token
+    # wouldn't be authorised to publish anyway.
+    if: github.repository == 'PaulKinlan/agent-do'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # changesets needs full history to generate changelog entries.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Create release PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          # Opens/updates the Version PR when there are pending changesets.
+          version: npm run version
+          # Runs after the Version PR is merged — publishes to npm and
+          # creates the GitHub release + git tag.
+          publish: npm run release
+          commit: 'chore: release'
+          title: 'chore: release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'

@@ -37,11 +37,20 @@
       "default": "./dist/src/eval/index.js"
     }
   },
+  "files": [
+    "dist/src/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "docs": "typedoc",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "npm run build && changeset publish",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "3.0.71",
@@ -69,6 +78,8 @@
     }
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.31.0",
     "@types/node": "^25.6.0",
     "typedoc": "^0.28.0",
     "typedoc-plugin-markdown": "^4.4.0",
