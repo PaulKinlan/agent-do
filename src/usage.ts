@@ -93,7 +93,31 @@ function normalizeModelId(model: string): string {
 }
 
 /**
+ * Models we've already warned about — keyed by `${tableId}:${modelId}` so a
+ * caller passing a custom `pricing` table doesn't suppress warnings about
+ * the default table (and vice versa). Bounded by the number of distinct
+ * model IDs an agent uses, so it can't grow without bound in practice.
+ *
+ * The store is module-scoped on purpose: warning once per process matches
+ * the lifetime of `agent-do` runs in CLIs and short-lived servers.
+ * Long-lived servers can call {@link resetPricingWarnings} between runs
+ * if they want a fresh warning cycle.
+ */
+const WARNED_MODELS = new Set<string>();
+
+/** Reset the warned-model set. Mainly for tests / long-lived servers. */
+export function resetPricingWarnings(): void {
+  WARNED_MODELS.clear();
+}
+
+/**
  * Estimate cost in USD for a given model and token counts.
+ *
+ * When the model isn't in the active pricing table, returns `0` (preserving
+ * the historical contract — cost tracking is best-effort) but emits a
+ * one-time stderr warning per process so cost-limit enforcement based on
+ * an unknown model isn't silently disabled. Pass your own
+ * {@link PricingTable} via `AgentConfig.usage.pricing` to override.
  */
 export function estimateCost(
   model: string,
@@ -108,7 +132,28 @@ export function estimateCost(
     table[normalized] ||
     Object.entries(table).find(([key]) => normalized.startsWith(key))?.[1];
 
-  if (!prices) return 0;
+  if (!prices) {
+    // Distinguish the default table from a caller-supplied one when
+    // de-duplicating warnings. Avoids spamming and avoids cross-table
+    // suppression.
+    const tableId = pricing ? 'custom' : 'default';
+    const key = `${tableId}:${normalized}`;
+    if (!WARNED_MODELS.has(key)) {
+      WARNED_MODELS.add(key);
+      const writeStderr = (msg: string): void => {
+        // Browsers don't have process.stderr; fall back to console.warn.
+        const proc = (globalThis as { process?: { stderr?: { write?: (s: string) => void } } }).process;
+        if (proc?.stderr?.write) proc.stderr.write(msg);
+        else console.warn(msg.trimEnd());
+      };
+      writeStderr(
+        `[agent-do] No pricing entry for model "${normalized}" in the ${tableId} table; ` +
+        `cost tracking and spending limits are disabled for this model. ` +
+        `Set AgentConfig.usage.pricing to provide your own rates.\n`,
+      );
+    }
+    return 0;
+  }
 
   return (
     (inputTokens / 1_000_000) * prices.input +
