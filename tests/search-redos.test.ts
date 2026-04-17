@@ -134,6 +134,46 @@ describe('store.search regex mode (opt-in)', () => {
     }
   });
 
+  it('rejects brace-quantifier variants (Codex #63 follow-up)', async () => {
+    // The old regex-on-regex check only matched `+*?`, so `(a+){1,}`
+    // and `(a|b){2,}` bypassed it. The character-level scan treats
+    // `{n,m}` as a quantifier for the purposes of the nesting check.
+    const cases = ['(a+){1,}', '(a+){2,5}', '(a|b){2,}', '(a*){1,3}'];
+    for (const pat of cases) {
+      await expect(
+        store.search('a', pat, undefined, { regex: true }),
+      ).rejects.toThrow(/catastrophic backtracking/i);
+    }
+  });
+
+  it('rejects wrapped / deeply-nested danger shapes (Codex #63 follow-up)', async () => {
+    // `[^)]*` in the old heuristic couldn't see through nested parens,
+    // so `((a|a?))+$` slipped through. The stack-based scan propagates
+    // the risk flag to outer groups so any wrapping depth still fires.
+    const cases = ['((a|a?))+$', '(a|(a?))+$', '((a+))+', '(((a|b)))+'];
+    for (const pat of cases) {
+      await expect(
+        store.search('a', pat, undefined, { regex: true }),
+      ).rejects.toThrow(/catastrophic backtracking/i);
+    }
+  });
+
+  it('accepts safe regex shapes that happen to contain groups or quantifiers', async () => {
+    // Positive coverage: the scan should not reject plain groups,
+    // plain alternations, single-level quantifiers, or any combination
+    // that isn't a nested-repetition shape.
+    await store.write('a', 'mix.txt', 'alpha 42\nbeta 7');
+    const r1 = await store.search('a', '(alpha|beta)', undefined, { regex: true });
+    expect(r1.length).toBeGreaterThan(0);
+    const r2 = await store.search('a', '\\d+', undefined, { regex: true });
+    expect(r2.length).toBeGreaterThan(0);
+    const r3 = await store.search('a', '[a-z]+', undefined, { regex: true });
+    expect(r3.length).toBeGreaterThan(0);
+    // Paren-inside-class shouldn't confuse the scanner.
+    const r4 = await store.search('a', '[()+*]', undefined, { regex: true });
+    expect(Array.isArray(r4)).toBe(true);
+  });
+
   it('accepts long literal patterns (no 256-char cap in literal mode)', async () => {
     // Codex + Copilot review on PR #63: the schema cap + store cap
     // were both regex-only, so a safe literal search of >256 chars
