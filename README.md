@@ -378,6 +378,20 @@ const result = await agent.run('What is 2 + 3?');
 
 The agent loops automatically: it calls tools, feeds results back to the model, and continues until the model responds with text only (no tool calls) or hits `maxIterations` (default: 20).
 
+### History hygiene
+
+Between iterations, the loop replaces older `<tool_output>...</tool_output>`
+blocks in the conversation history with self-closing `redacted="stale"`
+markers. This keeps the model's view of what happened (which tool ran,
+on what path) but drops the body, so injected content from a poisoned
+file can't keep influencing the model on every subsequent step. It also
+keeps token spend bounded as iterations accumulate.
+
+Tune the window with `AgentConfig.historyKeepWindow` (default `1` —
+only the most recent iteration's tool outputs flow in full to the next
+call). Set to `Infinity` to restore the historical
+"everything-stays-in-context" behaviour.
+
 ## File Tools
 
 `createFileTools()` generates a set of file-manipulation tools backed by any `MemoryStore`:

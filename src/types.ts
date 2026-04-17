@@ -205,6 +205,22 @@ export interface AgentConfig {
    * piping events to a trusted consumer that needs the raw payload.
    */
   emitFullResult?: boolean;
+  /**
+   * Number of recent outer iterations whose tool-output bodies are kept
+   * verbatim in the conversation history. Older iterations get their
+   * `<tool_output>...</tool_output>` bodies replaced with self-closing
+   * markers, so injected content from a poisoned tool result can't
+   * keep influencing the model on every subsequent step.
+   *
+   * Default `1` — only the most recent iteration's tool outputs flow in
+   * full to the next call. The model still sees that the tool was
+   * invoked (via the marker attributes) and the assistant's reasoning
+   * about it, but the raw body is gone. See issue #33.
+   *
+   * Set to `Infinity` to keep the historical "everything stays in
+   * context forever" behaviour.
+   */
+  historyKeepWindow?: number;
 }
 
 // A message in conversation history
