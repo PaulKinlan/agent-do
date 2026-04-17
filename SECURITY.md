@@ -6,17 +6,14 @@ make it easy to send one.
 
 ## Supported Versions
 
-agent-do is pre-1.0. Only the **latest published minor** is supported
-with security fixes. Older versions receive fixes only via upgrade.
+agent-do is pre-1.0. Only the **latest published patch of the latest
+minor** receives security fixes; older versions get fixes by
+upgrading. The table updates on every minor release.
 
-| Version | Supported                |
-| ------- | ------------------------ |
+| Version | Supported                       |
+| ------- | ------------------------------- |
 | 0.1.x   | :white_check_mark: latest patch |
-| < 0.1   | :x:                      |
-
-Once we cut a 0.2.x or later line, this table will be updated and the
-previous minor will enter a 30-day maintenance window for critical fixes
-only.
+| < 0.1   | :x:                             |
 
 ## Reporting a Vulnerability
 
@@ -59,10 +56,11 @@ polished. Useful ingredients:
 | Fix or mitigation | Critical/High: within **14 days**. Medium: best effort in the next release. Low/Informational: tracked in the issue backlog. |
 | Public disclosure | Coordinated with you, typically 7–30 days after the fix ships, depending on upstream impact. |
 
-If we decline a report, we'll explain why — usually this is because the
-behaviour is an intended tradeoff (for example, `--include-sensitive`
-deliberately disables the deny list) or it requires an attacker
-capability that already implies game-over.
+If we decline a report, we'll explain why — usually this is because
+the behaviour is an intended tradeoff (for example, `--no-tools` is
+the documented way to keep agents away from the filesystem entirely;
+choosing not to pass it isn't a vulnerability) or it requires an
+attacker capability that already implies game-over.
 
 ### Credit
 
@@ -74,32 +72,42 @@ to see — are all fine.
 
 Likely in-scope:
 
-- Path traversal, sandbox escape, or privilege escalation in the
-  file / memory tools.
-- Prompt-injection surfaces we haven't already bounded (see
-  `wrapForModel` in `src/tools/content-guards.ts`).
-- Secret-exfiltration paths through the ProgressEvent stream,
-  `--verbose` logs, or telemetry hooks.
-- Deny-list bypasses (including via `..`, symlinks, or case-folding
-  tricks).
-- Supply-chain concerns with bundled provider SDKs or transitive
-  dependencies.
+- Path traversal, sandbox escape, or privilege escalation in the file
+  or memory tools (anything that lets the agent reach files outside
+  its configured working / memory directory).
+- Prompt-injection paths where untrusted content (file bodies, tool
+  output, skill content) flows into the LLM in a way that lets it
+  override the system prompt or escalate its capabilities.
+- Secret-exfiltration paths through the `ProgressEvent` stream,
+  `--verbose` logs, or any other observable side channel.
+- Bypasses of the permission / hook layer
+  (`config.permissions`, `config.hooks.onPreToolUse`,
+  `FilesystemMemoryStore`'s `onBeforeWrite`, `--read-only`,
+  `--no-tools`).
+- Validation gaps in saved-agent configs (`.agent-do/agents/*.json`)
+  that let a planted file steer a future run.
+- Supply-chain concerns with the bundled provider SDKs or their
+  transitive dependencies.
 - Any path where the LLM can persist arbitrary instructions for future
-  sessions (skills, saved-agent configs, etc.).
+  sessions (skills, saved agents, memory).
 
 Likely out-of-scope:
 
-- The LLM itself making mistakes within its permitted sandbox — that's
-  a capability-planning problem, not a security bug.
-- Denial-of-service caused by a user handing the agent a literally
-  unbounded task. We do enforce iteration / cost / size caps, but the
-  agent is not a sandboxing system for hostile local users.
+- The LLM making mistakes within its permitted sandbox — that's a
+  capability-planning problem, not a security bug.
+- Denial-of-service from a user handing the agent an unbounded task.
+  agent-do enforces iteration limits (`maxIterations`) and supports
+  per-run / per-day spending limits (`config.usage.limits`), but it
+  is not a sandboxing system for hostile local users.
 - Issues that require the user to explicitly opt out of a security
-  control (`--include-sensitive`, `--yes`, explicit
-  `permissions: 'accept-all'`, etc.) and then be surprised.
-- Bugs in third-party model providers or LLMs themselves. If the issue
-  is in how agent-do *handles* their output, that's in scope; if it's
-  an issue with the upstream API, please report it there first.
+  control — for example, calling `createAgent({ permissions: { mode:
+  'accept-all' } })`, passing `--read-only` and being surprised that
+  reads still happen, or running with `--no-tools` disabled and then
+  finding the agent touched files. Document the surprise as a
+  usability issue if you'd like, but it isn't a vulnerability.
+- Bugs in third-party model providers or LLMs themselves. If the
+  issue is in how agent-do *handles* their output, that's in scope;
+  if it's a bug in the upstream API, please report it there first.
 
 ## Working with us
 
