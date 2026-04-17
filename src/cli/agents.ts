@@ -28,7 +28,12 @@ import type { ParsedArgs } from './args.js';
  */
 export const SavedAgentSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/).max(64),
-  provider: z.enum(['anthropic', 'google', 'openai', 'ollama', 'openrouter']),
+  // Providers supported by `src/cli/resolve-model.ts`. openrouter was
+  // in an earlier draft of this enum but the CLI resolver doesn't
+  // handle it (#64 Copilot), so listing it here would have let
+  // `create` accept a config that `run` would reject later. If CLI
+  // OpenRouter support lands, update both surfaces in the same change.
+  provider: z.enum(['anthropic', 'google', 'openai', 'ollama']),
   model: z.string().max(128).optional(),
   systemPrompt: z.string().max(8192),
   memoryDir: z
@@ -229,11 +234,28 @@ export async function listSavedAgents(): Promise<void> {
 export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
   const filePath = await findAgentFile(name);
   if (!filePath) return null;
+  // Read and parse as two separate steps so the failure modes don't
+  // blur together (Copilot #64). "Malformed JSON" is an actionable
+  // diagnostic; "permission denied" is something the operator needs
+  // to fix at the filesystem level.
+  let content: string;
+  try {
+    content = await fs.promises.readFile(filePath, 'utf-8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[agent-do] Could not read agent file ${filePath}: ${msg}\n`,
+    );
+    return null;
+  }
   let raw: unknown;
   try {
-    raw = safeJsonParse(await fs.promises.readFile(filePath, 'utf-8'));
-  } catch {
-    process.stderr.write(`[agent-do] Ignoring malformed agent file ${filePath}\n`);
+    raw = safeJsonParse(content);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[agent-do] Ignoring malformed agent file ${filePath}: ${msg}\n`,
+    );
     return null;
   }
   const parsed = SavedAgentSchema.safeParse(raw);

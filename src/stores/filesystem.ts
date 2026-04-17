@@ -48,45 +48,52 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   /**
    * Resolve an agent-relative path to an absolute filesystem path,
-   * with two distinct guards (#20 H-01):
+   * with four distinct guards (#20 H-01 + PR #64 review follow-ups):
    *
-   * 1. **String-prefix bug fix.** The previous check used
-   *    `resolved.startsWith(baseDir)` without a trailing separator,
-   *    so a baseDir of `/data/agent` accidentally accepted siblings
-   *    like `/data/agent-evil/file`. The check now compares against
-   *    `baseDir + path.sep` (or exact equality).
+   * 1. **Agent-id validation** (#30). `validateAgentId` rejects
+   *    traversal-shaped ids like `../other-tenant` before any path
+   *    construction.
    *
-   * 2. **Symlink canonicalisation.** The check used to run on the
-   *    pre-`realpath` path, so `sandbox/escape -> /etc` was allowed:
-   *    the resolved path looked like `<base>/sandbox/escape/passwd`
-   *    (inside base) but the actual read targeted `/etc/passwd`.
-   *    Now we canonicalise the deepest existing ancestor with
-   *    `realpathSync` and re-check that the canonical path is still
-   *    under base.
+   * 2. **Canonical-to-canonical containment.** Both the base dir and
+   *    the resolved target are canonicalised via `realpathSafe`
+   *    *before* the prefix check. Earlier drafts compared a raw
+   *    `path.resolve(baseDir)` against a realpathed target, so a
+   *    baseDir that was itself a symlink (e.g. `/Volumes/tmp` on
+   *    macOS) made every legitimate path fail the check. Both sides
+   *    of the comparison now go through the same canonicalisation.
    *
-   * Plus the per-call `validateAgentId(agentId)` from #30 — the
-   * regex was previously enforced only at the CLI layer. Library
-   * callers passing user input could produce agentIds like
-   * `../other-tenant` and bypass the per-agent subdirectory.
+   * 3. **Per-agent isolation** (PR #64 Copilot). `filePath` is
+   *    resolved against *agentDir*, and the containment check uses
+   *    agentDir — not just baseDir — as the boundary. Without this,
+   *    agentId=`a1` with filePath=`../a2/secret` resolved to a path
+   *    inside baseDir but outside a1's own directory, leaking
+   *    cross-tenant data.
+   *
+   * 4. **Root-path safety.** `withinBase` uses `path.relative` rather
+   *    than a naive `startsWith(base + path.sep)`, because when base
+   *    is `/` or a Windows drive root the `sep` concatenation turns
+   *    into `//` / `C:\\` and rejects legitimate children.
    */
   private resolve(agentId: string, filePath: string): string {
     validateAgentId(agentId);
-    const base = path.resolve(this.baseDir);
-    const agentDir = path.resolve(base, agentId);
+    // Canonicalise base up front so every later comparison is
+    // canonical-vs-canonical. If baseDir is itself a symlink the
+    // realpath walk resolves to the target; without this the
+    // `withinBase(canonical, base)` check would reject every path.
+    const base = realpathSafe(path.resolve(this.baseDir));
+    const agentDir = realpathSafe(path.resolve(base, agentId));
     if (!withinBase(agentDir, base)) {
       throw new Error('Path traversal not allowed (agentId)');
     }
     const resolved = path.resolve(agentDir, filePath);
-    if (!withinBase(resolved, base)) {
+    // Agent-level isolation: the resolved path must stay inside the
+    // agent's own directory. Checking `base` alone would permit
+    // `filePath = "../other-agent/secret"`.
+    if (!withinBase(resolved, agentDir)) {
       throw new Error('Path traversal not allowed');
     }
-    // Canonicalise via realpath so a symlink pointing outside the
-    // base directory is detected and rejected. realpath only works
-    // on existing paths — for fresh writes, walk up to the deepest
-    // existing ancestor and canonicalise that, then re-append the
-    // unresolved suffix.
     const canonical = realpathSafe(resolved);
-    if (!withinBase(canonical, base)) {
+    if (!withinBase(canonical, agentDir)) {
       throw new Error('Path traversal via symlink not allowed');
     }
     return canonical;
@@ -95,7 +102,11 @@ export class FilesystemMemoryStore implements MemoryStore {
   /** Returns the canonicalized relative path for use in callbacks. */
   private canonicalRelativePath(agentId: string, filePath: string): string {
     const resolved = this.resolve(agentId, filePath);
-    const agentDir = path.resolve(this.baseDir, agentId);
+    // Use the canonical agentDir (matching `resolve()`'s own
+    // canonicalisation) so the relative path has no spurious `..`
+    // segments when baseDir or agentDir contain symlinks.
+    const base = realpathSafe(path.resolve(this.baseDir));
+    const agentDir = realpathSafe(path.resolve(base, agentId));
     return path.relative(agentDir, resolved);
   }
 
@@ -196,13 +207,29 @@ export class FilesystemMemoryStore implements MemoryStore {
 
 /**
  * True iff `candidate` is the same as, or strictly inside, `base`.
- * Uses `path.sep` so a sibling whose name happens to share the
- * `base` prefix (e.g. `/data/agent` vs `/data/agent-evil`) doesn't
- * accidentally pass. Both inputs must already be absolute.
+ *
+ * Uses `path.relative` rather than a naive `startsWith(base + sep)`
+ * so:
+ *   - a sibling whose name shares the base prefix (`/data/agent` vs
+ *     `/data/agent-evil`) is still rejected — the relative path
+ *     starts with `..` and we bail;
+ *   - a base that is a filesystem root (`/` on POSIX, `C:\` on
+ *     Windows) is handled correctly — the naive `base + sep`
+ *     concatenation would become `//` / `C:\\` and reject every
+ *     legitimate child.
+ *
+ * Both inputs must already be absolute.
  */
 function withinBase(candidate: string, base: string): boolean {
   if (candidate === base) return true;
-  return candidate.startsWith(base + path.sep);
+  const rel = path.relative(base, candidate);
+  // rel starting with `..` means the candidate is *above* or
+  // alongside base. rel being an absolute path means the inputs are
+  // on different roots (Windows drive letters). Either way it's not
+  // inside base.
+  if (rel === '' || rel === '.') return true;
+  if (rel.startsWith('..')) return false;
+  return !path.isAbsolute(rel);
 }
 
 /**

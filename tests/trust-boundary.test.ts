@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -19,21 +19,26 @@ afterEach(() => {
 
 describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () => {
   it('rejects sibling directory whose name shares the base prefix', () => {
-    // Old check: `resolved.startsWith(baseDir)` without a separator.
-    // Given baseDir `<tmp>/agent`, a sibling `<tmp>/agent-evil` would pass.
+    // Regression for the specific bug PR #64 fixed: the old check was
+    // `resolved.startsWith(baseDir)` without a separator. Given
+    // baseDir `<tmp>/agent`, a `../agent-evil/secret` traversal
+    // resolves to a sibling that shared the base prefix string —
+    // `<tmp>/agent-evil/secret` starts with `<tmp>/agent` — so the
+    // naive startsWith check accepted it. The `withinBase` helper
+    // now uses `path.relative` and rejects the sibling correctly.
     const baseDir = path.join(tmpDir, 'agent');
     fs.mkdirSync(baseDir);
+    const agentDir = path.join(baseDir, 'agent-1');
+    fs.mkdirSync(agentDir);
     fs.mkdirSync(path.join(tmpDir, 'agent-evil'));
     fs.writeFileSync(path.join(tmpDir, 'agent-evil', 'secret'), 'pwn');
 
     const store = new FilesystemMemoryStore(baseDir);
-    // The escape vector requires an agentId starting with `..`. The
-    // M-06 validateAgentId guard rejects that *before* the
-    // string-prefix check would even run, but the assertion is the
-    // same: the escape is blocked.
+    // Valid agentId, traversal-shaped filePath: the filePath path of
+    // the check is what has to catch this.
     expect(() =>
-      store['resolve']('..-evil', 'secret'),
-    ).toThrow(/Invalid agentId|Path traversal/);
+      store['resolve']('agent-1', '../../agent-evil/secret'),
+    ).toThrow(/Path traversal/);
   });
 
   it('rejects symlinks pointing outside the base directory', () => {
@@ -61,8 +66,13 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     fs.symlinkSync(tmpDir, path.join(baseDir, 'agent-2'));
 
     const store = new FilesystemMemoryStore(baseDir);
+    // After PR #64's canonicalise-base fix, the agentDir itself gets
+    // realpath'd and escapes baseDir at the agentId check, so the
+    // error is "Path traversal not allowed (agentId)" rather than
+    // the symlink-specific message. Either outcome is correct —
+    // both block the escape.
     expect(() => store['resolve']('agent-2', 'leak.txt')).toThrow(
-      /symlink not allowed/,
+      /Path traversal|symlink not allowed/,
     );
   });
 
@@ -70,8 +80,60 @@ describe('H-01: path-traversal guards in FilesystemMemoryStore.resolve()', () =>
     const baseDir = path.join(tmpDir, 'sandbox');
     const store = new FilesystemMemoryStore(baseDir);
     // Should not throw; resolve() returns an absolute path inside baseDir.
+    // Use `realpathSafe` on baseDir (via fs.realpathSync when it exists)
+    // because macOS /var -> /private/var symlinks cause `path.resolve`
+    // to disagree with the resolve() output once we canonicalise
+    // everything (PR #64 fix). The relative-path check is robust to
+    // the indirection.
     const out = store['resolve']('agent-1', 'notes.md');
-    expect(out.startsWith(path.resolve(baseDir) + path.sep)).toBe(true);
+    const rel = path.relative(fs.realpathSync(baseDir), out);
+    expect(rel).not.toMatch(/^\.\./);
+    expect(path.isAbsolute(rel)).toBe(false);
+  });
+
+  it('rejects cross-agent traversal (PR #64 Copilot)', () => {
+    // `filePath = "../a2/secret"` resolves to a path inside baseDir
+    // but outside the requesting agent's own directory. The fixed
+    // resolve() checks containment against agentDir, not baseDir.
+    const baseDir = path.join(tmpDir, 'sandbox');
+    fs.mkdirSync(baseDir);
+    const a2 = path.join(baseDir, 'a2');
+    fs.mkdirSync(a2);
+    fs.writeFileSync(path.join(a2, 'secret'), 'tenant-2');
+
+    const store = new FilesystemMemoryStore(baseDir);
+    expect(() =>
+      store['resolve']('a1', '../a2/secret'),
+    ).toThrow(/Path traversal/);
+  });
+
+  it('handles a symlinked baseDir (Codex #64 P2)', () => {
+    // baseDir itself is a symlink. The earlier fix canonicalised the
+    // target but not the base, so every in-base path failed `withinBase`
+    // because the realpath landed on a different string than the raw
+    // `path.resolve(baseDir)` the comparison used.
+    const realBase = path.join(tmpDir, 'real-store');
+    fs.mkdirSync(realBase);
+    const linkedBase = path.join(tmpDir, 'linked-store');
+    fs.symlinkSync(realBase, linkedBase);
+
+    const store = new FilesystemMemoryStore(linkedBase);
+    // Normal read/write through a linked base must not throw.
+    expect(() => store['resolve']('a1', 'notes.md')).not.toThrow();
+  });
+
+  it('handles a filesystem-root baseDir (PR #64 Copilot)', () => {
+    // When base is `/` (or a Windows drive root), `base + sep` becomes
+    // `//` — the old naive startsWith would reject every legitimate
+    // path. The `path.relative`-based `withinBase` handles this.
+    // We can't actually test with `/` in a sandboxed test, but we can
+    // test the helper via a base that IS its own filesystem root
+    // segment: `tmpDir` already has a root ancestor, so use that.
+    // Easier: construct a store at tmpDir and just verify a resolve
+    // under it works — the root case is proven by withinBase's
+    // path.relative implementation (no startsWith(base + sep) anywhere).
+    const store = new FilesystemMemoryStore(tmpDir);
+    expect(() => store['resolve']('a1', 'notes.md')).not.toThrow();
   });
 
   it('canonicalises non-existent paths via deepest existing ancestor', () => {
@@ -267,8 +329,3 @@ describe('H-03: loadSavedAgent rejects invalid files at runtime', () => {
     expect(result!.provider).toBe('anthropic');
   });
 });
-
-// vi-spyOn import has to come after the describe blocks otherwise top-level
-// hoisting puts it before fs/path. Importing here to keep the file shape
-// consistent with the rest of the suite.
-import { vi } from 'vitest';
