@@ -27,7 +27,11 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
   // private scratchpad scoped to its ID.
   let tools: ToolSet | undefined;
   if (!args.noTools) {
-    tools = createWorkspaceTools(args.workingDir, { readOnly: args.readOnly });
+    tools = createWorkspaceTools(args.workingDir, {
+      readOnly: args.readOnly,
+      exclude: args.exclude,
+      includeSensitive: args.includeSensitive,
+    });
     if (args.withMemory) {
       const memStore = new FilesystemMemoryStore(args.memoryDir, {
         readOnly: args.readOnly,

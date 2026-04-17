@@ -71,7 +71,11 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     // Workspace tools on the cwd by default; memory tools opt-in.
     let tools: ToolSet | undefined;
     if (!args.noTools) {
-      tools = createWorkspaceTools(args.workingDir, { readOnly: args.readOnly });
+      tools = createWorkspaceTools(args.workingDir, {
+        readOnly: args.readOnly,
+        exclude: args.exclude,
+        includeSensitive: args.includeSensitive,
+      });
       const wantMemory =
         (exported.withMemory as boolean | undefined) ?? args.withMemory;
       if (wantMemory) {
@@ -160,6 +164,8 @@ async function runSavedAgent(
     // project they were invoked against, not the dir where they were created.
     tools = createWorkspaceTools(args.workingDir, {
       readOnly: saved.readOnly || args.readOnly,
+      exclude: args.exclude,
+      includeSensitive: args.includeSensitive,
     });
     if (saved.withMemory || args.withMemory) {
       const memStore = new FilesystemMemoryStore(saved.memoryDir, {
