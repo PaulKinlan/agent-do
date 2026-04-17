@@ -186,11 +186,40 @@ export interface AgentConfig {
       perRun?: number;
       perDay?: number;
     };
+    /**
+     * Hard cap multiplier for per-step cost checking (#31, M-07).
+     *
+     * `perRunLimit` is a soft limit — the loop checks after every model step
+     * and abortion only happens once the soft limit is crossed. Since one
+     * more step may still slip through before the check, a hard cap of
+     * `perRunLimit × hardLimitMultiplier` aborts the streamText call
+     * immediately via AbortSignal. Default: `1.25`.
+     */
+    hardLimitMultiplier?: number;
     onLimitExceeded?: (event: {
       type: string;
       spent: number;
       limit: number;
     }) => Promise<boolean>;
+  };
+  /**
+   * Per-run tool-call caps (#27, M-03).
+   *
+   * Without these, a runaway or prompt-injected agent can invoke thousands
+   * of tool calls in a single outer iteration — `maxIterations` caps the
+   * outer loop but `innerStepLimit` × unbounded-calls-per-step doesn't.
+   *
+   * - `maxToolCalls`: total cap across the entire run. Tools throw once
+   *   this is exceeded; the model sees an error and can decide to stop.
+   * - `maxToolCallsPerIteration`: resets at the start of each outer
+   *   iteration. Defends against tight per-iteration fan-out.
+   *
+   * Omit to disable (default). A sensible safe pair is `maxToolCalls: 100,
+   * maxToolCallsPerIteration: 25`.
+   */
+  toolLimits?: {
+    maxToolCalls?: number;
+    maxToolCallsPerIteration?: number;
   };
   signal?: AbortSignal;
   /**
