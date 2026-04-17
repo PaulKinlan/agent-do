@@ -30,6 +30,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
+import { validateAgentId } from './agent-id.js';
 
 export type { FilesystemMemoryStoreOptions } from '../types.js';
 
@@ -45,13 +46,50 @@ export class FilesystemMemoryStore implements MemoryStore {
     }
   }
 
+  /**
+   * Resolve an agent-relative path to an absolute filesystem path,
+   * with two distinct guards (#20 H-01):
+   *
+   * 1. **String-prefix bug fix.** The previous check used
+   *    `resolved.startsWith(baseDir)` without a trailing separator,
+   *    so a baseDir of `/data/agent` accidentally accepted siblings
+   *    like `/data/agent-evil/file`. The check now compares against
+   *    `baseDir + path.sep` (or exact equality).
+   *
+   * 2. **Symlink canonicalisation.** The check used to run on the
+   *    pre-`realpath` path, so `sandbox/escape -> /etc` was allowed:
+   *    the resolved path looked like `<base>/sandbox/escape/passwd`
+   *    (inside base) but the actual read targeted `/etc/passwd`.
+   *    Now we canonicalise the deepest existing ancestor with
+   *    `realpathSync` and re-check that the canonical path is still
+   *    under base.
+   *
+   * Plus the per-call `validateAgentId(agentId)` from #30 — the
+   * regex was previously enforced only at the CLI layer. Library
+   * callers passing user input could produce agentIds like
+   * `../other-tenant` and bypass the per-agent subdirectory.
+   */
   private resolve(agentId: string, filePath: string): string {
-    const agentDir = path.resolve(this.baseDir, agentId);
+    validateAgentId(agentId);
+    const base = path.resolve(this.baseDir);
+    const agentDir = path.resolve(base, agentId);
+    if (!withinBase(agentDir, base)) {
+      throw new Error('Path traversal not allowed (agentId)');
+    }
     const resolved = path.resolve(agentDir, filePath);
-    if (!resolved.startsWith(path.resolve(this.baseDir))) {
+    if (!withinBase(resolved, base)) {
       throw new Error('Path traversal not allowed');
     }
-    return resolved;
+    // Canonicalise via realpath so a symlink pointing outside the
+    // base directory is detected and rejected. realpath only works
+    // on existing paths — for fresh writes, walk up to the deepest
+    // existing ancestor and canonicalise that, then re-append the
+    // unresolved suffix.
+    const canonical = realpathSafe(resolved);
+    if (!withinBase(canonical, base)) {
+      throw new Error('Path traversal via symlink not allowed');
+    }
+    return canonical;
   }
 
   /** Returns the canonicalized relative path for use in callbacks. */
@@ -120,6 +158,7 @@ export class FilesystemMemoryStore implements MemoryStore {
     return fs.existsSync(this.resolve(agentId, filePath));
   }
 
+  // (search) ───────────────────────────────────────────────────────
   async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
     const searchDir = this.resolve(agentId, dirPath || '.');
@@ -153,4 +192,44 @@ export class FilesystemMemoryStore implements MemoryStore {
       }
     }
   }
+}
+
+/**
+ * True iff `candidate` is the same as, or strictly inside, `base`.
+ * Uses `path.sep` so a sibling whose name happens to share the
+ * `base` prefix (e.g. `/data/agent` vs `/data/agent-evil`) doesn't
+ * accidentally pass. Both inputs must already be absolute.
+ */
+function withinBase(candidate: string, base: string): boolean {
+  if (candidate === base) return true;
+  return candidate.startsWith(base + path.sep);
+}
+
+/**
+ * `fs.realpathSync(path)` requires the path to exist. For a fresh
+ * write, the leaf doesn't exist yet — realpath would throw. Walk up
+ * to the deepest existing ancestor, canonicalise that, and re-append
+ * the unresolved suffix so we still detect symlinks anywhere in the
+ * existing portion of the path.
+ *
+ * Returns the input unchanged if the deepest ancestor doesn't exist
+ * (e.g. baseDir itself is missing) — the caller's containment check
+ * is still authoritative.
+ */
+function realpathSafe(p: string): string {
+  let suffix = '';
+  let current = p;
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return p;
+    suffix = path.join(path.basename(current), suffix);
+    current = parent;
+  }
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync(current);
+  } catch {
+    return p;
+  }
+  return suffix ? path.join(canonical, suffix) : canonical;
 }
