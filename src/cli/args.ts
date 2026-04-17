@@ -42,6 +42,22 @@ export interface ParsedArgs {
   output: 'console' | 'json' | 'csv';
   compare?: string[];
   concurrency: number;
+  /**
+   * Accept every tool call without prompting (#17, C-01).
+   *
+   * Previously the CLI hard-coded this behaviour. The default now asks
+   * for confirmation on destructive tools (write, edit, delete) in TTY
+   * mode and denies them in non-TTY mode. `--accept-all` restores the
+   * old "full yolo" behaviour for scripted pipelines that need it —
+   * but the operator now has to opt in explicitly.
+   */
+  acceptAll: boolean;
+  /**
+   * Comma-separated list of tool names that bypass the confirmation
+   * prompt (e.g. `--allow write_file,memory_write`). Useful for
+   * semi-automated sessions where some destructive tools are expected.
+   */
+  allow: string[];
 }
 
 /**
@@ -69,6 +85,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     includeSensitive: false,
     output: 'console',
     concurrency: 1,
+    acceptAll: false,
+    allow: [],
   };
 
   const positional: string[] = [];
@@ -148,6 +166,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (isNaN(args.concurrency) || args.concurrency < 1) {
         throw new Error('--concurrency must be a positive integer');
       }
+    } else if (arg === '--accept-all' || arg === '--yes' || arg === '-y') {
+      args.acceptAll = true;
+    } else if (arg === '--allow') {
+      const val = requireValue(argv, ++i, '--allow');
+      args.allow.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}. Use --help for usage.`);
     } else {

@@ -25,6 +25,7 @@ import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
+import { buildCliPermissions } from './permission-handler.js';
 import type { Agent } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -110,7 +111,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       systemPrompt: (exported.systemPrompt as string) ?? args.systemPrompt,
       tools,
       maxIterations: (exported.maxIterations as number) ?? args.maxIterations,
-      permissions: { mode: 'accept-all' },
+      permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
       usage: { enabled: true },
       emitFullResult: args.showContent,
     });
@@ -190,7 +191,7 @@ async function runSavedAgent(
     systemPrompt: saved.systemPrompt,
     tools,
     maxIterations: saved.maxIterations,
-    permissions: { mode: 'accept-all' },
+    permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
     usage: { enabled: true },
     emitFullResult: args.showContent,
   });
