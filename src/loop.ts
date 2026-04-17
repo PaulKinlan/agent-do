@@ -65,7 +65,7 @@ function addCacheControl(messages: ModelMessage[], model: LanguageModel): ModelM
 }
 import { evaluatePermission } from './permissions.js';
 import { buildSkillsPrompt, createSkillTools } from './skills.js';
-import { UsageTracker } from './usage.js';
+import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
 
@@ -173,17 +173,31 @@ needed until the DOM structure is defined.`);
  * the permission-denied / hook-denied branches all route through the same
  * normalisation so rendering is consistent.
  */
+/**
+ * Shared counters for per-run and per-iteration tool-call limits (#27, M-03).
+ *
+ * The outer loop holds one instance for the whole run and resets
+ * `perIteration` at the top of each iteration.
+ */
+interface ToolCallCounters {
+  total: number;
+  perIteration: number;
+}
+
 function wrapToolWithPermissions(
   name: string,
   originalTool: ToolSet[string],
   config: AgentConfig,
   step: number,
   resultCache: ToolResultCache,
+  counters: ToolCallCounters,
 ): ToolSet[string] {
   const originalExecute = originalTool.execute;
   if (!originalExecute) return originalTool;
 
   const exec = originalExecute;
+
+  const limits = config.toolLimits;
 
   return {
     ...originalTool,
@@ -196,6 +210,35 @@ function wrapToolWithPermissions(
         if (toolCallId) resultCache.set(toolCallId, tr);
         return tr.modelContent;
       };
+
+      // Tool-call rate limits (#27). Count *before* permission/hook checks
+      // so a denied call still consumes a slot — otherwise an injected
+      // prompt could probe the permission surface for free. Limits are
+      // enforced as `> cap` because the counter is incremented first.
+      counters.total += 1;
+      counters.perIteration += 1;
+      if (
+        limits?.maxToolCalls !== undefined &&
+        counters.total > limits.maxToolCalls
+      ) {
+        return recordAndReturn({
+          modelContent: `Error: tool-call limit reached (${limits.maxToolCalls} per run). Stop calling tools.`,
+          userSummary: `[${name}] DENIED — per-run tool limit hit (${limits.maxToolCalls})`,
+          data: { blocked: true, reason: 'tool-limit-run', tool: name, limit: limits.maxToolCalls },
+          blocked: true,
+        });
+      }
+      if (
+        limits?.maxToolCallsPerIteration !== undefined &&
+        counters.perIteration > limits.maxToolCallsPerIteration
+      ) {
+        return recordAndReturn({
+          modelContent: `Error: per-iteration tool-call limit reached (${limits.maxToolCallsPerIteration}). Produce a final answer instead.`,
+          userSummary: `[${name}] DENIED — per-iteration tool limit hit (${limits.maxToolCallsPerIteration})`,
+          data: { blocked: true, reason: 'tool-limit-iteration', tool: name, limit: limits.maxToolCallsPerIteration },
+          blocked: true,
+        });
+      }
 
       // Permission check
       if (config.permissions) {
@@ -280,13 +323,14 @@ function buildTools(
   config: AgentConfig,
   step: number,
   resultCache: ToolResultCache,
+  counters: ToolCallCounters,
 ): ToolSet {
   const tools: ToolSet = {};
 
   // Add user-provided tools
   if (config.tools) {
     for (const [name, t] of Object.entries(config.tools)) {
-      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache);
+      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
     }
   }
 
@@ -297,11 +341,91 @@ function buildTools(
       allowInstall: config.allowSkillInstall === true,
     });
     for (const [name, t] of Object.entries(skillTools)) {
-      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache);
+      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
     }
   }
 
   return tools;
+}
+
+/**
+ * Build an `onStepFinish` hook that records usage per inner step and
+ * aborts the stream when the hard spending cap would be crossed (#31,
+ * plus PR #65 review follow-ups).
+ *
+ * ### Before
+ *
+ * `tracker.checkLimits()` only ran *between* outer iterations, and
+ * `tracker.record()` was called once per outer iteration with the
+ * total usage from `result.totalUsage`. That meant:
+ *
+ * - The hard-cap projection inside the hook only saw the tracker's
+ *   **cross-iteration** total, so N small inner steps in the same
+ *   iteration could cumulatively exceed the hard cap without any
+ *   individual step tripping the check (Codex #65 P1).
+ * - When the hard cap did abort, the loop broke before
+ *   `result.totalUsage` was awaited, so the step(s) that caused the
+ *   abort never made it into the tracker — `RunResult.usage`
+ *   undercounted the actual spend (Codex #65 P2 / Copilot).
+ *
+ * ### After
+ *
+ * The hook is now the **authoritative per-step recorder**. Each inner
+ * model step calls `tracker.record()` with its own usage, so the
+ * tracker's running total reflects every step the SDK has completed —
+ * including intra-iteration accumulation — and the hard-cap projection
+ * uses that running total directly.
+ *
+ * Because the hook records before it decides whether to abort, an
+ * aborted iteration's last step is already in the ledger by the time
+ * the outer loop breaks. The outer loop no longer calls
+ * `tracker.record(...)` itself — that would double-count when the
+ * hook is active. It still awaits `result.totalUsage` at the end of
+ * a clean iteration (so the recorded per-step totals reconcile with
+ * the SDK's view) but only to surface mismatches, not to ledger.
+ *
+ * Returns `undefined` when the caller disables usage tracking entirely
+ * (so hook dispatch is free when callers opt out).
+ */
+export function buildOnStepFinish(
+  config: AgentConfig,
+  tracker: UsageTracker,
+  abortController: AbortController,
+  outerStep: number,
+): ((step: unknown) => void) | undefined {
+  if (config.usage?.enabled === false) return undefined;
+  const softLimit = config.usage?.limits?.perRun;
+  const multiplier = config.usage?.hardLimitMultiplier ?? 1.25;
+  const hardLimit = softLimit !== undefined ? softLimit * multiplier : undefined;
+  const modelId =
+    typeof config.model === 'string'
+      ? config.model
+      : config.model.modelId;
+
+  return (step: unknown) => {
+    const usage = (step as { usage?: { inputTokens?: number; outputTokens?: number } })
+      .usage;
+    if (!usage) return;
+    // Record first so the tracker's running total includes this step
+    // — the hard-cap projection then sees an authoritative sum across
+    // all inner steps that have already finished, not just the
+    // cross-iteration baseline.
+    tracker.record(
+      outerStep,
+      modelId,
+      usage.inputTokens ?? 0,
+      usage.outputTokens ?? 0,
+    );
+    if (hardLimit === undefined || softLimit === undefined) return;
+    const spent = tracker.getSummary().totalCost;
+    if (spent >= hardLimit && !abortController.signal.aborted) {
+      abortController.abort(
+        new Error(
+          `Hard spending cap reached: $${spent.toFixed(4)} ≥ $${hardLimit.toFixed(4)} (soft $${softLimit.toFixed(4)} × ${multiplier})`,
+        ),
+      );
+    }
+  };
 }
 
 /**
@@ -335,6 +459,8 @@ async function runAgentLoopDirect(
   const iterationStarts: number[] = [];
   const historyKeepWindow =
     config.historyKeepWindow ?? DEFAULT_HISTORY_KEEP_WINDOW;
+  // Shared counters for per-run and per-iteration tool-call limits (#27).
+  const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
   // Usage tracking
   const tracker = new UsageTracker({
@@ -358,6 +484,11 @@ async function runAgentLoopDirect(
 
   let lastText = '';
   let aborted = false;
+  // Outer-iteration counter kept separately from `tracker.records`
+  // since PR #65 made the tracker record per *inner* model step.
+  // `RunResult.steps` historically meant "how many outer iterations
+  // ran", so preserve that contract here.
+  let outerIterations = 0;
 
   for (let i = 0; i < maxIterations; i++) {
     // Check abort
@@ -365,6 +496,7 @@ async function runAgentLoopDirect(
       aborted = true;
       break;
     }
+    outerIterations = i + 1;
 
     // Step start hook
     if (config.hooks?.onStepStart) {
@@ -400,8 +532,23 @@ async function runAgentLoopDirect(
     // passes know what counts as "fresh".
     iterationStarts.push(messages.length);
 
+    // Reset per-iteration tool-call counter (#27).
+    toolCounters.perIteration = 0;
+
     // Build tools for this step (so hooks get the current step number)
-    const tools = buildTools(config, i, resultCache);
+    const tools = buildTools(config, i, resultCache, toolCounters);
+
+    // Per-step hard spending cap (#31). Aborts streamText mid-iteration
+    // when the projected cost would cross the hard cap. A fresh
+    // controller per iteration avoids stale aborted-state leaking.
+    const stepAbort = new AbortController();
+    const parentSignal = signal;
+    const onParentAbort = () => stepAbort.abort(parentSignal?.reason);
+    if (parentSignal) {
+      if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
+      else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
 
     // Call streamText
     const result = streamText({
@@ -410,7 +557,8 @@ async function runAgentLoopDirect(
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: stepCountIs(innerStepLimit),
-      abortSignal: signal,
+      abortSignal: stepAbort.signal,
+      onStepFinish,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
       }),
@@ -419,21 +567,46 @@ async function runAgentLoopDirect(
     // Consume the stream
     let iterationText = '';
     let hasToolCalls = false;
+    const recordsBefore = tracker.getSummary().records.length;
 
-    for await (const part of result.fullStream) {
-      if (signal?.aborted) {
+    try {
+      for await (const part of result.fullStream) {
+        if (signal?.aborted || stepAbort.signal.aborted) {
+          aborted = true;
+          break;
+        }
+
+        switch (part.type) {
+          case 'text-delta':
+            iterationText += part.text;
+            break;
+          case 'tool-call':
+            hasToolCalls = true;
+            break;
+        }
+      }
+    } catch (err) {
+      // An abort inside streamText (including our own hard-cap trip) can
+      // bubble out as an AbortError/DOMException. Treat it as a graceful
+      // end-of-run instead of a crash — the hook has already recorded
+      // every step's usage into the tracker (see PR #65 review fix).
+      if (stepAbort.signal.aborted) {
         aborted = true;
-        break;
+      } else {
+        throw err;
       }
+    } finally {
+      if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    }
 
-      switch (part.type) {
-        case 'text-delta':
-          iterationText += part.text;
-          break;
-        case 'tool-call':
-          hasToolCalls = true;
-          break;
-      }
+    // Fire onUsage for each step the hook recorded during this
+    // iteration. Doing it here (rather than inside the hook) keeps
+    // onUsage dispatch on the outer event-loop tick and consistent
+    // with the pre-#65 contract: one onUsage per step the SDK
+    // completed, including the step that triggered an abort.
+    if (config.hooks?.onUsage) {
+      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      for (const rec of freshRecords) await config.hooks.onUsage(rec);
     }
 
     if (aborted) break;
@@ -442,23 +615,6 @@ async function runAgentLoopDirect(
     const response = await result.response;
     for (const msg of response.messages) {
       messages.push(msg as ModelMessage);
-    }
-
-    // Record usage
-    const usage = await result.totalUsage;
-    const modelId =
-      typeof config.model === 'string'
-        ? config.model
-        : config.model.modelId;
-    const record = tracker.record(
-      i,
-      modelId,
-      usage?.inputTokens ?? 0,
-      usage?.outputTokens ?? 0,
-    );
-
-    if (config.hooks?.onUsage) {
-      await config.hooks.onUsage(record);
     }
 
     // Get final text
@@ -502,7 +658,7 @@ async function runAgentLoopDirect(
   return {
     text: lastText,
     usage: finalUsage,
-    steps: finalUsage.steps,
+    steps: outerIterations,
     aborted,
   };
 }
@@ -524,6 +680,7 @@ export async function* streamAgentLoop(
   const iterationStarts: number[] = [];
   const historyKeepWindow =
     config.historyKeepWindow ?? DEFAULT_HISTORY_KEEP_WINDOW;
+  const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
   // Usage tracking
   const tracker = new UsageTracker({
@@ -604,9 +761,21 @@ export async function* streamAgentLoop(
     );
 
     iterationStarts.push(messages.length);
+    toolCounters.perIteration = 0;
 
     // Build tools for this step
-    const tools = buildTools(config, i, resultCache);
+    const tools = buildTools(config, i, resultCache, toolCounters);
+
+    // Per-step hard spending cap (#31). See runAgentLoopDirect for the
+    // full rationale.
+    const stepAbort = new AbortController();
+    const parentSignal = signal;
+    const onParentAbort = () => stepAbort.abort(parentSignal?.reason);
+    if (parentSignal) {
+      if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
+      else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
 
     // Call streamText
     const result = streamText({
@@ -615,7 +784,8 @@ export async function* streamAgentLoop(
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: stepCountIs(innerStepLimit),
-      abortSignal: signal,
+      abortSignal: stepAbort.signal,
+      onStepFinish,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
       }),
@@ -624,96 +794,129 @@ export async function* streamAgentLoop(
     // Consume the stream and yield events
     let iterationText = '';
     let hasToolCalls = false;
+    let hardCapTripped = false;
+    const recordsBefore = tracker.getSummary().records.length;
 
-    for await (const part of result.fullStream) {
-      if (signal?.aborted) {
-        aborted = true;
-        break;
-      }
-
-      switch (part.type) {
-        case 'text-delta':
-          iterationText += part.text;
-          yield {
-            type: 'thinking',
-            content: part.text,
-            step: i,
-            totalSteps: maxIterations,
-          };
-          break;
-
-        case 'tool-call': {
-          hasToolCalls = true;
-          const toolArgs =
-            'args' in part
-              ? part.args
-              : 'input' in part
-                ? (part as Record<string, unknown>).input
-                : undefined;
-          yield {
-            type: 'tool-call',
-            content: `Called ${part.toolName}`,
-            toolName: part.toolName,
-            toolArgs,
-            step: i,
-            totalSteps: maxIterations,
-          };
+    try {
+      for await (const part of result.fullStream) {
+        if (signal?.aborted || stepAbort.signal.aborted) {
+          aborted = true;
+          if (stepAbort.signal.aborted && !signal?.aborted) hardCapTripped = true;
           break;
         }
 
-        case 'tool-result': {
-          const rawResult =
-            'result' in part
-              ? (part as { result?: unknown }).result
-              : 'output' in part
-                ? (part as Record<string, unknown>).output
+        switch (part.type) {
+          case 'text-delta':
+            iterationText += part.text;
+            yield {
+              type: 'thinking',
+              content: part.text,
+              step: i,
+              totalSteps: maxIterations,
+            };
+            break;
+
+          case 'tool-call': {
+            hasToolCalls = true;
+            const toolArgs =
+              'args' in part
+                ? part.args
+                : 'input' in part
+                  ? (part as Record<string, unknown>).input
+                  : undefined;
+            yield {
+              type: 'tool-call',
+              content: `Called ${part.toolName}`,
+              toolName: part.toolName,
+              toolArgs,
+              step: i,
+              totalSteps: maxIterations,
+            };
+            break;
+          }
+
+          case 'tool-result': {
+            const rawResult =
+              'result' in part
+                ? (part as { result?: unknown }).result
+                : 'output' in part
+                  ? (part as Record<string, unknown>).output
+                  : undefined;
+            const partToolCallId =
+              'toolCallId' in part
+                ? (part as { toolCallId?: string }).toolCallId
                 : undefined;
-          const partToolCallId =
-            'toolCallId' in part
-              ? (part as { toolCallId?: string }).toolCallId
+            const cached = partToolCallId
+              ? resultCache.get(partToolCallId)
               : undefined;
-          const cached = partToolCallId
-            ? resultCache.get(partToolCallId)
-            : undefined;
 
-          // Prefer the cached structured result (produced by our wrapper).
-          // `rawResult` is the AI SDK's serialised form of `modelContent`
-          // — we already have the richer view if the tool ran through the
-          // wrapper, but fall back to the raw string for tools that somehow
-          // bypass it.
-          // `JSON.stringify` returns `undefined` for undefined/function/
-          // symbol values and throws on circular references; fall back
-          // to `String(...)` to keep the event-stream contract a string.
-          const safeStringify = (v: unknown): string => {
-            if (typeof v === 'string') return v;
-            try {
-              const json = JSON.stringify(v);
-              if (typeof json === 'string') return json;
-            } catch { /* fall through */ }
-            return String(v);
-          };
-          const summary = cached ? cached.userSummary : safeStringify(rawResult);
-          const data = cached?.data;
-          const blocked = cached?.blocked;
+            // Prefer the cached structured result (produced by our wrapper).
+            // `rawResult` is the AI SDK's serialised form of `modelContent`
+            // — we already have the richer view if the tool ran through the
+            // wrapper, but fall back to the raw string for tools that somehow
+            // bypass it.
+            // `JSON.stringify` returns `undefined` for undefined/function/
+            // symbol values and throws on circular references; fall back
+            // to `String(...)` to keep the event-stream contract a string.
+            const safeStringify = (v: unknown): string => {
+              if (typeof v === 'string') return v;
+              try {
+                const json = JSON.stringify(v);
+                if (typeof json === 'string') return json;
+              } catch { /* fall through */ }
+              return String(v);
+            };
+            const summary = cached ? cached.userSummary : safeStringify(rawResult);
+            const data = cached?.data;
+            const blocked = cached?.blocked;
 
-          yield {
-            type: 'tool-result',
-            content: '',
-            toolName: part.toolName,
-            summary,
-            data,
-            blocked,
-            // Full raw payload is opt-in — default is summary + data only so
-            // secrets and large file contents don't leak through telemetry.
-            toolResult: emitFullResult ? (cached ?? rawResult) : undefined,
-            step: i,
-            totalSteps: maxIterations,
-          };
+            yield {
+              type: 'tool-result',
+              content: '',
+              toolName: part.toolName,
+              summary,
+              data,
+              blocked,
+              // Full raw payload is opt-in — default is summary + data only so
+              // secrets and large file contents don't leak through telemetry.
+              toolResult: emitFullResult ? (cached ?? rawResult) : undefined,
+              step: i,
+              totalSteps: maxIterations,
+            };
 
-          if (partToolCallId) resultCache.delete(partToolCallId);
-          break;
+            if (partToolCallId) resultCache.delete(partToolCallId);
+            break;
+          }
         }
       }
+    } catch (err) {
+      if (stepAbort.signal.aborted) {
+        aborted = true;
+        if (!signal?.aborted) hardCapTripped = true;
+      } else {
+        if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+        throw err;
+      }
+    } finally {
+      if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    }
+
+    // Fire onUsage for every step the hook recorded this iteration,
+    // including the step that triggered an abort. This is the per-
+    // step-record fix from PR #65 review — before this the abort path
+    // never made it into RunResult.usage.
+    if (config.hooks?.onUsage) {
+      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      for (const rec of freshRecords) await config.hooks.onUsage(rec);
+    }
+
+    if (hardCapTripped) {
+      yield {
+        type: 'error',
+        content: 'Hard spending cap reached',
+        step: i,
+        totalSteps: maxIterations,
+      };
     }
 
     if (aborted) break;
@@ -722,23 +925,6 @@ export async function* streamAgentLoop(
     const response = await result.response;
     for (const msg of response.messages) {
       messages.push(msg as ModelMessage);
-    }
-
-    // Record usage
-    const usage = await result.totalUsage;
-    const modelId =
-      typeof config.model === 'string'
-        ? config.model
-        : config.model.modelId;
-    const record = tracker.record(
-      i,
-      modelId,
-      usage?.inputTokens ?? 0,
-      usage?.outputTokens ?? 0,
-    );
-
-    if (config.hooks?.onUsage) {
-      await config.hooks.onUsage(record);
     }
 
     // Get final text
