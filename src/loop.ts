@@ -67,6 +67,9 @@ import { evaluatePermission } from './permissions.js';
 import { buildSkillsPrompt, createSkillTools } from './skills.js';
 import { UsageTracker } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
+import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
+
+const DEFAULT_HISTORY_KEEP_WINDOW = 1;
 
 /**
  * Per-run cache of structured tool results, keyed by `toolCallId` assigned
@@ -323,6 +326,12 @@ async function runAgentLoopDirect(
   const innerStepLimit = config.innerStepLimit ?? DEFAULT_INNER_STEP_LIMIT;
   const signal = config.signal;
   const resultCache: ToolResultCache = new Map();
+  // History hygiene: track where each outer iteration's messages start
+  // so we can redact tool-output bodies older than `historyKeepWindow`
+  // iterations. See src/loop-history.ts for rationale (#33).
+  const iterationStarts: number[] = [];
+  const historyKeepWindow =
+    config.historyKeepWindow ?? DEFAULT_HISTORY_KEEP_WINDOW;
 
   // Usage tracking
   const tracker = new UsageTracker({
@@ -375,6 +384,18 @@ async function runAgentLoopDirect(
         break;
       }
     }
+
+    // Redact stale tool outputs before the next streamText call. We do
+    // this here (rather than after the previous iteration ended) so
+    // that hooks observing intermediate state still see the fresh data.
+    stripStaleToolOutputs(
+      messages,
+      cutoffForKeepWindow(iterationStarts, historyKeepWindow),
+    );
+
+    // Mark this iteration's messages-start position so future redaction
+    // passes know what counts as "fresh".
+    iterationStarts.push(messages.length);
 
     // Build tools for this step (so hooks get the current step number)
     const tools = buildTools(config, i, resultCache);
@@ -497,6 +518,9 @@ export async function* streamAgentLoop(
   const signal = config.signal;
   const emitFullResult = config.emitFullResult === true;
   const resultCache: ToolResultCache = new Map();
+  const iterationStarts: number[] = [];
+  const historyKeepWindow =
+    config.historyKeepWindow ?? DEFAULT_HISTORY_KEEP_WINDOW;
 
   // Usage tracking
   const tracker = new UsageTracker({
@@ -568,6 +592,15 @@ export async function* streamAgentLoop(
       step: i,
       totalSteps: maxIterations,
     };
+
+    // Redact stale tool outputs from older iterations before the next
+    // model call (#33). The cutoff respects `historyKeepWindow`.
+    stripStaleToolOutputs(
+      messages,
+      cutoffForKeepWindow(iterationStarts, historyKeepWindow),
+    );
+
+    iterationStarts.push(messages.length);
 
     // Build tools for this step
     const tools = buildTools(config, i, resultCache);
