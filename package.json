@@ -48,8 +48,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "changeset": "changeset",
-    "version": "changeset version",
-    "release": "changeset publish",
+    "release": "bash scripts/release.sh",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
