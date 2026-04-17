@@ -37,6 +37,18 @@ log() { echo "▶ $*"; }
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 log "Releasing from branch: $current_branch"
 
+# Resolve the changeset binary explicitly instead of going through
+# `npx changeset`. npx's resolver can report "could not determine
+# executable to run" when the package name doesn't exactly match a
+# binary, and `@changesets/cli` is one of those. The local binary
+# from `node_modules/.bin` is deterministic and fast.
+CHANGESET_BIN="./node_modules/.bin/changeset"
+if [ ! -x "$CHANGESET_BIN" ]; then
+  log "changeset binary missing at $CHANGESET_BIN; running npm install…"
+  npm install --no-audit --no-fund
+fi
+[ -x "$CHANGESET_BIN" ] || die "Still no $CHANGESET_BIN after npm install. Is @changesets/cli in devDependencies?"
+
 # Count pending changeset files (exclude README.md / config.json).
 pending_count="$(find .changeset -maxdepth 1 -name '*.md' ! -name 'README.md' | wc -l | tr -d ' ')"
 if [ "$pending_count" -eq 0 ]; then
@@ -54,7 +66,7 @@ npm run build
 # ── 2. Apply changesets — bumps package.json + writes CHANGELOG.md ───
 
 log "Applying pending changesets…"
-npx changeset version
+"$CHANGESET_BIN" version
 
 # Show what's about to be committed so the operator can eyeball it.
 git --no-pager diff --stat
@@ -70,7 +82,7 @@ git commit -m "chore: release v$new_version"
 # ── 4. Publish to npm + create git tag ───────────────────────────────
 
 log "Publishing to npm (provenance enabled)…"
-NPM_CONFIG_PROVENANCE=true npx changeset publish
+NPM_CONFIG_PROVENANCE=true "$CHANGESET_BIN" publish
 
 # ── 5. Push commit + tags ────────────────────────────────────────────
 
