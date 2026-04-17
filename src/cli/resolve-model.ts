@@ -15,6 +15,36 @@ const DEFAULT_MODELS: Record<string, string> = {
 };
 
 /**
+ * Env var each provider expects. `null` means the provider does not require a key.
+ */
+const REQUIRED_ENV: Record<string, string | null> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  ollama: null,
+};
+
+const PROVIDER_HINTS: Record<string, string> = {
+  anthropic: 'https://console.anthropic.com/',
+  google: 'https://aistudio.google.com/',
+  openai: 'https://platform.openai.com/api-keys',
+};
+
+function assertApiKey(provider: string): void {
+  const envVar = REQUIRED_ENV[provider];
+  if (envVar === null) return; // e.g. ollama
+  if (envVar === undefined) return; // unknown provider — resolveModel throws later
+  const value = process.env[envVar];
+  if (!value || value.length < 4) {
+    const hint = PROVIDER_HINTS[provider];
+    throw new Error(
+      `Missing API key for provider "${provider}". Set ${envVar} in your environment.` +
+      (hint ? `\nGet a key at ${hint}.` : ''),
+    );
+  }
+}
+
+/**
  * Resolve a model from a provider name and optional model ID.
  * Dynamically imports the provider SDK — it must be installed.
  */
@@ -29,6 +59,8 @@ export async function resolveModel(
       `Known providers: ${Object.keys(DEFAULT_MODELS).join(', ')}`,
     );
   }
+
+  assertApiKey(provider);
 
   switch (provider) {
     case 'anthropic': {
