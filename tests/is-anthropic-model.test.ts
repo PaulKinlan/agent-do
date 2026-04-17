@@ -14,10 +14,13 @@ describe('isAnthropicModel', () => {
       expect(isAnthropicModel('anthropic')).toBe(true);
     });
 
-    it('rejects non-Anthropic models that contain "claude" as a substring', () => {
+    it('rejects ids where "claude" appears only mid-string', () => {
       expect(isAnthropicModel('someone-claude-finetune')).toBe(false);
-      expect(isAnthropicModel('claude-parody/v2')).toBe(true); // starts with claude-, we accept by intent
       expect(isAnthropicModel('x-claude-parody')).toBe(false);
+    });
+
+    it('accepts any id that starts with the `claude-` prefix (by intent)', () => {
+      expect(isAnthropicModel('claude-parody/v2')).toBe(true);
     });
 
     it('rejects unrelated models', () => {
@@ -40,6 +43,13 @@ describe('isAnthropicModel', () => {
     it('falls back to modelId prefix when provider is missing', () => {
       expect(isAnthropicModel({ modelId: 'claude-opus-4-7' } as any)).toBe(true);
       expect(isAnthropicModel({ modelId: 'something-claude-in-middle' } as any)).toBe(false);
+    });
+
+    it('accepts OpenRouter-style modelId (anthropic/<id>) when provider is missing', () => {
+      // Regression guard: the old includes('anthropic') check accepted this; the fix
+      // must still route it through Anthropic cache headers.
+      expect(isAnthropicModel({ modelId: 'anthropic/claude-sonnet-4-6' } as any)).toBe(true);
+      expect(isAnthropicModel({ modelId: 'anthropic' } as any)).toBe(true);
     });
 
     it('returns false when neither provider nor modelId matches', () => {
