@@ -79,6 +79,23 @@ describe('estimateCost', () => {
       expect(stderrSpy).toHaveBeenCalledTimes(2);
     });
 
+    it('treats explicit DEFAULT_PRICING as the default table (not custom)', () => {
+      // Regression guard: passing DEFAULT_PRICING explicitly used to be
+      // misclassified as "custom" because the check was `pricing ?
+      // 'custom' : 'default'`. UsageTracker always passes a pricing
+      // table — for the default case it passes DEFAULT_PRICING — so the
+      // bug would warn twice for the same model and label one of them
+      // wrong.
+      estimateCost('shared-model', 1, 1);                     // implicit default
+      estimateCost('shared-model', 1, 1, DEFAULT_PRICING);    // explicit default
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const writes = stderrSpy.mock.calls
+        .map((c: unknown[]) => c[0] as string)
+        .join('');
+      expect(writes).toContain('default table');
+      expect(writes).not.toContain('custom table');
+    });
+
     it('does not warn for known models', () => {
       estimateCost('claude-sonnet-4-6', 1000, 500);
       expect(stderrSpy).not.toHaveBeenCalled();

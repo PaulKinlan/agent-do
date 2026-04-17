@@ -133,10 +133,13 @@ export function estimateCost(
     Object.entries(table).find(([key]) => normalized.startsWith(key))?.[1];
 
   if (!prices) {
-    // Distinguish the default table from a caller-supplied one when
-    // de-duplicating warnings. Avoids spamming and avoids cross-table
-    // suppression.
-    const tableId = pricing ? 'custom' : 'default';
+    // Distinguish the built-in default table from a truly caller-supplied
+    // custom one when de-duplicating warnings. Passing DEFAULT_PRICING
+    // explicitly (UsageTracker does this internally) should still count as
+    // the default — otherwise the same model would warn twice and appear
+    // in the warning text as "custom".
+    const tableId =
+      pricing === undefined || pricing === DEFAULT_PRICING ? 'default' : 'custom';
     const key = `${tableId}:${normalized}`;
     if (!WARNED_MODELS.has(key)) {
       WARNED_MODELS.add(key);
