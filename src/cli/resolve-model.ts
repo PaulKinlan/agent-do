@@ -70,20 +70,20 @@ export async function resolveModel(
 
   switch (provider) {
     case 'anthropic': {
-      const { createAnthropic } = await tryImport('@ai-sdk/anthropic', provider);
+      const { createAnthropic } = await tryImport('@ai-sdk/anthropic', provider, 'createAnthropic');
       return createAnthropic()(id) as LanguageModel;
     }
     case 'google': {
-      const { createGoogleGenerativeAI } = await tryImport('@ai-sdk/google', provider);
+      const { createGoogleGenerativeAI } = await tryImport('@ai-sdk/google', provider, 'createGoogleGenerativeAI');
       return createGoogleGenerativeAI()(id) as LanguageModel;
     }
     case 'openai': {
-      const { createOpenAI } = await tryImport('@ai-sdk/openai', provider);
+      const { createOpenAI } = await tryImport('@ai-sdk/openai', provider, 'createOpenAI');
       return createOpenAI()(id) as LanguageModel;
     }
     case 'ollama': {
       // Use OpenAI-compatible endpoint for Ollama (consistent with examples)
-      const { createOpenAI } = await tryImport('@ai-sdk/openai', 'ollama (via @ai-sdk/openai)');
+      const { createOpenAI } = await tryImport('@ai-sdk/openai', 'ollama (via @ai-sdk/openai)', 'createOpenAI');
       return createOpenAI({
         baseURL: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434/v1',
         apiKey: 'ollama',
@@ -108,9 +108,50 @@ export async function resolveModel(
   }
 }
 
-async function tryImport(pkg: string, provider: string): Promise<any> {
+/**
+ * Allowlisted provider package names. Typed as a literal union so any
+ * future caller that tries to pass an arbitrary string (e.g. a
+ * user-controlled `--provider <pkg>` flag) is rejected at compile time
+ * — the dynamic-import surface only accepts these exact spellings.
+ */
+type ProviderPackage =
+  | '@ai-sdk/anthropic'
+  | '@ai-sdk/google'
+  | '@ai-sdk/openai';
+
+/**
+ * Dynamically import a provider SDK and assert the expected factory
+ * export is present. The `expectedExport` check defends against three
+ * realistic supply-chain scenarios (see issue #40):
+ *
+ * 1. **Tampered installation** — a transitive update replaces the
+ *    upstream package's contents without changing the public API
+ *    shape; the missing factory is caught at import time.
+ * 2. **Dependency-confusion / typosquat** — a malicious package
+ *    masquerading as `@ai-sdk/foo` won't have the SDK's signature
+ *    factory function and is rejected before it can ever be invoked.
+ * 3. **Future refactors** — if anyone wires `--provider <pkg>` to take
+ *    user input, the literal-union type on `pkg` blocks arbitrary
+ *    strings at compile time.
+ *
+ * The shape check is deliberately minimal — `typeof export === 'function'`
+ * — because the SDK's full surface area shifts between minor versions
+ * and richer validation would create false positives.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function tryImport(
+  pkg: ProviderPackage,
+  provider: string,
+  expectedExport: string,
+  // The SDK boundary needs `any` because each provider exports
+  // factories with provider-specific signatures, and the rest of this
+  // file casts the resulting model through `as LanguageModel`. The
+  // safety here is the *runtime* shape check below, not the type.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<Record<string, any>> {
+  let mod: Record<string, unknown>;
   try {
-    return await import(pkg);
+    mod = (await import(pkg)) as Record<string, unknown>;
   } catch {
     throw new Error(
       `Provider "${provider}" needs "${pkg}" installed alongside agent-do.\n` +
@@ -126,6 +167,20 @@ async function tryImport(pkg: string, provider: string): Promise<any> {
       `See: https://sdk.vercel.ai/providers`,
     );
   }
+
+  if (typeof mod[expectedExport] !== 'function') {
+    // The package loaded but doesn't expose the factory we need. This
+    // could be a tampered install, a typosquat, or simply an upstream
+    // breaking change. Either way, refuse to invoke an unfamiliar shape.
+    throw new Error(
+      `Provider SDK "${pkg}" is missing the expected export "${expectedExport}". ` +
+      `This usually means the installed package has been tampered with, replaced ` +
+      `by a typosquat, or has had a breaking change. Reinstall from a trusted ` +
+      `source: \`npm install ${pkg}\`.`,
+    );
+  }
+
+  return mod;
 }
 
 /**
