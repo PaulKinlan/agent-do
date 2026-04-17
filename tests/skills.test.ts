@@ -249,7 +249,7 @@ describe('InMemorySkillStore', () => {
     // an SSRF footgun — a hostile registry could return a URL that the
     // agent then auto-fetches with the user's credentials. The field is
     // gone from the public type; this test guards against accidental
-    // re-introduction by an InMemorySkillStore subclass.
+    // re-introduction in InMemorySkillStore itself.
     const store = new InMemorySkillStore();
     await store.install({
       id: 'x',
