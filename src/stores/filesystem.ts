@@ -35,8 +35,9 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
-import type { MemoryStore, FileEntry } from '../stores.js';
+import type { MemoryStore, FileEntry, SearchOptions } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
+import { buildLineMatcher } from './search-matcher.js';
 import { validateAgentId } from './agent-id.js';
 
 export type { FilesystemMemoryStoreOptions } from '../types.js';
@@ -241,18 +242,28 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   // (search) ───────────────────────────────────────────────────────
-  async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
+  async search(
+    agentId: string,
+    pattern: string,
+    dirPath?: string,
+    options?: SearchOptions,
+  ): Promise<Array<{ path: string; line: string }>> {
+    // Build the matcher once. Default is a literal substring search;
+    // regex mode is opt-in and goes through the shared safety check
+    // (bounded length + nested-quantifier / alternation-overlap
+    // heuristic). See `src/stores/search-matcher.ts` and issue #21.
+    const matcher = buildLineMatcher(pattern, { asRegex: options?.regex === true });
     const results: Array<{ path: string; line: string }> = [];
     const searchDir = await this.resolve(agentId, dirPath || '.');
     const agentRoot = await this.resolve(agentId, '.');
-    await this.searchRecursive(searchDir, agentRoot, pattern, results);
+    await this.searchRecursive(searchDir, agentRoot, matcher, results);
     return results;
   }
 
   private async searchRecursive(
     dir: string,
     baseDir: string,
-    pattern: string,
+    matcher: (line: string) => boolean,
     results: Array<{ path: string; line: string }>,
   ): Promise<void> {
     let entries: fs.Dirent[];
@@ -272,18 +283,16 @@ export class FilesystemMemoryStore implements MemoryStore {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules' || entry.name === '.git') continue;
-        await this.searchRecursive(full, baseDir, pattern, results);
+        await this.searchRecursive(full, baseDir, matcher, results);
         continue;
       }
       try {
         const content = await fsp.readFile(full, 'utf-8');
-        const regex = new RegExp(pattern, 'gi');
         for (const line of content.split('\n')) {
-          if (regex.test(line)) {
+          if (matcher(line)) {
             results.push({ path: path.relative(baseDir, full), line: line.trim() });
             if (results.length >= 100) return;
           }
-          regex.lastIndex = 0;
         }
       } catch {
         /* skip binary / unreadable files */

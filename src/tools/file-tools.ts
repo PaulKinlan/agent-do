@@ -281,23 +281,36 @@ export function createFileTools(
     }),
 
     grep_file: tool({
-      description: 'Search for a text pattern across files. Returns matching file paths and lines.',
+      description:
+        'Search for a text pattern across files. Returns matching file paths and lines. ' +
+        'Default is a literal substring match (case-insensitive). Pass `regex: true` to ' +
+        'use a regular expression — patterns are checked for catastrophic backtracking ' +
+        'before compiling and rejected if too long or shaped like (a+)+.',
       inputSchema: s(
+        // The 256-char cap is a regex-mode guard (ReDoS surface scales
+        // with pattern length); literal substring searches safely
+        // accept longer strings (e.g. a pasted error signature). The
+        // store-level `buildLineMatcher` applies the cap only in regex
+        // mode, so lifting it here keeps the tool schema aligned with
+        // the underlying policy. See PR #63 review.
         z.object({
-          pattern: z.string().describe('The text pattern to search for'),
+          pattern: z.string().describe('The text pattern to search for. Literal substring by default.'),
           path: z.string().optional().describe('Directory to search within (defaults to root)'),
+          regex: z.boolean().optional().describe('Treat pattern as a regex (opt-in; safety-checked)'),
         }),
       ),
       execute: async ({
         pattern,
         path,
+        regex,
       }: {
         pattern: string;
         path?: string;
+        regex?: boolean;
       }): Promise<ToolResult> => {
         const scope = path ?? '.';
         try {
-          const results = await store.search(agentId, pattern, path);
+          const results = await store.search(agentId, pattern, path, { regex });
           if (results.length === 0) {
             return {
               modelContent: `No matches found for "${pattern}"`,
