@@ -72,4 +72,55 @@ describe('saved agents', () => {
     const result = await loadSavedAgent('my-agent_v2');
     expect(result).toBeNull();
   });
+
+  it('loadSavedAgent walks up the directory tree to find agents', async () => {
+    // Create agent in the parent (testDir), then chdir into a nested child.
+    const parentAgents = path.join(testDir, '.agent-do', 'agents');
+    await fs.promises.mkdir(parentAgents, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(parentAgents, 'reviewer.json'),
+      JSON.stringify({
+        name: 'reviewer',
+        provider: 'anthropic',
+        systemPrompt: 'Review code',
+        memoryDir: '.data',
+        readOnly: false,
+        maxIterations: 10,
+        noTools: false,
+        createdAt: '2026-04-17T00:00:00Z',
+      }),
+    );
+
+    const nested = path.join(testDir, 'a', 'b', 'c');
+    await fs.promises.mkdir(nested, { recursive: true });
+    process.chdir(nested);
+
+    const loaded = await loadSavedAgent('reviewer');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.name).toBe('reviewer');
+    expect(loaded!.provider).toBe('anthropic');
+  });
+
+  it('loadSavedAgent prefers the closest ancestor when names collide', async () => {
+    // Parent defines "shared" one way, child defines it differently.
+    const parentAgents = path.join(testDir, '.agent-do', 'agents');
+    await fs.promises.mkdir(parentAgents, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(parentAgents, 'shared.json'),
+      JSON.stringify({ name: 'shared', provider: 'anthropic', systemPrompt: 'parent version', memoryDir: '.data', readOnly: false, maxIterations: 10, noTools: false, createdAt: '' }),
+    );
+
+    const child = path.join(testDir, 'child');
+    const childAgents = path.join(child, '.agent-do', 'agents');
+    await fs.promises.mkdir(childAgents, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(childAgents, 'shared.json'),
+      JSON.stringify({ name: 'shared', provider: 'google', systemPrompt: 'child version', memoryDir: '.data', readOnly: false, maxIterations: 10, noTools: false, createdAt: '' }),
+    );
+
+    process.chdir(child);
+    const loaded = await loadSavedAgent('shared');
+    expect(loaded!.provider).toBe('google');
+    expect(loaded!.systemPrompt).toBe('child version');
+  });
 });
