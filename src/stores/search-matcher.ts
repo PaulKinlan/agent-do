@@ -75,6 +75,31 @@ function hasDangerousNesting(pattern: string): boolean {
     if (ch === '(') {
       groupStack.push({ risky: false });
       i++;
+      // Skip group-prefix tokens so they aren't misread as quantifiers
+      // later (Codex #63 follow-up: `(?:…)`, `(?=…)`, `(?!…)`,
+      // `(?<=…)`, `(?<!…)`, `(?<name>…)`). The `?` right after `(` is
+      // part of the introducer, not a `0-or-1` quantifier on an
+      // imaginary preceding atom. Without this `(?:ab)+` reads as a
+      // group whose body contains a `?` quantifier, and every
+      // non-capturing / lookaround / named group with a trailing
+      // quantifier trips the guard.
+      if (pattern[i] === '?') {
+        i++;
+        // Lookbehind (`(?<=` or `(?<!`) and named capture (`(?<name>`)
+        // both start with `<`. For named captures we also skip past
+        // the `>` so the name isn't scanned as regex structure.
+        if (pattern[i] === '<') {
+          i++;
+          if (pattern[i] !== '=' && pattern[i] !== '!') {
+            while (i < pattern.length && pattern[i] !== '>') i++;
+            if (pattern[i] === '>') i++;
+          }
+        } else if (pattern[i] === '=' || pattern[i] === '!' || pattern[i] === ':') {
+          // Lookahead / non-capturing — single-char prefix, already
+          // past the `?`; just consume the next char.
+          i++;
+        }
+      }
       continue;
     }
     if (ch === ')') {

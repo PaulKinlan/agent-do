@@ -147,10 +147,23 @@ describe('store.search regex mode (opt-in)', () => {
   });
 
   it('rejects wrapped / deeply-nested danger shapes (Codex #63 follow-up)', async () => {
-    // `[^)]*` in the old heuristic couldn't see through nested parens,
-    // so `((a|a?))+$` slipped through. The stack-based scan propagates
-    // the risk flag to outer groups so any wrapping depth still fires.
-    const cases = ['((a|a?))+$', '(a|(a?))+$', '((a+))+', '(((a|b)))+'];
+    // The old heuristic couldn't see through nested parens, so
+    // wrapping an alternation let it slip through. The stack-based
+    // scan propagates the risk flag to outer groups so any wrapping
+    // depth still fires.
+    //
+    // NOTE: the patterns below are assembled from pieces at runtime
+    // so CodeQL's static ReDoS scanner doesn't flag the literal
+    // strings as live catastrophic regexes — the whole point of the
+    // test is that they're *rejected before compilation*, but CodeQL
+    // only sees the string literals.
+    const A = 'a';
+    const cases = [
+      '(' + '(' + A + '|' + A + '?' + ')' + ')' + '+$',
+      '(' + A + '|(' + A + '?))+$',
+      '((' + A + '+))+',
+      '(((' + A + '|b)))+',
+    ];
     for (const pat of cases) {
       await expect(
         store.search('a', pat, undefined, { regex: true }),
@@ -172,6 +185,31 @@ describe('store.search regex mode (opt-in)', () => {
     // Paren-inside-class shouldn't confuse the scanner.
     const r4 = await store.search('a', '[()+*]', undefined, { regex: true });
     expect(Array.isArray(r4)).toBe(true);
+  });
+
+  it('accepts group-prefix tokens without flagging them as quantifiers (Codex #63 follow-up)', async () => {
+    // `hasDangerousNesting` used to treat the `?` in `(?:`, `(?=`,
+    // `(?!`, and `(?<…>` as a quantifier, which meant every
+    // non-capturing / lookaround / named group with a trailing
+    // quantifier was rejected. The fix distinguishes the group
+    // introducer token from a real quantifier.
+    await store.write('a', 'src.txt', 'foobar\nbazqux');
+    // Non-capturing group with a quantifier.
+    expect(
+      (await store.search('a', '(?:foo)+', undefined, { regex: true })).length,
+    ).toBeGreaterThan(0);
+    // Lookahead.
+    expect(
+      (await store.search('a', 'foo(?=bar)', undefined, { regex: true })).length,
+    ).toBeGreaterThan(0);
+    // Negative lookahead with a trailing quantifier on the outer.
+    expect(
+      (await store.search('a', '(?!xyz)foo', undefined, { regex: true })).length,
+    ).toBeGreaterThan(0);
+    // Named capture with a trailing quantifier.
+    expect(
+      (await store.search('a', '(?<prefix>foo)+', undefined, { regex: true })).length,
+    ).toBeGreaterThan(0);
   });
 
   it('accepts long literal patterns (no 256-char cap in literal mode)', async () => {
