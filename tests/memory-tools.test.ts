@@ -10,11 +10,12 @@ describe('createMemoryTools', () => {
     store = new InMemoryMemoryStore();
   });
 
-  async function exec(toolName: string, args: Record<string, unknown>) {
+  async function exec(toolName: string, args: Record<string, unknown>): Promise<string> {
     const tools = createMemoryTools(store, agentId);
     const tool = tools[toolName];
     if (!tool || !tool.execute) throw new Error(`Tool ${toolName} not found`);
-    return (tool.execute as Function)(args, {}) as Promise<string>;
+    const raw = await (tool.execute as Function)(args, {});
+    return typeof raw === 'string' ? raw : (raw.modelContent as string);
   }
 
   it('exposes memory_* prefixed tools only', () => {
@@ -31,7 +32,9 @@ describe('createMemoryTools', () => {
   it('writes and reads back from memory', async () => {
     await exec('memory_write', { path: 'note.md', content: 'remember this' });
     const out = await exec('memory_read', { path: 'note.md' });
-    expect(out).toBe('remember this');
+    // memory_read wraps content in <tool_output> markers.
+    expect(out).toContain('<tool_output tool="memory_read"');
+    expect(out).toContain('remember this');
   });
 
   it('memory_list reports an empty memory on first use', async () => {
@@ -63,6 +66,7 @@ describe('createMemoryTools', () => {
     const theirRead = await (theirTools.memory_read!.execute as Function)(
       { path: 'secret.txt' }, {},
     );
-    expect(theirRead).toMatch(/not found|Error/i);
+    const asString = typeof theirRead === 'string' ? theirRead : theirRead.modelContent;
+    expect(asString).toMatch(/not found|Error/i);
   });
 });

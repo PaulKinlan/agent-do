@@ -13,7 +13,26 @@ export interface ProgressEvent {
   content: string;
   toolName?: string;
   toolArgs?: unknown;
+  /**
+   * Full raw tool result. Only populated on `tool-result` events when the
+   * agent was created with `emitFullResult: true`. See issue #48.
+   *
+   * Default behaviour emits only `summary` + `data` so secrets / large
+   * file contents don't leak through logs and telemetry.
+   */
   toolResult?: unknown;
+  /**
+   * Short human-readable summary of a `tool-result` event. Includes paths,
+   * sizes, error codes — safe for operator logs; not intended for the model.
+   */
+  summary?: string;
+  /**
+   * Structured metadata about the tool invocation (tool-specific keys like
+   * `path`, `bytes`, `matchCount`). Stable enough for programmatic consumers.
+   */
+  data?: Record<string, unknown>;
+  /** True when a `tool-result` represents a blocked / denied operation. */
+  blocked?: boolean;
   step?: number;
   totalSteps?: number;
 }
@@ -154,6 +173,18 @@ export interface AgentConfig {
     }) => Promise<boolean>;
   };
   signal?: AbortSignal;
+  /**
+   * Include full raw tool results on `tool-result` progress events.
+   *
+   * Default (`false`): events carry only `summary` + structured `data`.
+   * File contents, command output, and anything else the tool returned
+   * stay out of the event stream. This keeps secrets out of CI logs and
+   * telemetry by default.
+   *
+   * Set `true` when you need full fidelity for debugging or when you're
+   * piping events to a trusted consumer that needs the raw payload.
+   */
+  emitFullResult?: boolean;
 }
 
 // A message in conversation history

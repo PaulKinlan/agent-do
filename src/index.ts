@@ -22,6 +22,10 @@ export { createMemoryTools } from './tools/memory-tools.js';
 // createWorkspaceTools or createMemoryTools unless you need a custom store.
 export { createFileTools } from './tools/file-tools.js';
 
+// Structured tool results (see issue #48)
+export type { ToolResult } from './tools/types.js';
+export { normaliseToolResult, isToolResult } from './tools/types.js';
+
 // Usage
 export { UsageTracker, estimateCost, DEFAULT_PRICING } from './usage.js';
 

@@ -20,8 +20,24 @@ export interface ParsedArgs {
   maxIterations: number;
   noTools: boolean;
   verbose: boolean;
+  /**
+   * Show full tool results (file bodies, etc.) in verbose output. Default
+   * only shows the structured one-line summary per tool call so secrets
+   * and large payloads stay out of terminals / CI logs.
+   */
+  showContent: boolean;
   json: boolean;
   help: boolean;
+  /**
+   * Extra deny-list patterns (gitignore-style) added on top of the
+   * built-in defaults and any `.agent-doignore` in the working directory.
+   */
+  exclude: string[];
+  /**
+   * Bypass the built-in sensitive-file deny list (`.env`, `.ssh/**`,
+   * credential material). `--exclude` and `.agent-doignore` still apply.
+   */
+  includeSensitive: boolean;
   // Eval-specific
   output: 'console' | 'json' | 'csv';
   compare?: string[];
@@ -46,8 +62,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     maxIterations: 20,
     noTools: false,
     verbose: false,
+    showContent: false,
     json: false,
     help: false,
+    exclude: [],
+    includeSensitive: false,
     output: 'console',
     concurrency: 1,
   };
@@ -102,6 +121,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.noTools = true;
     } else if (arg === '--verbose') {
       args.verbose = true;
+    } else if (arg === '--show-content') {
+      args.showContent = true;
+      // Showing full content implies verbose output; otherwise the flag
+      // has nothing to attach to in the default quiet mode.
+      args.verbose = true;
+    } else if (arg === '--exclude') {
+      const val = requireValue(argv, ++i, '--exclude');
+      args.exclude.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
+    } else if (arg === '--include-sensitive') {
+      args.includeSensitive = true;
     } else if (arg === '--json') {
       args.json = true;
     } else if (arg === '--output') {

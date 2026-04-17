@@ -105,9 +105,12 @@ Options:
   --memory <dir>         Memory directory for --with-memory (default: .agent-do/)
   --with-memory          Enable memory tools (agent scratchpad)
   --read-only            Block all writes (workspace + memory)
+  --exclude <globs>      Extra deny-list patterns (comma-separated, gitignore-style)
+  --include-sensitive    Bypass built-in sensitive-file deny list (.env, .ssh, etc.)
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
-  --verbose              Show tool calls
+  --verbose              Show per-step thinking + tool summaries (stderr)
+  --show-content         With --verbose: also include each tool's full result
   --json                 JSON output
   --output <fmt>         console | json | csv (eval only)
   --compare <providers>  Compare providers (eval only, comma-separated)
@@ -132,6 +135,87 @@ knows whether it's touching your project or its own notes:
   project.
 
 Both respect `--read-only`. To disable all file access, use `--no-tools`.
+
+### Sensitive-file deny list
+
+Workspace tools ship with a gitignore-style deny list that blocks
+access to credential material by default:
+
+- **Reads blocked:** `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`,
+  `.ssh/**`, `.aws/**`, `.gcloud/**`, `.kube/**`, `.git/objects/**`,
+  `.git/hooks/**`.
+- **Writes blocked** (above plus): `.git/**`, `node_modules/**`.
+
+Reads of `node_modules/**` and `.git/HEAD` are allowed — the agent can
+inspect dependencies and branch state but cannot silently rewrite git
+hooks or clobber installed modules.
+
+Layer your own policy on top:
+
+- `--exclude 'secrets/**,*.cred'` — per-invocation patterns.
+- `.agent-doignore` at the workspace root — project-scoped, gitignore-
+  style file. Merged with the defaults.
+- `--include-sensitive` — opt out of the built-in defaults when you
+  explicitly want the old fully-open behaviour. `.agent-doignore` and
+  `--exclude` still apply.
+
+Blocked operations surface in `--verbose` logs as `[blocked]` entries
+with the matched rule; the model sees only that it was blocked (not
+the rule name) to avoid letting it probe the policy.
+
+### Tool result layering: model vs user vs programmatic
+
+Every built-in tool returns a structured `ToolResult` with three views:
+
+- **`modelContent`** — the string the LLM sees. File contents are
+  wrapped in `<tool_output tool="…" path="…">…</tool_output>` markers,
+  capped at 256 KB (`maxReadBytes`), and common prompt-injection
+  markers (`ignore previous instructions`, `<system>` tags) are
+  replaced with a visible `[redacted prompt-injection marker]`.
+- **`userSummary`** — a one-liner for operator logs. Includes real
+  paths, byte counts, line counts, match counts, block reasons, errno
+  codes.
+- **`data`** — structured fields (`path`, `bytes`, `lines`, `truncated`,
+  `redactedMarkerCount`, `matchCount`, `hiddenByDenyList`, `rule`, …)
+  for programmatic consumers.
+
+In `--verbose` CLI mode you see the `userSummary` + a compact `data`
+line on stderr. Full raw tool output is withheld by default so secrets
+and large file contents don't leak into CI logs; pass `--show-content`
+to include it.
+
+Library consumers who need the full raw payload on `tool-result`
+progress events pass `emitFullResult: true` in `AgentConfig`:
+
+```ts
+const agent = createAgent({ /* ... */, emitFullResult: true });
+for await (const event of agent.stream('review the code')) {
+  if (event.type === 'tool-result') {
+    console.log(event.summary);            // always present
+    console.log(event.data);                // structured, always present
+    console.log(event.toolResult);          // only when emitFullResult: true
+  }
+}
+```
+
+Custom tools can return a `ToolResult` directly for full control:
+
+```ts
+import { tool } from 'ai';
+import type { ToolResult } from 'agent-do';
+
+const myTool = tool({
+  description: 'Do a thing',
+  inputSchema: z.object({ path: z.string() }),
+  execute: async ({ path }): Promise<ToolResult> => ({
+    modelContent: 'Short sanitised view for the model',
+    userSummary: `[my_tool] ${path} — did a thing`,
+    data: { path, widgetCount: 42 },
+  }),
+});
+```
+
+String returns still work and are normalised automatically.
 
 ### Piping
 
