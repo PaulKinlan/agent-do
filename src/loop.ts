@@ -18,10 +18,20 @@ import type {
 
 // ── Cache Control ──
 
-function isAnthropicModel(model: LanguageModel): boolean {
-  if (typeof model === 'string') return model.includes('anthropic') || model.includes('claude');
-  return model.provider === 'anthropic' || model.provider?.includes('anthropic') ||
-    model.modelId?.includes('anthropic') || model.modelId?.includes('claude');
+export function isAnthropicModel(model: LanguageModel): boolean {
+  if (typeof model === 'string') {
+    // Anthropic-minted IDs start with `claude-`; OpenRouter-style IDs start with `anthropic/`.
+    // Substring matching would flag e.g. a parody model named `claude-parody` from another vendor.
+    return model === 'anthropic' || model.startsWith('anthropic/') || model.startsWith('claude-');
+  }
+  // Vercel AI SDK providers expose a structured string like "anthropic.chat" or "openai.responses".
+  // When provider is populated it is authoritative — trust it and ignore modelId even if the
+  // modelId contains "claude" (e.g. a non-Anthropic vendor finetune). Only fall back to modelId
+  // when the provider field is missing entirely.
+  const provider = typeof model.provider === 'string' ? model.provider : undefined;
+  if (provider !== undefined) return provider.startsWith('anthropic');
+  const modelId = typeof model.modelId === 'string' ? model.modelId : undefined;
+  return modelId?.startsWith('claude-') === true;
 }
 
 /**
