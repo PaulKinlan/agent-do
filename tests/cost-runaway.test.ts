@@ -313,3 +313,46 @@ describe('M-07: buildOnStepFinish', () => {
     expect(tracker.getSummary().totalCost).toBeCloseTo(0.03, 5);
   });
 });
+
+// ─── #65 follow-up: totalUsage fallback + outerIterations placement ─────
+
+describe('runAgentLoop — usage fallback when onStepFinish payloads omit usage (Codex #65 P1 follow-up)', () => {
+  it('falls back to result.totalUsage so the tracker still ledgers the step', async () => {
+    // The mock model (via `ai/test`) feeds the SDK a `finish` part
+    // containing `{ inputTokens, outputTokens }`, but the SDK v6
+    // normalisation strips those top-level fields before the
+    // `onStepFinish` hook sees them (see PR #65 debug notes in
+    // src/loop.ts). That's exactly the scenario this test covers:
+    // the hook records nothing for the iteration because the payload
+    // has no usage. Without the fallback, the tracker would also stay
+    // empty and `checkLimits()` could not fire.
+    //
+    // With the fallback, `result.totalUsage` populates one record per
+    // iteration. The mock's normalised usage object also lacks
+    // top-level tokens, so the cost is 0 — but the *record* exists,
+    // which is what the fallback is supposed to guarantee.
+    const config = baseConfig({
+      model: mockModel({ responses: [{ text: 'done' }] }),
+      maxIterations: 3,
+      usage: { enabled: true },
+    });
+    const result = await runAgentLoop(config, 'task');
+    expect(result.usage.records.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('runAgentLoop — outerIterations placement (Codex #65 P2 follow-up)', () => {
+  it('does not count an iteration that exits via onStepStart=stop', async () => {
+    // If `onStepStart` returns { decision: 'stop' } on the very first
+    // iteration, no model call happens. The reported `steps` should
+    // be 0, not 1.
+    const config = baseConfig({
+      model: mockModel({ responses: [{ text: 'unreachable' }] }),
+      hooks: {
+        onStepStart: async () => ({ decision: 'stop' as const }),
+      },
+    });
+    const result = await runAgentLoop(config, 'task');
+    expect(result.steps).toBe(0);
+  });
+});

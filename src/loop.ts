@@ -493,7 +493,6 @@ async function runAgentLoopDirect(
       aborted = true;
       break;
     }
-    outerIterations = i + 1;
 
     // Step start hook
     if (config.hooks?.onStepStart) {
@@ -516,6 +515,12 @@ async function runAgentLoopDirect(
         break;
       }
     }
+
+    // All pre-step gates passed — this iteration will call the model.
+    // Count it now (Codex #65 P2: incrementing before the gates
+    // inflated RunResult.steps when onStepStart returned `stop` or
+    // the soft limit tripped).
+    outerIterations = i + 1;
 
     // Redact stale tool outputs before the next streamText call. We do
     // this here (rather than after the previous iteration ended) so
@@ -596,11 +601,35 @@ async function runAgentLoopDirect(
       if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
     }
 
-    // Fire onUsage for each step the hook recorded during this
-    // iteration. Doing it here (rather than inside the hook) keeps
-    // onUsage dispatch on the outer event-loop tick and consistent
-    // with the pre-#65 contract: one onUsage per step the SDK
-    // completed, including the step that triggered an abort.
+    // Fallback usage recording (Codex #65 P1 follow-up). The hook is
+    // the authoritative per-step ledger, but some providers omit
+    // `step.usage` entirely. If the hook recorded nothing for this
+    // iteration, fall back to `result.totalUsage` so the tracker and
+    // `checkLimits()` still see the spend. A clean iteration reaches
+    // this point; an aborted iteration skips it (the hook ran on the
+    // step that triggered the abort, so the aborted spend is already
+    // captured).
+    if (!aborted) {
+      const afterCount = tracker.getSummary().records.length;
+      if (afterCount === recordsBefore && config.usage?.enabled !== false) {
+        try {
+          const usage = await result.totalUsage;
+          const modelId =
+            typeof config.model === 'string'
+              ? config.model
+              : config.model.modelId;
+          tracker.record(
+            i,
+            modelId,
+            usage?.inputTokens ?? 0,
+            usage?.outputTokens ?? 0,
+          );
+        } catch { /* totalUsage unavailable — tracker simply lacks this step */ }
+      }
+    }
+
+    // Fire onUsage for each record added during this iteration
+    // (whether the hook wrote it or the fallback above did).
     if (config.hooks?.onUsage) {
       const freshRecords = tracker.getSummary().records.slice(recordsBefore);
       for (const rec of freshRecords) await config.hooks.onUsage(rec);
@@ -898,10 +927,32 @@ export async function* streamAgentLoop(
       if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
     }
 
-    // Fire onUsage for every step the hook recorded this iteration,
-    // including the step that triggered an abort. This is the per-
-    // step-record fix from PR #65 review — before this the abort path
-    // never made it into RunResult.usage.
+    // Fallback usage recording (same as runAgentLoopDirect; Codex #65
+    // P1 follow-up). If the hook recorded nothing for this iteration
+    // and the iteration wasn't aborted, fall back to
+    // `result.totalUsage` so providers that omit per-step usage still
+    // populate the tracker.
+    if (!aborted) {
+      const afterCount = tracker.getSummary().records.length;
+      if (afterCount === recordsBefore && config.usage?.enabled !== false) {
+        try {
+          const usage = await result.totalUsage;
+          const modelId =
+            typeof config.model === 'string'
+              ? config.model
+              : config.model.modelId;
+          tracker.record(
+            i,
+            modelId,
+            usage?.inputTokens ?? 0,
+            usage?.outputTokens ?? 0,
+          );
+        } catch { /* totalUsage unavailable — tracker simply lacks this step */ }
+      }
+    }
+
+    // Fire onUsage for every record added during this iteration
+    // (whether the hook wrote it or the fallback above did).
     if (config.hooks?.onUsage) {
       const freshRecords = tracker.getSummary().records.slice(recordsBefore);
       for (const rec of freshRecords) await config.hooks.onUsage(rec);
