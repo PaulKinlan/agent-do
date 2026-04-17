@@ -43,6 +43,22 @@ export interface ParsedArgs {
   compare?: string[];
   concurrency: number;
   /**
+   * Opt-in for script-file import (#19, C-03). Without this flag, `run
+   * <path>` refuses to `await import()` a local file. Only saved-agent
+   * names are accepted unless the user explicitly says "yes I know what
+   * I'm doing, run arbitrary code from this path."
+   */
+  script: boolean;
+  /**
+   * Skip interactive confirmation when `--script` is passed. Required for
+   * non-TTY contexts (CI, shell piping) that can't prompt.
+   *
+   * `-y`/`--yes` sets both this flag and `acceptAll` — the operator
+   * meaning is the same ("skip all interactive prompts this run"), so
+   * it would be surprising to have them diverge.
+   */
+  yes: boolean;
+  /**
    * Accept every tool call without prompting (#17, C-01).
    *
    * Previously the CLI hard-coded this behaviour. The default now asks
@@ -85,6 +101,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     includeSensitive: false,
     output: 'console',
     concurrency: 1,
+    script: false,
+    yes: false,
     acceptAll: false,
     allow: [],
   };
@@ -166,7 +184,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
       if (isNaN(args.concurrency) || args.concurrency < 1) {
         throw new Error('--concurrency must be a positive integer');
       }
-    } else if (arg === '--accept-all' || arg === '--yes' || arg === '-y') {
+    } else if (arg === '--script') {
+      args.script = true;
+    } else if (arg === '--accept-all') {
+      args.acceptAll = true;
+    } else if (arg === '-y' || arg === '--yes') {
+      // `-y`/`--yes` means "skip all interactive prompts this run": it
+      // satisfies both the `--script` confirmation prompt AND the
+      // per-tool permission prompt, so set both flags. Operators who
+      // only want one semantic should use the specific flag name
+      // (`--accept-all` for permissions without implying script confirm,
+      // or vice versa when/if a dedicated flag lands).
+      args.yes = true;
       args.acceptAll = true;
     } else if (arg === '--allow') {
       const val = requireValue(argv, ++i, '--allow');
