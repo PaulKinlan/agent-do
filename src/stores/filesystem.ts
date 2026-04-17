@@ -28,8 +28,24 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { MemoryStore, FileEntry } from '../stores.js';
+import type { MemoryStore, FileEntry, SearchOptions } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
+
+/**
+ * Hard cap on the regex pattern length. 256 chars is comfortably more
+ * than enough for realistic search patterns and tightly limits the
+ * combinatoric blast radius of an LLM-supplied catastrophic regex.
+ */
+const MAX_REGEX_PATTERN_LENGTH = 256;
+
+/**
+ * Conservative heuristic for catastrophic-backtracking patterns. Detects
+ * the canonical "nested quantifier" shape `(...[+*]...)[+*]` that
+ * causes exponential time on adversarial inputs. Not exhaustive — a
+ * truly hostile regex can still slip through — but covers the common
+ * ReDoS patterns flagged by `safe-regex2` without adding a dependency.
+ */
+const NESTED_QUANTIFIER_RE = /\([^)]*[+*][^)]*\)[+*?]/;
 
 export type { FilesystemMemoryStoreOptions } from '../types.js';
 
@@ -120,15 +136,25 @@ export class FilesystemMemoryStore implements MemoryStore {
     return fs.existsSync(this.resolve(agentId, filePath));
   }
 
-  async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
+  async search(
+    agentId: string,
+    pattern: string,
+    dirPath?: string,
+    options?: SearchOptions,
+  ): Promise<Array<{ path: string; line: string }>> {
+    // Build the matcher once. Default is a literal substring search;
+    // regex mode is opt-in and goes through a safety check that bounds
+    // pattern length and rejects obvious catastrophic-backtracking
+    // shapes. See `SearchOptions` and issue #21.
+    const matcher = buildLineMatcher(pattern, options?.regex === true);
     const results: Array<{ path: string; line: string }> = [];
     const searchDir = this.resolve(agentId, dirPath || '.');
-    this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
+    this.searchRecursive(searchDir, this.resolve(agentId, '.'), matcher, results);
     return results;
   }
 
   private searchRecursive(
-    dir: string, baseDir: string, pattern: string,
+    dir: string, baseDir: string, matcher: (line: string) => boolean,
     results: Array<{ path: string; line: string }>,
   ): void {
     if (!fs.existsSync(dir)) return;
@@ -136,21 +162,66 @@ export class FilesystemMemoryStore implements MemoryStore {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          this.searchRecursive(full, baseDir, pattern, results);
+          this.searchRecursive(full, baseDir, matcher, results);
         }
       } else {
         try {
           const content = fs.readFileSync(full, 'utf-8');
-          const regex = new RegExp(pattern, 'gi');
           for (const line of content.split('\n')) {
-            if (regex.test(line)) {
+            if (matcher(line)) {
               results.push({ path: path.relative(baseDir, full), line: line.trim() });
               if (results.length >= 100) return;
             }
-            regex.lastIndex = 0;
           }
         } catch { /* skip binary files */ }
       }
     }
   }
+}
+
+/**
+ * Build a per-line matcher closure for {@link FilesystemMemoryStore.search}.
+ *
+ * - Literal mode (default): case-insensitive substring match. No
+ *   compilation, no backtracking, no surface area for ReDoS.
+ * - Regex mode: case-insensitive regex with a length cap and a
+ *   nested-quantifier heuristic that rejects the most common
+ *   catastrophic shapes before they ever run.
+ *
+ * Throws on rejected input rather than silently returning no matches —
+ * the caller (the `grep_file` tool wrapper) catches the throw and
+ * surfaces it to the model as an error message.
+ */
+function buildLineMatcher(
+  pattern: string,
+  asRegex: boolean,
+): (line: string) => boolean {
+  if (!asRegex) {
+    const needle = pattern.toLowerCase();
+    return (line) => line.toLowerCase().includes(needle);
+  }
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    throw new Error(
+      `Regex pattern too long (${pattern.length} > ${MAX_REGEX_PATTERN_LENGTH} chars).`,
+    );
+  }
+  if (NESTED_QUANTIFIER_RE.test(pattern)) {
+    throw new Error(
+      'Regex pattern rejected: contains a nested quantifier (e.g. "(a+)+") ' +
+      'that can cause catastrophic backtracking. Rewrite without nested ' +
+      'quantifiers, or use literal mode (omit `regex: true`).',
+    );
+  }
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, 'gi');
+  } catch (err) {
+    throw new Error(
+      `Invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return (line) => {
+    re.lastIndex = 0;
+    return re.test(line);
+  };
 }

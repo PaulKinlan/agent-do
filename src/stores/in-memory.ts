@@ -118,33 +118,86 @@ export class InMemoryMemoryStore implements MemoryStore {
     return this.navigate(root, segments, false) !== undefined;
   }
 
-  async search(agentId: string, pattern: string, path?: string): Promise<Array<{ path: string; line: string }>> {
+  async search(
+    agentId: string,
+    pattern: string,
+    path?: string,
+    options?: import('../stores.js').SearchOptions,
+  ): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
     const root = this.getRoot(agentId);
     const segments = path ? this.parsePath(path) : [];
     const startNode = segments.length > 0 ? this.navigate(root, segments, false) : root;
     if (!startNode) return results;
 
+    // The in-memory store has historically used literal substring
+    // matching. Honour the new `regex: true` opt-in for parity with
+    // the filesystem store; defaults stay literal so existing callers
+    // see no behaviour change.
+    const matcher = buildInMemoryMatcher(pattern, options?.regex === true);
     const prefix = path ? path.replace(/\/$/, '') + '/' : '';
-    this.searchNode(startNode, prefix, pattern, results);
+    this.searchNode(startNode, prefix, matcher, results);
     return results;
   }
 
   private searchNode(
-    node: FileNode, currentPath: string, pattern: string,
+    node: FileNode, currentPath: string, matcher: (line: string) => boolean,
     results: Array<{ path: string; line: string }>,
   ): void {
     if (node.type === 'file' && node.content) {
       for (const line of node.content.split('\n')) {
-        if (line.includes(pattern)) {
+        if (matcher(line)) {
           results.push({ path: currentPath.replace(/\/$/, ''), line });
         }
       }
     }
     if (node.children) {
       for (const [name, child] of node.children) {
-        this.searchNode(child, currentPath + name + (child.type === 'directory' ? '/' : ''), pattern, results);
+        this.searchNode(child, currentPath + name + (child.type === 'directory' ? '/' : ''), matcher, results);
       }
     }
   }
+}
+
+/**
+ * Build a per-line matcher for the in-memory store. Mirrors the
+ * filesystem store's defaults: literal substring (case-insensitive)
+ * unless `regex: true` is opted into. Same nested-quantifier guard
+ * and length cap apply.
+ */
+const MAX_REGEX_PATTERN_LENGTH = 256;
+const NESTED_QUANTIFIER_RE = /\([^)]*[+*][^)]*\)[+*?]/;
+
+function buildInMemoryMatcher(
+  pattern: string,
+  asRegex: boolean,
+): (line: string) => boolean {
+  if (!asRegex) {
+    const needle = pattern.toLowerCase();
+    return (line) => line.toLowerCase().includes(needle);
+  }
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+    throw new Error(
+      `Regex pattern too long (${pattern.length} > ${MAX_REGEX_PATTERN_LENGTH} chars).`,
+    );
+  }
+  if (NESTED_QUANTIFIER_RE.test(pattern)) {
+    throw new Error(
+      'Regex pattern rejected: contains a nested quantifier (e.g. "(a+)+") ' +
+      'that can cause catastrophic backtracking. Rewrite without nested ' +
+      'quantifiers, or use literal mode (omit `regex: true`).',
+    );
+  }
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, 'gi');
+  } catch (err) {
+    throw new Error(
+      `Invalid regex pattern: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return (line) => {
+    re.lastIndex = 0;
+    return re.test(line);
+  };
 }
