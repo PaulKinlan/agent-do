@@ -22,6 +22,8 @@ function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     includeSensitive: false,
     output: 'console',
     concurrency: 1,
+    acceptAll: false,
+    allow: [],
     ...overrides,
   };
 }
