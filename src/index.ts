@@ -27,7 +27,12 @@ export type { ToolResult } from './tools/types.js';
 export { normaliseToolResult, isToolResult } from './tools/types.js';
 
 // Usage
-export { UsageTracker, estimateCost, DEFAULT_PRICING } from './usage.js';
+export {
+  UsageTracker,
+  estimateCost,
+  DEFAULT_PRICING,
+  resetPricingWarnings,
+} from './usage.js';
 
 // Orchestrator
 export { createOrchestrator } from './orchestrator.js';

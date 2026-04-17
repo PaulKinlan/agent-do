@@ -1,7 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
-import { UsageTracker, estimateCost, DEFAULT_PRICING } from '../src/usage.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  UsageTracker,
+  estimateCost,
+  DEFAULT_PRICING,
+  resetPricingWarnings,
+} from '../src/usage.js';
 
 describe('estimateCost', () => {
+  beforeEach(() => {
+    resetPricingWarnings();
+  });
+
   it('calculates cost for known model', () => {
     // claude-sonnet-4-6: input 3.0/1M, output 15.0/1M
     const cost = estimateCost('claude-sonnet-4-6', 1000, 500);
@@ -10,7 +19,14 @@ describe('estimateCost', () => {
   });
 
   it('returns 0 for unknown model', () => {
-    expect(estimateCost('unknown-model', 1000, 500)).toBe(0);
+    // Suppress the new warning so this assertion stays focused on the
+    // 0-cost contract; the warning behaviour is tested separately below.
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(estimateCost('unknown-model', 1000, 500)).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('uses custom pricing table', () => {
@@ -28,6 +44,79 @@ describe('estimateCost', () => {
     // "claude-sonnet-4-6-20260301" should match "claude-sonnet-4-6"
     const cost = estimateCost('claude-sonnet-4-6-20260301', 1000, 500);
     expect(cost).toBeCloseTo(0.0105, 6);
+  });
+
+  describe('unknown-model warning (#38)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let stderrSpy: any;
+
+    beforeEach(() => {
+      stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    });
+    afterEach(() => {
+      stderrSpy.mockRestore();
+    });
+
+    it('warns once per process when a model isn\'t in the table', () => {
+      estimateCost('totally-new-model', 1000, 500);
+      const writes = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
+      expect(writes).toContain('No pricing entry');
+      expect(writes).toContain('totally-new-model');
+      expect(writes).toContain('AgentConfig.usage.pricing');
+    });
+
+    it('does not warn twice for the same model', () => {
+      estimateCost('repeat-model', 1, 1);
+      estimateCost('repeat-model', 100, 100);
+      estimateCost('repeat-model', 1000, 1000);
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps separate warning state for default vs custom tables', () => {
+      // Same model name, different tables — both warnings should fire.
+      estimateCost('only-in-custom', 1, 1); // unknown in default
+      estimateCost('only-in-custom', 1, 1, { 'something-else': { input: 1, output: 1 } });
+      expect(stderrSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats explicit DEFAULT_PRICING as the default table (not custom)', () => {
+      // Regression guard: passing DEFAULT_PRICING explicitly used to be
+      // misclassified as "custom" because the check was `pricing ?
+      // 'custom' : 'default'`. UsageTracker always passes a pricing
+      // table — for the default case it passes DEFAULT_PRICING — so the
+      // bug would warn twice for the same model and label one of them
+      // wrong.
+      estimateCost('shared-model', 1, 1);                     // implicit default
+      estimateCost('shared-model', 1, 1, DEFAULT_PRICING);    // explicit default
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const writes = stderrSpy.mock.calls
+        .map((c: unknown[]) => c[0] as string)
+        .join('');
+      expect(writes).toContain('default table');
+      expect(writes).not.toContain('custom table');
+    });
+
+    it('does not warn for known models', () => {
+      estimateCost('claude-sonnet-4-6', 1000, 500);
+      expect(stderrSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to console.warn in environments without process.stderr', () => {
+      // Simulate a browser-style runtime by stripping process.stderr
+      // for the duration of the call.
+      const realProc = (globalThis as { process?: unknown }).process;
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).process = undefined;
+        estimateCost('browser-only-model', 1, 1);
+        expect(consoleSpy).toHaveBeenCalledOnce();
+      } finally {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).process = realProc;
+        consoleSpy.mockRestore();
+      }
+    });
   });
 });
 
