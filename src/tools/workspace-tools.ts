@@ -104,7 +104,24 @@ export function createWorkspaceTools(
  * denied entries filtered out of the results.
  */
 function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
-  const wrapRead = (op: 'read' | 'edit' | 'delete', underlying: ToolSet[string]) => {
+  /**
+   * Combine a base path (from the tool args) with a child name into a
+   * workspace-relative path suitable for deny-list lookup. `list_directory`
+   * returns immediate child names (`config`); `find_files` returns
+   * paths relative to its scan root (`subdir/file.txt`). Both need
+   * `basePath` prefixed so a check against `.ssh/**` actually matches
+   * `.ssh/config` rather than just `config`.
+   */
+  const joinForCheck = (basePath: string, child: string): string => {
+    if (basePath === '.' || basePath === '') return child;
+    return `${basePath.replace(/\/+$/, '')}/${child}`;
+  };
+
+  const wrapRead = (
+    toolName: string,
+    op: 'read' | 'edit' | 'delete',
+    underlying: ToolSet[string],
+  ) => {
     const originalExecute = underlying.execute;
     if (!originalExecute) return underlying;
     return {
@@ -113,10 +130,10 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
         const p = (args as { path?: string } | undefined)?.path ?? '';
         if (p) {
           const read = guard.checkRead(p);
-          if (read.blocked) return blockedByDenyList(op, p, read);
+          if (read.blocked) return blockedByDenyList(toolName, p, read);
           if (op !== 'read') {
             const write = guard.checkWrite(p);
-            if (write.blocked) return blockedByDenyList(op, p, write);
+            if (write.blocked) return blockedByDenyList(toolName, p, write);
           }
         }
         return (await (originalExecute as Function)(args, ctx)) as ToolResult;
@@ -124,7 +141,10 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
     } as typeof underlying;
   };
 
-  const wrapWrite = (op: 'write' | 'edit' | 'delete', underlying: ToolSet[string]) => {
+  const wrapWrite = (
+    toolName: string,
+    underlying: ToolSet[string],
+  ) => {
     const originalExecute = underlying.execute;
     if (!originalExecute) return underlying;
     return {
@@ -133,14 +153,17 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
         const p = (args as { path?: string } | undefined)?.path ?? '';
         if (p) {
           const decision = guard.checkWrite(p);
-          if (decision.blocked) return blockedByDenyList(op, p, decision);
+          if (decision.blocked) return blockedByDenyList(toolName, p, decision);
         }
         return (await (originalExecute as Function)(args, ctx)) as ToolResult;
       },
     } as typeof underlying;
   };
 
-  const wrapList = (op: 'list' | 'find', underlying: ToolSet[string]) => {
+  const wrapList = (
+    toolName: string,
+    underlying: ToolSet[string],
+  ) => {
     // list_directory / find_files don't deny outright — they just filter
     // denied entries out of the rendered listing. Denied entries are still
     // counted in the data so the operator can see something was hidden.
@@ -149,8 +172,9 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
     return {
       ...underlying,
       execute: async (args: unknown, ctx: unknown): Promise<ToolResult> => {
+        const requestedPath = (args as { path?: string } | undefined)?.path;
         const result = (await (originalExecute as Function)(args, ctx)) as ToolResult;
-        const basePath = ((args as { path?: string } | undefined)?.path ?? '.').replace(/\/?$/, '');
+        const basePath = (requestedPath ?? '.').replace(/\/?$/, '');
         const lines = result.modelContent.split('\n').filter(Boolean);
         const kept: string[] = [];
         let hidden = 0;
@@ -161,12 +185,12 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
             kept.push(line);
             continue;
           }
-          const name = m[2];
-          const rel = basePath === '.' || basePath === ''
-            ? name
-            : op === 'find'
-              ? name  // find_files already returns paths relative to the scan root
-              : `${basePath}/${name}`;
+          // Both `list_directory` and `find_files` return entry paths
+          // relative to the *scan root* (immediate child names, or
+          // nested paths under it). Prepend basePath in either case so
+          // deny rules matching workspace-relative globs (`.ssh/**`,
+          // `.git/objects/**`, etc.) actually match.
+          const rel = joinForCheck(basePath, m[2]);
           if (guard.checkRead(rel).blocked) {
             hidden++;
             continue;
@@ -187,7 +211,10 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
     } as typeof underlying;
   };
 
-  const wrapGrep = (underlying: ToolSet[string]) => {
+  const wrapGrep = (
+    toolName: string,
+    underlying: ToolSet[string],
+  ) => {
     const originalExecute = underlying.execute;
     if (!originalExecute) return underlying;
     return {
@@ -221,17 +248,14 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
     } as typeof underlying;
   };
 
-  // Use tool() to keep the returned objects consistent with what Vercel AI
-  // SDK expects downstream. The `tool()` helper preserves description/schema
-  // from the underlying definition through spread.
   return {
-    read_file: wrapRead('read', raw.read_file!),
-    write_file: wrapWrite('write', raw.write_file!),
-    edit_file: wrapRead('edit', raw.edit_file!),
-    delete_file: wrapWrite('delete', raw.delete_file!),
-    list_directory: wrapList('list', raw.list_directory!),
-    grep_file: wrapGrep(raw.grep_file!),
-    find_files: wrapList('find', raw.find_files!),
+    read_file: wrapRead('read_file', 'read', raw.read_file!),
+    write_file: wrapWrite('write_file', raw.write_file!),
+    edit_file: wrapRead('edit_file', 'edit', raw.edit_file!),
+    delete_file: wrapWrite('delete_file', raw.delete_file!),
+    list_directory: wrapList('list_directory', raw.list_directory!),
+    grep_file: wrapGrep('grep_file', raw.grep_file!),
+    find_files: wrapList('find_files', raw.find_files!),
   };
 }
 

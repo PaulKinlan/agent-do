@@ -21,6 +21,8 @@ import {
   DEFAULT_MAX_WRITE_BYTES,
   DEFAULT_MAX_GREP_LINE_BYTES,
   sanitiseFsError,
+  truncateUtf8ByBytes,
+  utf8ByteLength,
   wrapForModel,
 } from './content-guards.js';
 
@@ -125,7 +127,7 @@ export function createFileTools(
         path: string;
         content: string;
       }): Promise<ToolResult> => {
-        const bytes = Buffer.byteLength(content, 'utf-8');
+        const bytes = utf8ByteLength(content);
         if (bytes > maxWriteBytes) {
           return {
             modelContent: `Refused: content is ${bytes} bytes, limit is ${maxWriteBytes}. Split the write or reduce size.`,
@@ -190,7 +192,7 @@ export function createFileTools(
             };
           }
           const updated = content.replace(old_string, new_string);
-          const newBytes = Buffer.byteLength(updated, 'utf-8');
+          const newBytes = utf8ByteLength(updated);
           if (newBytes > maxWriteBytes) {
             return {
               modelContent: `Refused: post-edit content is ${newBytes} bytes, limit is ${maxWriteBytes}.`,
@@ -304,12 +306,19 @@ export function createFileTools(
             };
           }
           const fileSet = new Set(results.map((r) => r.path));
+          // Cap each line by UTF-8 bytes (the option is named …Bytes).
+          // Multi-byte characters could otherwise sneak past a char-count
+          // cap. The ellipsis is included in the budget so we never emit
+          // a line whose byte length exceeds the cap.
+          const ellipsis = '…';
+          const ellipsisBytes = utf8ByteLength(ellipsis);
           const rendered = results
             .map((r) => {
-              const line = r.line.length > maxGrepLineBytes
-                ? r.line.slice(0, maxGrepLineBytes) + '…'
-                : r.line;
-              return `${r.path}: ${line}`;
+              if (utf8ByteLength(r.line) <= maxGrepLineBytes) {
+                return `${r.path}: ${r.line}`;
+              }
+              const budget = Math.max(0, maxGrepLineBytes - ellipsisBytes);
+              return `${r.path}: ${truncateUtf8ByBytes(r.line, budget)}${ellipsis}`;
             })
             .join('\n');
           return {

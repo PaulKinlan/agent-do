@@ -26,9 +26,15 @@ export function renderOptionsFromArgs(args: ParsedArgs): RenderOptions {
 }
 
 /**
- * Render a single ProgressEvent for the CLI. Returns `true` if the event
- * should be passed through to the caller's own rendering (e.g. `done`
- * events that the caller wants to print to stdout as the final answer).
+ * Render a single ProgressEvent for the CLI.
+ *
+ * Returns `{ handled: true }` when this helper fully rendered the event
+ * and the caller has nothing more to do.
+ *
+ * Returns `{ handled: false }` when the caller should take additional
+ * action — `done` so it can print the final answer to stdout, `error`
+ * so it can set a non-zero exit code (the renderer still writes the
+ * error text to stderr in that case so the caller doesn't have to).
  */
 export function renderEvent(
   event: ProgressEvent,
@@ -68,8 +74,12 @@ export function renderEvent(
       return { handled: true };
 
     case 'error':
+      // Render to stderr but hand back unhandled so the caller can set a
+      // non-zero exit code. Originally these caused `process.exit(1)`
+      // directly; #48 stage 4 lost that and CI scripts started seeing
+      // exit code 0 on aborts / spending-limit / max-iteration failures.
       process.stderr.write(`Error: ${event.content}\n`);
-      return { handled: true };
+      return { handled: false };
 
     default:
       return { handled: false };

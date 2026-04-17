@@ -645,11 +645,18 @@ export async function* streamAgentLoop(
           // — we already have the richer view if the tool ran through the
           // wrapper, but fall back to the raw string for tools that somehow
           // bypass it.
-          const summary = cached
-            ? cached.userSummary
-            : typeof rawResult === 'string'
-              ? rawResult
-              : JSON.stringify(rawResult);
+          // `JSON.stringify` returns `undefined` for undefined/function/
+          // symbol values and throws on circular references; fall back
+          // to `String(...)` to keep the event-stream contract a string.
+          const safeStringify = (v: unknown): string => {
+            if (typeof v === 'string') return v;
+            try {
+              const json = JSON.stringify(v);
+              if (typeof json === 'string') return json;
+            } catch { /* fall through */ }
+            return String(v);
+          };
+          const summary = cached ? cached.userSummary : safeStringify(rawResult);
           const data = cached?.data;
           const blocked = cached?.blocked;
 

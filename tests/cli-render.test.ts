@@ -125,9 +125,17 @@ describe('renderEvent', () => {
     expect(handled).toBe(false);
   });
 
-  it('prints errors to stderr regardless of verbosity', () => {
-    renderEvent({ type: 'error', content: 'oops' } as ProgressEvent, { verbose: false, showContent: false });
+  it('prints errors to stderr and returns unhandled so the caller can set a non-zero exit code', () => {
+    // Regression guard: PR #53 originally consumed errors as handled,
+    // which made CI runs return exit code 0 on aborts / spending-limit /
+    // max-iteration failures. Codex flagged it; the renderer now writes
+    // to stderr but returns unhandled so the caller can `process.exit(1)`.
+    const { handled } = renderEvent(
+      { type: 'error', content: 'oops' } as ProgressEvent,
+      { verbose: false, showContent: false },
+    );
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('Error: oops');
+    expect(handled).toBe(false);
   });
 });

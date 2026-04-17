@@ -71,12 +71,16 @@ export function isToolResult(value: unknown): value is ToolResult {
 export function normaliseToolResult(raw: unknown): ToolResult {
   if (isToolResult(raw)) return raw;
   if (typeof raw === 'string') return { modelContent: raw, userSummary: raw };
-  const text = (() => {
-    try {
-      return JSON.stringify(raw);
-    } catch {
-      return String(raw);
-    }
-  })();
+  // JSON.stringify returns `undefined` for undefined / functions / symbols,
+  // and throws on circular structures. Fall through to String() in either
+  // case so the `ToolResult` contract (both fields are strings) is upheld.
+  let text: string | undefined;
+  try {
+    const json = JSON.stringify(raw);
+    if (typeof json === 'string') text = json;
+  } catch {
+    /* fall through to String() */
+  }
+  if (text === undefined) text = String(raw);
   return { modelContent: text, userSummary: text };
 }

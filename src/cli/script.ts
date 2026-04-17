@@ -118,6 +118,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
 
   // Run the agent — quiet by default, only final answer printed
   const renderOpts = renderOptionsFromArgs(args);
+  let sawError = false;
   for await (const event of agent.stream(task)) {
     const { handled } = renderEvent(event, renderOpts);
     if (handled) continue;
@@ -125,7 +126,9 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       if (!args.verbose) process.stdout.write(event.content);
       process.stdout.write('\n');
     }
+    if (event.type === 'error') sawError = true;
   }
+  if (sawError) process.exit(1);
 }
 
 async function runSavedAgent(
@@ -174,6 +177,7 @@ async function runSavedAgent(
   }
 
   const renderOpts = renderOptionsFromArgs(args);
+  let sawError = false;
   for await (const event of agent.stream(task)) {
     const { handled } = renderEvent(event, renderOpts);
     if (handled) continue;
@@ -181,7 +185,9 @@ async function runSavedAgent(
       if (!args.verbose) process.stdout.write(event.content);
       process.stdout.write('\n');
     }
+    if (event.type === 'error') sawError = true;
   }
+  if (sawError) process.exit(1);
 }
 
 function buildTask(prompt?: string, stdin?: string): string | null {

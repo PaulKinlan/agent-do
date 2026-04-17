@@ -203,4 +203,53 @@ describe('createWorkspaceTools with deny list', () => {
     expect(r.blocked).toBe(true);
     expect(r.data?.rule).toBe('*.secret');
   });
+
+  it('blocked results carry the tool name in userSummary (not the abstract op)', async () => {
+    // Regression guard: workspace-tools used to pass `'read'` / `'write'`
+    // to blockedByDenyList, producing `[read] .env — BLOCKED ...`
+    // — inconsistent with everywhere else that uses tool names.
+    const r = await call('read_file', { path: '.env' });
+    expect(r.userSummary).toMatch(/\[read_file\]/);
+    expect(r.data?.tool).toBe('read_file');
+  });
+
+  it('find_files into a sensitive subdir filters out denied entries (regression: PR #53)', async () => {
+    // Original wrapList special-cased `op === 'find'` and tested deny
+    // rules against `name` instead of `${basePath}/${name}`, so
+    // `find_files({ path: '.ssh' })` returned `config`, was tested as
+    // "config" against `.ssh/**`, didn't match, and leaked the
+    // sensitive filename. The fix prepends basePath in both cases.
+    await fs.promises.mkdir(path.join(workDir, '.ssh'));
+    await fs.promises.writeFile(path.join(workDir, '.ssh', 'config'), 'Host *\n');
+    await fs.promises.writeFile(path.join(workDir, '.ssh', 'known_hosts'), 'h\n');
+
+    // Direct read of the file is blocked.
+    const direct = await call('read_file', { path: '.ssh/config' });
+    expect(direct.blocked).toBe(true);
+
+    // find_files into the sensitive dir returns the listing with
+    // every denied entry filtered out.
+    const find = await call('find_files', { path: '.ssh' });
+    expect(find.modelContent).not.toContain('config');
+    expect(find.modelContent).not.toContain('known_hosts');
+    expect(find.userSummary).toMatch(/hidden by deny list/);
+    expect(find.data?.hiddenByDenyList).toBeGreaterThanOrEqual(2);
+  });
+
+  it('find_files at the workspace root filters denied entries even when nested', async () => {
+    await fs.promises.mkdir(path.join(workDir, '.ssh'));
+    await fs.promises.writeFile(path.join(workDir, '.ssh', 'config'), 'Host *\n');
+    const r = await call('find_files', { path: '.' });
+    expect(r.modelContent).not.toContain('.ssh/config');
+    expect(r.userSummary).toMatch(/hidden by deny list/);
+  });
+
+  it('grep_file results filter denied paths regardless of search root', async () => {
+    await fs.promises.mkdir(path.join(workDir, '.ssh'));
+    await fs.promises.writeFile(path.join(workDir, '.ssh', 'config'), 'token=secret\n');
+    await fs.promises.writeFile(path.join(workDir, 'good.txt'), 'token=public\n');
+    const r = await call('grep_file', { pattern: 'token' });
+    expect(r.modelContent).toContain('good.txt');
+    expect(r.modelContent).not.toContain('.ssh/config');
+  });
 });

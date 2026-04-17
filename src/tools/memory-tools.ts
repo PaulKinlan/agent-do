@@ -19,6 +19,7 @@ import {
   DEFAULT_MAX_READ_BYTES,
   DEFAULT_MAX_WRITE_BYTES,
   sanitiseFsError,
+  utf8ByteLength,
   wrapForModel,
 } from './content-guards.js';
 
@@ -110,7 +111,7 @@ export function createMemoryTools(
         path: string;
         content: string;
       }): Promise<ToolResult> => {
-        const bytes = Buffer.byteLength(content, 'utf-8');
+        const bytes = utf8ByteLength(content);
         if (bytes > maxWriteBytes) {
           return {
             modelContent: `Refused: content is ${bytes} bytes, limit is ${maxWriteBytes}.`,

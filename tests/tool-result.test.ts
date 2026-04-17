@@ -58,4 +58,28 @@ describe('normaliseToolResult', () => {
     expect(out.blocked).toBe(true);
     expect(out.data?.rule).toBe('.env*');
   });
+
+  it('falls back to String(raw) when JSON.stringify yields undefined', () => {
+    // JSON.stringify returns `undefined` for these inputs; without the
+    // fallback the ToolResult fields would be `undefined` and break the
+    // contract. (Codex/Copilot flagged this on PR #53.)
+    expect(normaliseToolResult(undefined)).toEqual({
+      modelContent: 'undefined',
+      userSummary: 'undefined',
+    });
+    const fn = () => 1;
+    expect(normaliseToolResult(fn).modelContent).toBe(String(fn));
+    expect(normaliseToolResult(Symbol('x')).modelContent).toContain('Symbol');
+  });
+
+  it('falls back to String(raw) on circular structures', () => {
+    const a: Record<string, unknown> = { name: 'a' };
+    a.self = a;
+    const out = normaliseToolResult(a);
+    expect(typeof out.modelContent).toBe('string');
+    expect(typeof out.userSummary).toBe('string');
+    // String(...) on a plain object is "[object Object]" — proves we
+    // didn't propagate the JSON.stringify throw.
+    expect(out.modelContent).toBe('[object Object]');
+  });
 });

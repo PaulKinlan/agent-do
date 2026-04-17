@@ -184,17 +184,21 @@ function normaliseRel(rel: string): string {
 /**
  * Produce a structured blocked ToolResult for a denied read or write.
  * The `rule` flows to `userSummary` + `data` but not `modelContent`.
+ *
+ * `toolName` is the public tool name (`read_file`, `write_file`, …) so
+ * the operator log prefix matches the rest of the rendering
+ * (`[read_file] …` rather than `[read] …`).
  */
 export function blockedByDenyList(
-  op: 'read' | 'write' | 'edit' | 'delete' | 'list' | 'grep' | 'find',
+  toolName: string,
   relPath: string,
   decision: DenyDecision,
 ): ToolResult {
   const rule = decision.rule ?? '(deny list)';
   return {
     modelContent: `Blocked by deny list: ${relPath}`,
-    userSummary: `[${op}] ${relPath} — BLOCKED by deny list (${rule})`,
-    data: { blocked: true, reason: 'deny-list', rule, op, path: relPath },
+    userSummary: `[${toolName}] ${relPath} — BLOCKED by deny list (${rule})`,
+    data: { blocked: true, reason: 'deny-list', rule, tool: toolName, path: relPath },
     blocked: true,
   };
 }

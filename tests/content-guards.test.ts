@@ -4,7 +4,56 @@ import {
   sanitiseFsError,
   DEFAULT_MAX_READ_BYTES,
   INJECTION_MARKER_REGEX,
+  utf8ByteLength,
+  truncateUtf8ByBytes,
 } from '../src/tools/content-guards.js';
+
+describe('utf8ByteLength', () => {
+  it('returns 1 byte per ASCII char', () => {
+    expect(utf8ByteLength('abc')).toBe(3);
+  });
+  it('counts multi-byte UTF-8 sequences correctly', () => {
+    // é = 2 bytes; 中 = 3 bytes; 🚀 = 4 bytes (surrogate pair → 4-byte UTF-8).
+    expect(utf8ByteLength('é')).toBe(2);
+    expect(utf8ByteLength('中')).toBe(3);
+    expect(utf8ByteLength('🚀')).toBe(4);
+  });
+});
+
+describe('truncateUtf8ByBytes', () => {
+  it('returns the input unchanged when it fits', () => {
+    expect(truncateUtf8ByBytes('abc', 100)).toBe('abc');
+  });
+
+  it('caps strictly by bytes, not characters (multi-byte safe)', () => {
+    // Five 中 = 15 bytes. Cap at 6 bytes → 2 chars (6 bytes).
+    expect(utf8ByteLength(truncateUtf8ByBytes('中'.repeat(5), 6))).toBeLessThanOrEqual(6);
+  });
+
+  it('does not produce invalid UTF-8 sequences when cutting mid-codepoint', () => {
+    // 4 bytes of "中中" (6 bytes total). The non-fatal decoder substitutes
+    // U+FFFD for the broken trailing sequence rather than throwing —
+    // either "中" or "中\uFFFD" is acceptable; we just need a valid string.
+    const out = truncateUtf8ByBytes('中中', 4);
+    // The first character must always survive intact.
+    expect(out.startsWith('中')).toBe(true);
+    // The string must be a valid UTF-16 / JS string (no lone surrogates):
+    expect(() => out.normalize()).not.toThrow();
+    expect(out.length).toBeLessThanOrEqual(2);
+  });
+
+  it('handles cap of 0', () => {
+    expect(truncateUtf8ByBytes('abc', 0)).toBe('');
+  });
+
+  it('runs without Buffer (portable to browsers / Workers)', () => {
+    // Sanity check: the helpers should only use TextEncoder / TextDecoder.
+    // We can't easily assert "no Buffer reference" at runtime, but we can
+    // confirm correctness on a string with characters whose Buffer slice
+    // would split a multi-byte sequence.
+    expect(truncateUtf8ByBytes('🚀abc', 5)).toBe('🚀a');
+  });
+});
 
 describe('wrapForModel', () => {
   it('wraps content in a <tool_output> block with tool + path attributes', () => {

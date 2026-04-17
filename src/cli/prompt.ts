@@ -121,6 +121,7 @@ async function runOneShot(
 
   // Streaming mode — quiet by default, only final answer printed
   const renderOpts = renderOptionsFromArgs(args);
+  let sawError = false;
   for await (const event of agent.stream(task)) {
     const { handled } = renderEvent(event, renderOpts);
     if (handled) continue;
@@ -130,7 +131,12 @@ async function runOneShot(
       if (!args.verbose) process.stdout.write(event.content);
       process.stdout.write('\n');
     }
+    // ...and `error` so the caller can set a non-zero exit code. Don't
+    // exit immediately — keep draining the stream so any pending events
+    // (final summary text, etc.) are still rendered.
+    if (event.type === 'error') sawError = true;
   }
+  if (sawError) process.exit(1);
 }
 
 async function runInteractive(
@@ -171,6 +177,9 @@ async function runInteractive(
         if (!args.verbose) process.stdout.write(response);
         process.stdout.write('\n\n');
       }
+      // Errors don't terminate interactive mode — the user can keep
+      // chatting after a failed turn. The renderer already wrote them
+      // to stderr.
     }
 
     // Add both turns to history AFTER the run completes

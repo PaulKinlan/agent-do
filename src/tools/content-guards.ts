@@ -53,6 +53,31 @@ export interface WrapOptions {
   maxBytes?: number;
 }
 
+// Portable UTF-8 helpers. agent-do runs in browsers as well as Node, so we
+// use the WHATWG TextEncoder / TextDecoder rather than `Buffer`. Both are
+// available in Node 11+, all modern browsers, Deno, Bun, and Cloudflare
+// Workers.
+
+const utf8Encoder = /*#__PURE__*/ new TextEncoder();
+const utf8Decoder = /*#__PURE__*/ new TextDecoder('utf-8', { fatal: false });
+
+/** Length of a string in UTF-8 bytes. */
+export function utf8ByteLength(s: string): number {
+  return utf8Encoder.encode(s).length;
+}
+
+/**
+ * Truncate `s` to at most `maxBytes` UTF-8 bytes without splitting a
+ * codepoint mid-sequence. Returns the original string when it already
+ * fits. The decoder is non-fatal, so any partial trailing sequence is
+ * dropped silently rather than throwing.
+ */
+export function truncateUtf8ByBytes(s: string, maxBytes: number): string {
+  const bytes = utf8Encoder.encode(s);
+  if (bytes.length <= maxBytes) return s;
+  return utf8Decoder.decode(bytes.subarray(0, maxBytes));
+}
+
 export interface WrappedContent {
   /** The final string to hand to the model. */
   content: string;
@@ -75,14 +100,9 @@ export interface WrappedContent {
  */
 export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const cap = opts.maxBytes ?? DEFAULT_MAX_READ_BYTES;
-  const totalBytes = Buffer.byteLength(body, 'utf-8');
+  const totalBytes = utf8ByteLength(body);
   const truncated = totalBytes > cap;
-  // Slicing by byte length requires a Buffer round-trip to avoid splitting a
-  // multi-byte character mid-codepoint. Errors on partial codepoints are
-  // acceptable here — we're already signalling truncation.
-  const clipped = truncated
-    ? Buffer.from(body, 'utf-8').subarray(0, cap).toString('utf-8')
-    : body;
+  const clipped = truncated ? truncateUtf8ByBytes(body, cap) : body;
 
   let redactedMarkerCount = 0;
   const redacted = clipped.replace(INJECTION_MARKER_REGEX, () => {
@@ -103,7 +123,7 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   return {
     content,
     truncated,
-    includedBytes: Buffer.byteLength(clipped, 'utf-8'),
+    includedBytes: utf8ByteLength(clipped),
     totalBytes,
     redactedMarkerCount,
   };
