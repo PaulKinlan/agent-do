@@ -52,4 +52,17 @@ describe('resolveModel — API key preflight', () => {
     const model = await resolveModel('anthropic');
     expect(model).toBeDefined();
   });
+
+  it('returns the "Unknown provider" error (not a bogus API-key error) for prototype keys', async () => {
+    // Regression guard: plain-object lookups leaked Object.prototype members
+    // like `constructor`, `toString`, `__proto__` — producing a misleading
+    // "Missing API key" error for `--provider constructor`.
+    for (const bogus of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      await expect(resolveModel(bogus)).rejects.toThrow(/Unknown provider/);
+    }
+  });
+
+  it('treats an unknown provider as unknown without touching env', async () => {
+    await expect(resolveModel('unknown-xyz')).rejects.toThrow(/Unknown provider "unknown-xyz"/);
+  });
 });

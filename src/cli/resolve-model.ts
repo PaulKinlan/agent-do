@@ -7,36 +7,42 @@
 
 import type { LanguageModel } from 'ai';
 
-const DEFAULT_MODELS: Record<string, string> = {
-  anthropic: 'claude-sonnet-4-6',
-  google: 'gemini-2.5-flash',
-  openai: 'gpt-4.1-mini',
-  ollama: 'llama3.2',
-};
+// Use `Map`s for provider tables so lookups don't touch the prototype chain.
+// Indexing a plain object with a user-supplied provider name returns inherited
+// values for keys like `constructor`, `toString`, or `__proto__`, which leaks
+// into assertApiKey / resolveModel and produces misleading errors.
+
+const DEFAULT_MODELS = new Map<string, string>([
+  ['anthropic', 'claude-sonnet-4-6'],
+  ['google', 'gemini-2.5-flash'],
+  ['openai', 'gpt-4.1-mini'],
+  ['ollama', 'llama3.2'],
+]);
 
 /**
  * Env var each provider expects. `null` means the provider does not require a key.
+ * Absent keys mean the provider is unknown — resolveModel will throw later.
  */
-const REQUIRED_ENV: Record<string, string | null> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  ollama: null,
-};
+const REQUIRED_ENV = new Map<string, string | null>([
+  ['anthropic', 'ANTHROPIC_API_KEY'],
+  ['google', 'GOOGLE_GENERATIVE_AI_API_KEY'],
+  ['openai', 'OPENAI_API_KEY'],
+  ['ollama', null],
+]);
 
-const PROVIDER_HINTS: Record<string, string> = {
-  anthropic: 'https://console.anthropic.com/',
-  google: 'https://aistudio.google.com/',
-  openai: 'https://platform.openai.com/api-keys',
-};
+const PROVIDER_HINTS = new Map<string, string>([
+  ['anthropic', 'https://console.anthropic.com/'],
+  ['google', 'https://aistudio.google.com/'],
+  ['openai', 'https://platform.openai.com/api-keys'],
+]);
 
 function assertApiKey(provider: string): void {
-  const envVar = REQUIRED_ENV[provider];
-  if (envVar === null) return; // e.g. ollama
+  const envVar = REQUIRED_ENV.get(provider);
   if (envVar === undefined) return; // unknown provider — resolveModel throws later
+  if (envVar === null) return; // e.g. ollama, no key required
   const value = process.env[envVar];
   if (!value || value.length < 4) {
-    const hint = PROVIDER_HINTS[provider];
+    const hint = PROVIDER_HINTS.get(provider);
     throw new Error(
       `Missing API key for provider "${provider}". Set ${envVar} in your environment.` +
       (hint ? `\nGet a key at ${hint}.` : ''),
@@ -52,11 +58,11 @@ export async function resolveModel(
   provider: string,
   modelId?: string,
 ): Promise<LanguageModel> {
-  const id = modelId ?? DEFAULT_MODELS[provider];
+  const id = modelId ?? DEFAULT_MODELS.get(provider);
   if (!id) {
     throw new Error(
       `Unknown provider "${provider}" and no --model specified. ` +
-      `Known providers: ${Object.keys(DEFAULT_MODELS).join(', ')}`,
+      `Known providers: ${[...DEFAULT_MODELS.keys()].join(', ')}`,
     );
   }
 
@@ -86,7 +92,7 @@ export async function resolveModel(
     default:
       throw new Error(
         `Unknown provider "${provider}".\n` +
-        `The CLI supports: ${Object.keys(DEFAULT_MODELS).join(', ')}.\n` +
+        `The CLI supports: ${[...DEFAULT_MODELS.keys()].join(', ')}.\n` +
         `\n` +
         `For other providers (Mistral, Groq, Cohere, OpenRouter, Bedrock, etc.),\n` +
         `use agent-do as a library and pass any Vercel AI SDK LanguageModel:\n` +
