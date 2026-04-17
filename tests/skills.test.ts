@@ -157,7 +157,7 @@ describe('buildSkillsPrompt', () => {
     expect(buildSkillsPrompt([])).toBe('');
   });
 
-  it('builds prompt section from skills', () => {
+  it('builds prompt section from skills (wraps bodies in <skill> markers, #24)', () => {
     const skills: Skill[] = [
       {
         id: 'research',
@@ -168,8 +168,11 @@ describe('buildSkillsPrompt', () => {
     ];
     const result = buildSkillsPrompt(skills);
     expect(result).toContain('## Installed Skills');
-    expect(result).toContain('### Skill: Research');
+    expect(result).toContain('<skill name="Research" id="research">');
+    expect(result).toContain('</skill>');
     expect(result).toContain('Use search to find info.');
+    // The preamble tells the model skill bodies are data, not instructions.
+    expect(result).toMatch(/reference material/i);
   });
 
   it('includes descriptions', () => {
@@ -182,7 +185,24 @@ describe('buildSkillsPrompt', () => {
       },
     ];
     const result = buildSkillsPrompt(skills);
-    expect(result).toContain('> A test skill');
+    expect(result).toContain('Description: A test skill');
+  });
+
+  it('escapes attribute-breaking characters in skill name/id (#24)', () => {
+    const skills: Skill[] = [
+      {
+        id: 'bad"id',
+        name: 'Evil"Skill\n<injected>',
+        description: 'x',
+        content: 'c',
+      },
+    ];
+    const result = buildSkillsPrompt(skills);
+    // Quote, angle brackets, and newlines in attrs get stripped so the
+    // marker can't be closed early or opened into an injected element.
+    expect(result).not.toContain('Evil"');
+    expect(result).not.toContain('<injected>');
+    expect(result).not.toContain('bad"id');
   });
 });
 
@@ -268,14 +288,21 @@ describe('InMemorySkillStore', () => {
 });
 
 describe('createSkillTools', () => {
-  it('returns tool set with expected tools', () => {
+  it('by default does NOT expose install_skill (#24)', () => {
     const store = new InMemorySkillStore();
     const tools = createSkillTools(store);
 
     expect(tools).toHaveProperty('search_skills');
-    expect(tools).toHaveProperty('install_skill');
     expect(tools).toHaveProperty('list_skills');
     expect(tools).toHaveProperty('remove_skill');
+    expect(tools).not.toHaveProperty('install_skill');
+  });
+
+  it('exposes install_skill only with allowInstall: true (#24)', () => {
+    const store = new InMemorySkillStore();
+    const tools = createSkillTools(store, { allowInstall: true });
+
+    expect(tools).toHaveProperty('install_skill');
   });
 
   it('list_skills execute returns installed skills', async () => {
@@ -294,5 +321,36 @@ describe('createSkillTools', () => {
     });
     expect(result).toContain('Test');
     expect(result).toContain('test');
+  });
+
+  it('install_skill validates inputs (#24)', async () => {
+    const store = new InMemorySkillStore();
+    const tools = createSkillTools(store, { allowInstall: true });
+    const exec = tools.install_skill.execute!;
+
+    // Oversize content (> 8 KB) is rejected.
+    const huge = 'x'.repeat(8193);
+    const r1 = (await exec(
+      { id: 'ok', name: 'OK', description: 'd', content: huge } as never,
+      { toolCallId: 't1', messages: [] },
+    )) as string;
+    expect(r1).toMatch(/rejected/);
+    expect(await store.list()).toHaveLength(0);
+
+    // Invalid id (contains `/`) is rejected.
+    const r2 = (await exec(
+      { id: '../escape', name: 'x', description: '', content: 'c' } as never,
+      { toolCallId: 't2', messages: [] },
+    )) as string;
+    expect(r2).toMatch(/rejected/);
+    expect(await store.list()).toHaveLength(0);
+
+    // Well-formed install succeeds.
+    const r3 = (await exec(
+      { id: 'good', name: 'Good', description: 'd', content: 'c' } as never,
+      { toolCallId: 't3', messages: [] },
+    )) as string;
+    expect(r3).toMatch(/installed successfully/);
+    expect(await store.list()).toHaveLength(1);
   });
 });
