@@ -24,6 +24,8 @@ function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     concurrency: 1,
     script: false,
     yes: false,
+    acceptAll: false,
+    allow: [],
     ...overrides,
   };
 }

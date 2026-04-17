@@ -52,8 +52,28 @@ export interface ParsedArgs {
   /**
    * Skip interactive confirmation when `--script` is passed. Required for
    * non-TTY contexts (CI, shell piping) that can't prompt.
+   *
+   * `-y`/`--yes` sets both this flag and `acceptAll` — the operator
+   * meaning is the same ("skip all interactive prompts this run"), so
+   * it would be surprising to have them diverge.
    */
   yes: boolean;
+  /**
+   * Accept every tool call without prompting (#17, C-01).
+   *
+   * Previously the CLI hard-coded this behaviour. The default now asks
+   * for confirmation on destructive tools (write, edit, delete) in TTY
+   * mode and denies them in non-TTY mode. `--accept-all` restores the
+   * old "full yolo" behaviour for scripted pipelines that need it —
+   * but the operator now has to opt in explicitly.
+   */
+  acceptAll: boolean;
+  /**
+   * Comma-separated list of tool names that bypass the confirmation
+   * prompt (e.g. `--allow write_file,memory_write`). Useful for
+   * semi-automated sessions where some destructive tools are expected.
+   */
+  allow: string[];
 }
 
 /**
@@ -83,6 +103,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     concurrency: 1,
     script: false,
     yes: false,
+    acceptAll: false,
+    allow: [],
   };
 
   const positional: string[] = [];
@@ -164,8 +186,20 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
     } else if (arg === '--script') {
       args.script = true;
+    } else if (arg === '--accept-all') {
+      args.acceptAll = true;
     } else if (arg === '-y' || arg === '--yes') {
+      // `-y`/`--yes` means "skip all interactive prompts this run": it
+      // satisfies both the `--script` confirmation prompt AND the
+      // per-tool permission prompt, so set both flags. Operators who
+      // only want one semantic should use the specific flag name
+      // (`--accept-all` for permissions without implying script confirm,
+      // or vice versa when/if a dedicated flag lands).
       args.yes = true;
+      args.acceptAll = true;
+    } else if (arg === '--allow') {
+      const val = requireValue(argv, ++i, '--allow');
+      args.allow.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}. Use --help for usage.`);
     } else {

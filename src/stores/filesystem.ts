@@ -24,12 +24,20 @@
  *       return true; // or false to block
  *     },
  *   });
+ *
+ * Implementation note: every method uses `node:fs/promises` (no
+ * `fs.*Sync` calls inside `async` functions). The original sync
+ * variants blocked the Node event loop for the full duration of any
+ * read or directory walk, which made the store unsafe for server /
+ * concurrent contexts. See issue #25.
  */
 
 import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import type { MemoryStore, FileEntry } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
+import { validateAgentId } from './agent-id.js';
 
 export type { FilesystemMemoryStoreOptions } from '../types.js';
 
@@ -38,26 +46,80 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   constructor(private baseDir: string, options?: FilesystemMemoryStoreOptions) {
     this.options = options || {};
-    // Only create the base directory if not in read-only mode
-    // so readOnly has zero write side effects
+    // The constructor stays synchronous because callers `new` the store
+    // outside of an async context. mkdir is the only side effect, and
+    // is gated on readOnly to keep that mode side-effect-free.
     if (!this.options.readOnly) {
       fs.mkdirSync(baseDir, { recursive: true });
     }
   }
 
-  private resolve(agentId: string, filePath: string): string {
-    const agentDir = path.resolve(this.baseDir, agentId);
+  /**
+   * Resolve an agent-relative path to an absolute filesystem path,
+   * with four distinct guards (#20 H-01 + PR #64 review follow-ups):
+   *
+   * 1. **Agent-id validation** (#30). `validateAgentId` rejects
+   *    traversal-shaped ids like `../other-tenant` before any path
+   *    construction.
+   *
+   * 2. **Canonical-to-canonical containment.** Both the base dir and
+   *    the resolved target are canonicalised via `realpathSafe`
+   *    *before* the prefix check. Earlier drafts compared a raw
+   *    `path.resolve(baseDir)` against a realpathed target, so a
+   *    baseDir that was itself a symlink (e.g. `/Volumes/tmp` on
+   *    macOS) made every legitimate path fail the check. Both sides
+   *    of the comparison now go through the same canonicalisation.
+   *
+   * 3. **Per-agent isolation** (PR #64 Copilot). `filePath` is
+   *    resolved against *agentDir*, and the containment check uses
+   *    agentDir — not just baseDir — as the boundary. Without this,
+   *    agentId=`a1` with filePath=`../a2/secret` resolved to a path
+   *    inside baseDir but outside a1's own directory, leaking
+   *    cross-tenant data.
+   *
+   * 4. **Root-path safety.** `withinBase` uses `path.relative` rather
+   *    than a naive `startsWith(base + path.sep)`, because when base
+   *    is `/` or a Windows drive root the `sep` concatenation turns
+   *    into `//` / `C:\\` and rejects legitimate children.
+   */
+  private async resolve(agentId: string, filePath: string): Promise<string> {
+    validateAgentId(agentId);
+    // Canonicalise base up front so every later comparison is
+    // canonical-vs-canonical. If baseDir is itself a symlink the
+    // realpath walk resolves to the target; without this the
+    // `withinBase(canonical, base)` check would reject every path.
+    //
+    // All three realpath walks are async (Codex #64 follow-up): the
+    // store is on the hot path for every tool call, and sync fs
+    // calls here blocked the event loop under concurrent load —
+    // reintroducing the very behaviour #25 moved away from.
+    const base = await realpathSafe(path.resolve(this.baseDir));
+    const agentDir = await realpathSafe(path.resolve(base, agentId));
+    if (!withinBase(agentDir, base)) {
+      throw new Error('Path traversal not allowed (agentId)');
+    }
     const resolved = path.resolve(agentDir, filePath);
-    if (!resolved.startsWith(path.resolve(this.baseDir))) {
+    // Agent-level isolation: the resolved path must stay inside the
+    // agent's own directory. Checking `base` alone would permit
+    // `filePath = "../other-agent/secret"`.
+    if (!withinBase(resolved, agentDir)) {
       throw new Error('Path traversal not allowed');
     }
-    return resolved;
+    const canonical = await realpathSafe(resolved);
+    if (!withinBase(canonical, agentDir)) {
+      throw new Error('Path traversal via symlink not allowed');
+    }
+    return canonical;
   }
 
   /** Returns the canonicalized relative path for use in callbacks. */
-  private canonicalRelativePath(agentId: string, filePath: string): string {
-    const resolved = this.resolve(agentId, filePath);
-    const agentDir = path.resolve(this.baseDir, agentId);
+  private async canonicalRelativePath(agentId: string, filePath: string): Promise<string> {
+    const resolved = await this.resolve(agentId, filePath);
+    // Use the canonical agentDir (matching `resolve()`'s own
+    // canonicalisation) so the relative path has no spurious `..`
+    // segments when baseDir or agentDir contain symlinks.
+    const base = await realpathSafe(path.resolve(this.baseDir));
+    const agentDir = await realpathSafe(path.resolve(base, agentId));
     return path.relative(agentDir, resolved);
   }
 
@@ -67,7 +129,7 @@ export class FilesystemMemoryStore implements MemoryStore {
     }
     if (this.options.onBeforeWrite) {
       // Pass the canonicalized path so policies can't be bypassed with ../
-      const canonicalPath = this.canonicalRelativePath(agentId, filePath);
+      const canonicalPath = await this.canonicalRelativePath(agentId, filePath);
       const allowed = await Promise.resolve(this.options.onBeforeWrite(agentId, canonicalPath, op));
       if (!allowed) {
         throw new Error(`Write blocked by onBeforeWrite callback (attempted ${op} on ${canonicalPath})`);
@@ -76,81 +138,263 @@ export class FilesystemMemoryStore implements MemoryStore {
   }
 
   async read(agentId: string, filePath: string): Promise<string> {
-    const full = this.resolve(agentId, filePath);
-    if (!fs.existsSync(full)) throw new Error(`File not found: ${filePath}`);
-    return fs.readFileSync(full, 'utf-8');
+    const full = await this.resolve(agentId, filePath);
+    try {
+      return await fsp.readFile(full, 'utf-8');
+    } catch (err) {
+      // ENOTDIR surfaces when an *ancestor* is a file (e.g. `readme.md/child.txt`).
+      // Pre-migration `existsSync` short-circuited that to false, so
+      // `read()` raised the normalised "File not found" error. Keep
+      // that contract so hallucinated nested paths don't leak raw
+      // platform errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        throw new Error(`File not found: ${filePath}`);
+      }
+      throw err;
+    }
   }
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
-    const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, content, 'utf-8');
+    const full = await this.resolve(agentId, filePath);
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.writeFile(full, content, 'utf-8');
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
-    const full = this.resolve(agentId, filePath);
-    fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.appendFileSync(full, content, 'utf-8');
+    const full = await this.resolve(agentId, filePath);
+    await fsp.mkdir(path.dirname(full), { recursive: true });
+    await fsp.appendFile(full, content, 'utf-8');
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
-    const full = this.resolve(agentId, filePath);
-    if (fs.existsSync(full)) fs.unlinkSync(full);
+    const full = await this.resolve(agentId, filePath);
+    try {
+      await fsp.unlink(full);
+    } catch (err) {
+      // Match the previous `existsSync` precheck behaviour: delete is
+      // idempotent for any path that doesn't refer to a real file. The
+      // pre-migration code silently returned on ENOENT and also on
+      // paths like `"file.txt/child"` (where `existsSync` returned
+      // false). async `unlink` surfaces the latter as `ENOTDIR` on
+      // POSIX, `ENOTDIR`/`ENOENT` on Windows — treat all three as
+      // "nothing to delete" so hallucinated nested paths from the
+      // model don't surface as tool errors.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
+      throw err;
+    }
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
-    const full = this.resolve(agentId, dirPath || '.');
-    if (!fs.existsSync(full)) return [];
-    return fs.readdirSync(full, { withFileTypes: true }).map(e => ({
+    const full = await this.resolve(agentId, dirPath || '.');
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(full, { withFileTypes: true });
+    } catch (err) {
+      // Same path-shape normalisation as read()/delete(): ENOTDIR
+      // (ancestor is a file) used to short-circuit via `existsSync`
+      // and return an empty list. Preserve that so `list('readme.md/')`
+      // doesn't become a hard error.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+      throw err;
+    }
+    // Bound stat concurrency. A naive `Promise.all(entries.map(stat))`
+    // queues a stat per file at once, which on a directory with
+    // thousands of entries pins the libuv threadpool (default 4) and
+    // stalls unrelated fs work. `FILE_STAT_CONCURRENCY` is small enough
+    // to avoid threadpool saturation yet large enough to get the
+    // benefits of async scheduling.
+    return pMap(entries, async (e) => ({
       name: e.name,
-      type: e.isDirectory() ? 'directory' as const : 'file' as const,
-      size: e.isFile() ? fs.statSync(path.join(full, e.name)).size : undefined,
-    }));
+      type: e.isDirectory() ? ('directory' as const) : ('file' as const),
+      size: e.isFile()
+        ? (await fsp.stat(path.join(full, e.name))).size
+        : undefined,
+    }), FILE_STAT_CONCURRENCY);
   }
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    fs.mkdirSync(this.resolve(agentId, dirPath), { recursive: true });
+    await fsp.mkdir(await this.resolve(agentId, dirPath), { recursive: true });
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
-    return fs.existsSync(this.resolve(agentId, filePath));
+    try {
+      await fsp.stat(await this.resolve(agentId, filePath));
+      return true;
+    } catch (err) {
+      // Mirror `fs.existsSync`: any path-shape error that means "no
+      // such file" — whether the leaf is missing (`ENOENT`) or a
+      // non-directory ancestor makes the path invalid (`ENOTDIR`) —
+      // should return false, not throw. This preserves the pre-migration
+      // contract the InMemoryMemoryStore also follows (`exists` never
+      // throws for well-typed input).
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw err;
+    }
   }
 
+  // (search) ───────────────────────────────────────────────────────
   async search(agentId: string, pattern: string, dirPath?: string): Promise<Array<{ path: string; line: string }>> {
     const results: Array<{ path: string; line: string }> = [];
-    const searchDir = this.resolve(agentId, dirPath || '.');
-    this.searchRecursive(searchDir, this.resolve(agentId, '.'), pattern, results);
+    const searchDir = await this.resolve(agentId, dirPath || '.');
+    const agentRoot = await this.resolve(agentId, '.');
+    await this.searchRecursive(searchDir, agentRoot, pattern, results);
     return results;
   }
 
-  private searchRecursive(
-    dir: string, baseDir: string, pattern: string,
+  private async searchRecursive(
+    dir: string,
+    baseDir: string,
+    pattern: string,
     results: Array<{ path: string; line: string }>,
-  ): void {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  ): Promise<void> {
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      // Same contract as list(): ENOTDIR (ancestor is a file) used to
+      // short-circuit to zero results via `existsSync`. Preserve that
+      // so `search('readme.md/')` is a no-op, not a hard failure.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return;
+      throw err;
+    }
+
+    for (const entry of entries) {
+      if (results.length >= 100) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== 'node_modules' && entry.name !== '.git') {
-          this.searchRecursive(full, baseDir, pattern, results);
-        }
-      } else {
-        try {
-          const content = fs.readFileSync(full, 'utf-8');
-          const regex = new RegExp(pattern, 'gi');
-          for (const line of content.split('\n')) {
-            if (regex.test(line)) {
-              results.push({ path: path.relative(baseDir, full), line: line.trim() });
-              if (results.length >= 100) return;
-            }
-            regex.lastIndex = 0;
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        await this.searchRecursive(full, baseDir, pattern, results);
+        continue;
+      }
+      try {
+        const content = await fsp.readFile(full, 'utf-8');
+        const regex = new RegExp(pattern, 'gi');
+        for (const line of content.split('\n')) {
+          if (regex.test(line)) {
+            results.push({ path: path.relative(baseDir, full), line: line.trim() });
+            if (results.length >= 100) return;
           }
-        } catch { /* skip binary files */ }
+          regex.lastIndex = 0;
+        }
+      } catch {
+        /* skip binary / unreadable files */
       }
     }
   }
+}
+
+/**
+ * True iff `candidate` is the same as, or strictly inside, `base`.
+ *
+ * Uses `path.relative` rather than a naive `startsWith(base + sep)`
+ * so:
+ *   - a sibling whose name shares the base prefix (`/data/agent` vs
+ *     `/data/agent-evil`) is still rejected — the relative path
+ *     starts with `..` and we bail;
+ *   - a base that is a filesystem root (`/` on POSIX, `C:\` on
+ *     Windows) is handled correctly — the naive `base + sep`
+ *     concatenation would become `//` / `C:\\` and reject every
+ *     legitimate child.
+ *
+ * Both inputs must already be absolute.
+ */
+function withinBase(candidate: string, base: string): boolean {
+  if (candidate === base) return true;
+  const rel = path.relative(base, candidate);
+  if (rel === '' || rel === '.') return true;
+  // Match only real parent-segment references, not arbitrary names
+  // that happen to start with `..` (Codex #64 follow-up: `..cache` or
+  // `..notes` are valid child directories, and `rel.startsWith('..')`
+  // rejected them as traversal). A traversal `rel` is either exactly
+  // `..` or starts with `../` / `..\` — test for the separator.
+  if (rel === '..' || rel.startsWith('..' + path.sep)) return false;
+  // rel being an absolute path means the inputs are on different
+  // roots (Windows drive letters).
+  return !path.isAbsolute(rel);
+}
+
+/**
+ * `fsp.realpath(path)` requires the path to exist. For a fresh write
+ * the leaf doesn't exist yet — realpath would throw. Walk up to the
+ * deepest existing ancestor, canonicalise that, and re-append the
+ * unresolved suffix so we still detect symlinks anywhere in the
+ * existing portion of the path.
+ *
+ * Async (Codex #64 follow-up): the previous sync version used
+ * `existsSync` + `realpathSync` on every `resolve()` call, which is
+ * on the hot path for every tool invocation. Under concurrent agent
+ * load those sync calls block the event loop and reintroduce the
+ * blocking-I/O behaviour the store moved away from in #25. Using
+ * `fsp.realpath` directly (which throws ENOENT if the leaf is
+ * missing) and only walking up on ENOENT keeps the common "leaf
+ * exists" path to a single async call.
+ *
+ * Returns the input unchanged if no ancestor exists (e.g. baseDir
+ * itself is missing) — the caller's containment check is still
+ * authoritative.
+ */
+async function realpathSafe(p: string): Promise<string> {
+  let suffix = '';
+  let current = p;
+  while (true) {
+    try {
+      const canonical = await fsp.realpath(current);
+      return suffix ? path.join(canonical, suffix) : canonical;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        // Unknown error — don't swallow it silently; return the input
+        // so the caller's containment check stays authoritative and
+        // the raw error surfaces on the next real I/O call.
+        return p;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return p; // hit root without resolving
+      suffix = path.join(path.basename(current), suffix);
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Node's libuv threadpool defaults to 4 workers; a wider pool of
+ * concurrent fs ops can starve unrelated work. 16 is a pragmatic
+ * middle ground — enough parallelism to hide per-stat latency on
+ * large dirs without pinning the threadpool.
+ */
+const FILE_STAT_CONCURRENCY = 16;
+
+/**
+ * Tiny concurrency-limited `Promise.all` equivalent. Preserves input
+ * order in the output array. No external dependency — the only place
+ * agent-do needs this is `list()`, so a bespoke ~15 lines beats
+ * pulling in `p-map`.
+ */
+async function pMap<T, R>(
+  items: T[],
+  mapper: (item: T, index: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(concurrency, items.length))
+    .fill(null)
+    .map(async () => {
+      while (true) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await mapper(items[i]!, i);
+      }
+    });
+  await Promise.all(workers);
+  return results;
 }

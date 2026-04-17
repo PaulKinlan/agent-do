@@ -18,6 +18,7 @@ import { createAgent } from '../agent.js';
 import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
+import { buildCliPermissions } from './permission-handler.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -60,7 +61,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     systemPrompt: args.systemPrompt,
     tools,
     maxIterations: args.maxIterations,
-    permissions: { mode: 'accept-all' },
+    permissions: buildCliPermissions({
+      acceptAll: args.acceptAll,
+      allow: args.allow,
+    }),
     usage: { enabled: true },
     // Only materialise the full ToolResult on `tool-result` events when
     // the user explicitly asked for it (`--show-content`). Defaults to
