@@ -101,18 +101,20 @@ Likely out-of-scope:
   is in how agent-do *handles* their output, that's in scope; if it's
   an issue with the upstream API, please report it there first.
 
-## Safe Harbor
+## Working with us
 
-We won't pursue legal action against you for good-faith security
-research conducted under this policy, provided you:
+We welcome good-faith security research and want to make it easy. If
+you stick to the spirit of this policy — test against your own
+installs, give us reasonable time before public disclosure, don't
+damage other people's data — we're happy to credit you and work with
+you to land a fix.
 
-- make a good-faith effort to avoid privacy violations, destruction of
-  data, and interruption of service;
-- only test against systems you own or have explicit permission to test;
-- give us reasonable time to respond before any public disclosure;
-- don't exploit the finding beyond what's necessary to demonstrate the
-  issue.
+agent-do is a library, not a hosted service, and it's maintained by an
+individual rather than an organisation, so we can't grant legal
+exemptions on behalf of anyone else and we have no standing to bring
+or threaten legal action ourselves. We won't pursue any complaint we
+have control over against researchers who follow this policy.
 
-We will publicly thank researchers who help us improve agent-do's
+We'll publicly thank researchers who help us improve agent-do's
 security — on the advisory, in release notes, and (if desired) in the
 README.
