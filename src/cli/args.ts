@@ -128,6 +128,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   // --verbose / --show-content don't silently demote a higher level
   // picked by the operator.
   let explicitLogLevel = false;
+  // Track whether --show-content was passed so it overrides the
+  // log-level-derived showContent default (which is on at `debug`+
+  // but off at `verbose`). `--log-level verbose --show-content`
+  // keeps showContent on.
+  let explicitShowContent = false;
 
   const positional: string[] = [];
   let i = 0;
@@ -178,20 +183,22 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === '--no-tools') {
       args.noTools = true;
     } else if (arg === '--verbose') {
-      args.verbose = true;
-      // `--verbose` is the legacy knob. Only promote `logLevel` to
-      // `verbose` if the operator hasn't already picked a higher
-      // level — otherwise `--log-level debug --verbose` would
-      // downgrade to verbose.
+      // Legacy alias: nudges logLevel up to at least `verbose` when
+      // the operator hasn't explicitly picked a level. Final
+      // verbose/showContent booleans are derived from logLevel after
+      // the parse loop finishes, so ordering doesn't matter.
       if (!explicitLogLevel && levelRank(args.logLevel) < levelRank('verbose')) {
         args.logLevel = 'verbose';
       }
     } else if (arg === '--show-content') {
-      args.showContent = true;
-      args.verbose = true;
+      // --show-content bumps visibility to verbose AND asks for full
+      // tool-result bodies without going all the way to debug level.
+      // Track the content opt-in separately so --log-level info
+      // --show-content still honours the intent to show content.
       if (!explicitLogLevel && levelRank(args.logLevel) < levelRank('verbose')) {
         args.logLevel = 'verbose';
       }
+      explicitShowContent = true;
     } else if (arg === '--log-level') {
       const val = requireValue(argv, ++i, '--log-level');
       if (val !== 'silent' && val !== 'info' && val !== 'verbose' && val !== 'debug' && val !== 'trace') {
@@ -199,13 +206,6 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
       args.logLevel = val;
       explicitLogLevel = true;
-      // debug/trace imply verbose-style visibility + full content.
-      if (val === 'verbose' || val === 'debug' || val === 'trace') {
-        args.verbose = true;
-      }
-      if (val === 'debug' || val === 'trace') {
-        args.showContent = true;
-      }
     } else if (arg === '--exclude') {
       const val = requireValue(argv, ++i, '--exclude');
       args.exclude.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
@@ -278,6 +278,28 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.prompt = positional.join(' ');
     }
   }
+
+  // Derive `verbose` and `showContent` from the final `logLevel`.
+  // `logLevel` is the single source of truth for `verbose` —
+  // legacy flags bump it during parse, explicit `--log-level` wins
+  // over legacy flags regardless of argument order. Copilot #73
+  // flagged that the old layered logic let `--verbose --log-level
+  // info` still run in verbose mode.
+  //
+  // `showContent` has a small escape hatch: the legacy `--show-content`
+  // flag turns it on independently of log level, so
+  // `--log-level verbose --show-content` still prints full tool
+  // bodies without promoting all the way to `debug`.
+  args.verbose = levelRank(args.logLevel) >= levelRank('verbose');
+  // showContent is on when:
+  //  - logLevel is debug or trace (implicit), OR
+  //  - --show-content was passed AND the effective logLevel is at
+  //    least verbose. An explicit `--log-level silent` or `info`
+  //    still wins over the legacy flag — otherwise `--show-content
+  //    --log-level silent` would contradict itself.
+  args.showContent =
+    levelRank(args.logLevel) >= levelRank('debug') ||
+    (explicitShowContent && levelRank(args.logLevel) >= levelRank('verbose'));
 
   return args;
 }

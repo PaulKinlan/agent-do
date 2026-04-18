@@ -150,8 +150,13 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
       return;
     }
     case 'cache': {
-      const total = event.cacheReadTokens + event.cacheWriteTokens + event.noCacheTokens;
-      const hitPct = total > 0 ? Math.round((event.cacheReadTokens / total) * 100) : 0;
+      // Cache hit rate excludes writes — a write is a cache *seed*,
+      // not a miss against existing cache, so folding it into the
+      // denominator underreports effectiveness on steps that create
+      // cache entries. Match the documented formula
+      // `read / (read + no-cache)`. (#73 Codex + Copilot review)
+      const hitBase = event.cacheReadTokens + event.noCacheTokens;
+      const hitPct = hitBase > 0 ? Math.round((event.cacheReadTokens / hitBase) * 100) : 0;
       process.stderr.write(
         `[debug:cache] step=${event.step} read=${event.cacheReadTokens} write=${event.cacheWriteTokens} no-cache=${event.noCacheTokens} out=${event.outputTokens} hit=${hitPct}%\n`,
       );

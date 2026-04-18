@@ -15,6 +15,11 @@
  * debug events can be correlated to progress events. The loop
  * mutates a shared `stepRef.current` before each `streamText` call;
  * middleware reads it when a request goes out or a part comes back.
+ *
+ * Web compatibility: this file uses `TextEncoder` / `TextDecoder`
+ * (universal in browsers and Node ≥ 18) instead of Node's `Buffer`,
+ * so the debug surface works unchanged in a browser-OPFS MemoryStore
+ * path too. (#72 review)
  */
 
 import type {
@@ -36,6 +41,41 @@ export interface StepRef {
  */
 const DEFAULT_MAX_BODY_BYTES = 16 * 1024;
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/**
+ * Count the UTF-8 byte length of a string without allocating
+ * intermediate strings — used for size caps throughout the debug
+ * surface so non-ASCII content is measured correctly.
+ */
+function utf8ByteLength(s: string): number {
+  return encoder.encode(s).byteLength;
+}
+
+/**
+ * Truncate `content` to at most `maxBytes` UTF-8 bytes **respecting
+ * character boundaries**. A naive `content.slice(0, maxBytes)` is
+ * wrong for two reasons: `slice` counts UTF-16 code units (not
+ * bytes), and even a byte-level cut can land mid-character and
+ * produce invalid UTF-8. This encodes to a byte view, rolls back
+ * past any continuation bytes, and decodes the prefix.
+ *
+ * Returns just the truncated prefix; callers append their own
+ * "truncated N bytes" marker.
+ */
+function truncateUtf8ByBytes(content: string, maxBytes: number): string {
+  if (maxBytes <= 0) return '';
+  const bytes = encoder.encode(content);
+  if (bytes.byteLength <= maxBytes) return content;
+  // Roll back past any UTF-8 continuation bytes (bits `10xxxxxx`,
+  // i.e. byte & 0xc0 === 0x80) so the cut lands on a character
+  // boundary. Worst case we back up 3 bytes (4-byte UTF-8 sequences).
+  let end = maxBytes;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  return decoder.decode(bytes.subarray(0, end));
+}
+
 export function createDebugMiddleware(
   debug: DebugConfig,
   emit: (event: DebugEvent) => void,
@@ -43,7 +83,13 @@ export function createDebugMiddleware(
 ): LanguageModelV3Middleware {
   const wantMessages = debug.all || debug.messages;
   const wantRequest = debug.all || debug.request;
-  const wantResponse = debug.all || debug.response;
+  // `response` follows `all: true` — library users who ask for
+  // everything get the per-part stream too. The CLI maps
+  // `--log-level debug` to an explicit channel map that leaves
+  // `response: false` so operators don't pay the per-token
+  // middleware cost unless they bump to `trace`. See
+  // `src/cli/debug-config.ts`.
+  const wantResponse = debug.all || debug.response === true;
   const traceParts = debug.traceResponseParts === true;
   const maxBodyBytes = debug.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
@@ -120,14 +166,14 @@ function clampMessages(
 
   const clamped = messages.map((msg) => {
     if (typeof msg.content === 'string') {
-      const bytes = Buffer.byteLength(msg.content, 'utf8');
+      const bytes = utf8ByteLength(msg.content);
       totalBytes += bytes;
       if (bytes > maxBodyBytes) {
         truncated = true;
         return {
           ...msg,
           content:
-            msg.content.slice(0, maxBodyBytes) +
+            truncateUtf8ByBytes(msg.content, maxBodyBytes) +
             `\n[… truncated ${bytes - maxBodyBytes} bytes]`,
         };
       }
@@ -142,14 +188,19 @@ function clampMessages(
           typeof (p as { text: unknown }).text === 'string'
         ) {
           const pt = p as { text: string };
-          const bytes = Buffer.byteLength(pt.text, 'utf8');
+          const bytes = utf8ByteLength(pt.text);
           totalBytes += bytes;
           if (bytes > maxBodyBytes) {
             truncated = true;
+            // Spread the ORIGINAL part object, not the narrowed
+            // `{ text: string }` view — otherwise we'd drop
+            // `type`, `toolName`, ids, etc. from the debug payload
+            // and lose the shape the operator is trying to inspect.
+            // (Copilot #73)
             return {
-              ...pt,
+              ...(p as Record<string, unknown>),
               text:
-                pt.text.slice(0, maxBodyBytes) +
+                truncateUtf8ByBytes(pt.text, maxBodyBytes) +
                 `\n[… truncated ${bytes - maxBodyBytes} bytes]`,
             };
           }
@@ -209,15 +260,18 @@ export function extractCacheUsage(usage: unknown): {
 /**
  * Clip a string to `maxBytes` UTF-8 bytes. Used for the system-prompt
  * channel where we only have a string (not structured messages).
+ * Character-boundary-safe — see `truncateUtf8ByBytes`.
  */
 export function clampString(
   content: string,
   maxBytes: number,
 ): { content: string; bytes: number; truncated: boolean } {
-  const bytes = Buffer.byteLength(content, 'utf8');
+  const bytes = utf8ByteLength(content);
   if (bytes <= maxBytes) return { content, bytes, truncated: false };
   return {
-    content: content.slice(0, maxBytes) + `\n[… truncated ${bytes - maxBytes} bytes]`,
+    content:
+      truncateUtf8ByBytes(content, maxBytes) +
+      `\n[… truncated ${bytes - maxBytes} bytes]`,
     bytes,
     truncated: true,
   };

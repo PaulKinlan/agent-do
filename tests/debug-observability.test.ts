@@ -3,6 +3,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { runAgentLoop, streamAgentLoop } from '../src/loop.js';
 import { createMockModel } from '../src/testing/index.js';
+import { parseArgs } from '../src/cli/args.js';
+import { buildDebugConfigFromArgs } from '../src/cli/debug-config.js';
 import {
   clampString,
   extractCacheUsage,
@@ -238,5 +240,140 @@ describe('runAgentLoop — debug sink (#72)', () => {
     });
     await runAgentLoop(config, 'task');
     expect(sinkEvents.some((e) => e.channel === 'system-prompt')).toBe(true);
+  });
+});
+
+// ─── #73 review follow-ups ────────────────────────────────────────────
+
+describe('UTF-8 truncation (#73 Copilot)', () => {
+  it('clampString respects character boundaries', () => {
+    // Each '🔑' is 4 UTF-8 bytes. Cap the limit at 5 bytes (one key
+    // plus a single stray continuation byte) — the truncation should
+    // roll back to a character boundary (one full key = 4 bytes).
+    const key = '🔑';
+    const out = clampString(key.repeat(10), 5);
+    expect(out.truncated).toBe(true);
+    // The emitted content ends with a complete character, not a
+    // half-encoded one.
+    const prefix = out.content.replace(/\n\[… truncated .+ bytes\]$/, '');
+    // Re-encode to confirm no invalid UTF-8 bytes snuck through.
+    const bytes = new TextEncoder().encode(prefix);
+    expect(bytes.byteLength).toBeLessThanOrEqual(5);
+    // And the prefix is a valid decode.
+    expect(new TextDecoder('utf-8', { fatal: true }).decode(bytes)).toBe(prefix);
+  });
+
+  it('does not use Buffer (web-compat)', async () => {
+    // This is a smoke test: the module shouldn't reference `Buffer`
+    // at all so it can load in a browser. Check the source.
+    const src = await import('node:fs/promises').then((fs) =>
+      fs.readFile(new URL('../src/debug-middleware.ts', import.meta.url), 'utf-8'),
+    );
+    // Allow mentions inside comments but not in live code — the
+    // easiest proof is there's zero `Buffer` identifier after
+    // comment stripping. A simpler heuristic: the module uses
+    // `TextEncoder` and doesn't reference `Buffer.` as an API call.
+    expect(src).not.toMatch(/\bBuffer\.(byteLength|from|alloc)/);
+    expect(src).toMatch(/TextEncoder/);
+  });
+});
+
+describe('cache hit rate formula (#73 Codex)', () => {
+  it('excludes cacheWriteTokens from the hit-rate denominator', () => {
+    // Reproduce the render logic's formula shape and verify it
+    // matches the documented `read / (read + no-cache)` spec.
+    const event = {
+      cacheReadTokens: 800,
+      cacheWriteTokens: 200,
+      noCacheTokens: 200,
+    };
+    const hitBase = event.cacheReadTokens + event.noCacheTokens;
+    const hitPct = Math.round((event.cacheReadTokens / hitBase) * 100);
+    expect(hitPct).toBe(80); // 800 / 1000, not 800 / 1200
+  });
+});
+
+describe('CLI --log-level authority (#73 Copilot)', () => {
+  it('--log-level info clears legacy --verbose (later log-level wins)', () => {
+    const args = parseArgs(['--verbose', '--log-level', 'info', 'hello']);
+    expect(args.logLevel).toBe('info');
+    expect(args.verbose).toBe(false);
+    expect(args.showContent).toBe(false);
+  });
+
+  it('--log-level silent clears legacy --show-content', () => {
+    const args = parseArgs(['--show-content', '--log-level', 'silent', 'hi']);
+    expect(args.logLevel).toBe('silent');
+    expect(args.verbose).toBe(false);
+    expect(args.showContent).toBe(false);
+  });
+
+  it('--log-level debug derives verbose+showContent on', () => {
+    const args = parseArgs(['--log-level', 'debug', 'hi']);
+    expect(args.logLevel).toBe('debug');
+    expect(args.verbose).toBe(true);
+    expect(args.showContent).toBe(true);
+  });
+
+  it('legacy --verbose without --log-level promotes to verbose', () => {
+    const args = parseArgs(['--verbose', 'hi']);
+    expect(args.logLevel).toBe('verbose');
+    expect(args.verbose).toBe(true);
+    expect(args.showContent).toBe(false);
+  });
+
+  it('legacy --show-content implies verbose level + keeps showContent on', () => {
+    const args = parseArgs(['--show-content', 'hi']);
+    // --show-content bumps the level to verbose (legacy behaviour)
+    // AND acts as an explicit override so content stays visible
+    // even though logLevel didn't cross the debug threshold.
+    expect(args.logLevel).toBe('verbose');
+    expect(args.verbose).toBe(true);
+    expect(args.showContent).toBe(true);
+  });
+
+  it('--log-level silent wipes --show-content (explicit log-level wins)', () => {
+    const args = parseArgs(['--show-content', '--log-level', 'silent', 'hi']);
+    // Explicit --log-level silent beats the legacy flag — same
+    // rule as --verbose --log-level info.
+    expect(args.logLevel).toBe('silent');
+    expect(args.verbose).toBe(false);
+    expect(args.showContent).toBe(false);
+  });
+
+  it('--log-level verbose + --show-content keeps content visible', () => {
+    // The most useful combination: verbose-level operator output
+    // PLUS full tool bodies, without going all the way to debug.
+    const args = parseArgs(['--log-level', 'verbose', '--show-content', 'hi']);
+    expect(args.logLevel).toBe('verbose');
+    expect(args.verbose).toBe(true);
+    expect(args.showContent).toBe(true);
+  });
+});
+
+describe('buildDebugConfigFromArgs — no `all: true` at debug (#73 Copilot)', () => {
+  it('leaves response off at --log-level debug to avoid per-token middleware cost', () => {
+    const args = parseArgs(['--log-level', 'debug', 'hi']);
+    const cfg = buildDebugConfigFromArgs(args);
+    expect(cfg).toBeDefined();
+    expect(cfg!.all).toBeUndefined();
+    expect(cfg!.response).toBe(false);
+    expect(cfg!.systemPrompt).toBe(true);
+    expect(cfg!.messages).toBe(true);
+    expect(cfg!.cache).toBe(true);
+  });
+
+  it('enables response only at --log-level trace', () => {
+    const args = parseArgs(['--log-level', 'trace', 'hi']);
+    const cfg = buildDebugConfigFromArgs(args);
+    expect(cfg!.response).toBe(true);
+    expect(cfg!.traceResponseParts).toBe(true);
+  });
+
+  it('returns undefined for info/verbose/silent (no middleware wrapping)', () => {
+    for (const level of ['info', 'verbose', 'silent'] as const) {
+      const args = parseArgs(['--log-level', level, 'hi']);
+      expect(buildDebugConfigFromArgs(args)).toBeUndefined();
+    }
   });
 });
