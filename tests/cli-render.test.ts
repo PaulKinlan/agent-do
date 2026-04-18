@@ -26,15 +26,22 @@ function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     yes: false,
     acceptAll: false,
     allow: [],
+    logLevel: 'info',
     ...overrides,
   };
 }
 
 describe('renderOptionsFromArgs', () => {
-  it('copies verbose + showContent verbatim', () => {
-    expect(renderOptionsFromArgs(makeArgs())).toEqual({ verbose: false, showContent: false });
-    expect(renderOptionsFromArgs(makeArgs({ verbose: true }))).toEqual({ verbose: true, showContent: false });
-    expect(renderOptionsFromArgs(makeArgs({ showContent: true, verbose: true }))).toEqual({ verbose: true, showContent: true });
+  it('copies verbose + showContent + logLevel verbatim', () => {
+    expect(renderOptionsFromArgs(makeArgs())).toEqual({
+      verbose: false, showContent: false, logLevel: 'info',
+    });
+    expect(renderOptionsFromArgs(makeArgs({ verbose: true, logLevel: 'verbose' }))).toEqual({
+      verbose: true, showContent: false, logLevel: 'verbose',
+    });
+    expect(renderOptionsFromArgs(makeArgs({ showContent: true, verbose: true, logLevel: 'verbose' }))).toEqual({
+      verbose: true, showContent: true, logLevel: 'verbose',
+    });
   });
 });
 
@@ -64,20 +71,20 @@ describe('renderEvent', () => {
   });
 
   it('stays silent in quiet mode for thinking/tool-call/tool-result', () => {
-    const { handled: t } = renderEvent({ type: 'thinking', content: 'step 1...' } as ProgressEvent, { verbose: false, showContent: false });
+    const { handled: t } = renderEvent({ type: 'thinking', content: 'step 1...' } as ProgressEvent, { verbose: false, showContent: false, logLevel: 'info' });
     expect(t).toBe(true);
     expect(stderrSpy).not.toHaveBeenCalled();
 
-    const { handled: c } = renderEvent({ type: 'tool-call', content: '', toolName: 'read_file', toolArgs: { path: 'x' } } as ProgressEvent, { verbose: false, showContent: false });
+    const { handled: c } = renderEvent({ type: 'tool-call', content: '', toolName: 'read_file', toolArgs: { path: 'x' } } as ProgressEvent, { verbose: false, showContent: false, logLevel: 'info' });
     expect(c).toBe(true);
     expect(stderrSpy).not.toHaveBeenCalled();
 
-    renderEvent(toolResult({}), { verbose: false, showContent: false });
+    renderEvent(toolResult({}), { verbose: false, showContent: false, logLevel: 'info' });
     expect(stderrSpy).not.toHaveBeenCalled();
   });
 
   it('renders a structured tool-result summary in verbose mode', () => {
-    renderEvent(toolResult({}), { verbose: true, showContent: false });
+    renderEvent(toolResult({}), { verbose: true, showContent: false, logLevel: 'verbose' });
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('[result]');
     expect(calls).toContain('[read_file] src/app.ts');
@@ -93,7 +100,7 @@ describe('renderEvent', () => {
         summary: '[read_file] .env — BLOCKED by deny list (.env*)',
         data: { blocked: true, reason: 'deny-list', rule: '.env*' },
       }),
-      { verbose: true, showContent: false },
+      { verbose: true, showContent: false, logLevel: 'verbose' },
     );
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('[blocked]');
@@ -105,7 +112,7 @@ describe('renderEvent', () => {
       toolResult({
         toolResult: { modelContent: 'SECRET_TOKEN=abc123', userSummary: 'x', data: {} },
       }),
-      { verbose: true, showContent: false },
+      { verbose: true, showContent: false, logLevel: 'verbose' },
     );
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).not.toContain('SECRET_TOKEN');
@@ -116,7 +123,7 @@ describe('renderEvent', () => {
       toolResult({
         toolResult: { modelContent: 'hello\nworld', userSummary: 'x', data: {} },
       }),
-      { verbose: true, showContent: true },
+      { verbose: true, showContent: true, logLevel: 'verbose' },
     );
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('─── content ───');
@@ -125,7 +132,7 @@ describe('renderEvent', () => {
   });
 
   it('returns unhandled for done events so the caller prints the final answer', () => {
-    const { handled } = renderEvent({ type: 'done', content: 'Final answer' } as ProgressEvent, { verbose: false, showContent: false });
+    const { handled } = renderEvent({ type: 'done', content: 'Final answer' } as ProgressEvent, { verbose: false, showContent: false, logLevel: 'info' });
     expect(handled).toBe(false);
   });
 
@@ -136,7 +143,7 @@ describe('renderEvent', () => {
     // to stderr but returns unhandled so the caller can `process.exit(1)`.
     const { handled } = renderEvent(
       { type: 'error', content: 'oops' } as ProgressEvent,
-      { verbose: false, showContent: false },
+      { verbose: false, showContent: false, logLevel: 'info' },
     );
     const calls = stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
     expect(calls).toContain('Error: oops');

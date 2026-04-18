@@ -864,6 +864,112 @@ const ok = await tracker.checkLimits(); // false if limit exceeded
 const cost = estimateCost('gpt-4o', 10000, 5000);
 ```
 
+## Debugging & Observability
+
+`--verbose` / `--show-content` expose what the **agent loop** sees —
+text deltas, tool call summaries, streaming events. One layer lower
+is what's actually crossing the wire to the model provider: the
+resolved system prompt, the full message list per step, the cache
+metrics coming back, and every raw stream part. That's the debug
+surface.
+
+### CLI log levels
+
+```bash
+# Default: final answer + errors
+npx agent-do "hello"
+
+# Thinking + tool summaries (what --verbose has always been)
+npx agent-do --log-level verbose "hello"
+# Legacy: --verbose still works and implies --log-level verbose.
+
+# + system prompt, messages per step, cache metrics, request metadata
+npx agent-do --log-level debug "hello"
+
+# + every raw stream part (text-delta, tool-call, finish, …)
+npx agent-do --log-level trace "hello"
+```
+
+At `debug` the CLI emits compact, labelled lines to stderr:
+
+```
+[debug:request] step=0 model=claude-sonnet-4-6 tools=[read_file,write_file,grep_file]
+[debug:messages] step=0 count=2 bytes=1247
+[debug:cache] step=0 read=0 write=1198 no-cache=49 out=112 hit=0%
+…second iteration benefits from the cache write on the first:
+[debug:cache] step=1 read=1198 write=0 no-cache=14 out=87 hit=98%
+```
+
+That last pair is what you want when you're checking whether
+Anthropic prompt caching is actually firing — `read/(read+no-cache)`
+is the hit rate.
+
+### API: `AgentConfig.debug`
+
+Library callers opt in explicitly and control fan-out:
+
+```ts
+import { createAgent, type DebugEvent } from 'agent-do';
+
+const agent = createAgent({
+  id: 'debug-me',
+  name: 'Debug Me',
+  model,
+  systemPrompt: 'You are helpful.',
+  debug: {
+    systemPrompt: true,  // log the resolved prompt once per run
+    messages: true,      // log the message list going into each step
+    request: true,       // model id + tool names + providerOptions
+    cache: true,         // per-step cache read/write/no-cache tokens
+    response: false,     // opt in to raw stream parts
+    // Optional: sink to a separate destination in addition to the
+    // progress stream. The sink fires *in addition to* the
+    // `type: 'debug'` progress events, not instead of them.
+    sink: (event: DebugEvent) => {
+      myLogger.info(event.channel, event);
+    },
+    // Cap body size in system-prompt / messages events. Default 16 KB.
+    maxBodyBytes: 8 * 1024,
+  },
+});
+
+for await (const event of agent.stream('task')) {
+  if (event.type === 'debug' && event.debug?.channel === 'cache') {
+    const hit = event.debug.cacheReadTokens /
+      (event.debug.cacheReadTokens + event.debug.noCacheTokens);
+    console.log(`cache hit rate: ${(hit * 100).toFixed(1)}%`);
+  }
+}
+```
+
+### Channels
+
+| Channel | Fires when | Payload highlights |
+|---|---|---|
+| `system-prompt` | once per run, before the first model call | `content`, `bytes`, `truncated` |
+| `messages` | before each `streamText` call | full `messages[]`, `bytes`, `truncated` |
+| `request` | before each `streamText` call | `model`, `toolCount`, `toolNames`, `providerOptions` |
+| `response-part` | each raw stream part | `partType` always; full `part` when `traceResponseParts: true` |
+| `cache` | after each inner model step | `cacheReadTokens`, `cacheWriteTokens`, `noCacheTokens`, `outputTokens`, `providerMetadata` |
+
+### Notes
+
+- **`response-part` at trace only**: the full stream is noisy
+  (text-delta fires per token). At `debug` level the channel emits
+  just the `partType` for aggregate counting; bump to `trace` when
+  you need the contents.
+- **String model IDs skip middleware**: if you passed `model: 'gpt-4o'`
+  as a string, the AI SDK resolves the provider lazily and the
+  middleware can't attach. The other channels (`system-prompt`,
+  `cache`) still fire — they don't depend on middleware. Pass a
+  structured model (`createAnthropic()('claude-sonnet-4-6')`) for
+  full coverage.
+- **Sink errors are swallowed**. A broken sink can't wedge the run.
+  Sync and async throws are both caught.
+- **No secret redaction**. If you opt into debug and point it at a
+  log file, it's your job to keep that file private. The `maxBodyBytes`
+  cap exists only to prevent accidental megabyte dumps.
+
 ## Testing
 
 `createMockModel()` returns a mock `LanguageModel` compatible with the Vercel AI SDK. It uses predetermined responses so you can test agent behavior without API keys.

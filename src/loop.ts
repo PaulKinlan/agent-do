@@ -6,15 +6,23 @@
  * the iteration limit is reached.
  */
 
-import { streamText, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel, type JSONValue } from 'ai';
+import { streamText, stepCountIs, wrapLanguageModel, type ToolSet, type ModelMessage, type LanguageModel, type JSONValue } from 'ai';
 import type {
   AgentConfig,
   ConversationMessage,
+  DebugConfig,
+  DebugEvent,
   ProgressEvent,
   RunResult,
   RunUsage,
   HookDecision,
 } from './types.js';
+import {
+  createDebugMiddleware,
+  clampString,
+  extractCacheUsage,
+  type StepRef,
+} from './debug-middleware.js';
 
 // ── Cache Control ──
 
@@ -84,6 +92,116 @@ type ToolResultCache = Map<string, ToolResult>;
 
 const DEFAULT_MAX_ITERATIONS = 20;
 const DEFAULT_INNER_STEP_LIMIT = 5;
+
+/**
+ * Build the debug surface for a run (#72). Returns:
+ *
+ * - `model`: the original model, or a `wrapLanguageModel`-wrapped copy
+ *   with the debug middleware installed when `debug` is set.
+ * - `emit`: the unified emitter. Fans out to `progressEvents` (so
+ *   stream consumers see `type: 'debug'` events) and to the caller's
+ *   `sink` if one was provided.
+ * - `stepRef`: mutable step counter the loop updates before each
+ *   `streamText` call so the middleware can tag events with the
+ *   correct outer iteration.
+ *
+ * Returns `{ model: original, emit: noop, stepRef }` when `debug` is
+ * undefined so the default path has zero overhead.
+ */
+function setupDebug(
+  config: AgentConfig,
+  onProgress?: (event: ProgressEvent) => void,
+): {
+  model: LanguageModel;
+  emit: (event: DebugEvent) => void;
+  stepRef: StepRef;
+} {
+  const debug = config.debug;
+  const stepRef: StepRef = { current: 0 };
+  if (!debug) {
+    return { model: config.model, emit: () => {}, stepRef };
+  }
+
+  const emit = (event: DebugEvent): void => {
+    if (onProgress) {
+      onProgress({
+        type: 'debug',
+        content: `[debug:${event.channel}] step=${event.step}`,
+        debug: event,
+        step: event.step,
+      });
+    }
+    if (debug.sink) {
+      // Best-effort: swallow sink errors so a broken debug hook can't
+      // wedge the main loop. Debug is observational — the run still
+      // has to complete cleanly.
+      try {
+        const result = debug.sink(event);
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          (result as Promise<void>).catch(() => { /* sink errors are non-fatal */ });
+        }
+      } catch { /* sink errors are non-fatal */ }
+    }
+  };
+
+  // `wrapLanguageModel` expects a structured LanguageModelV3 value,
+  // not a string model id. When the caller passed a string id (and
+  // the AI SDK will resolve it to a provider at stream time), we
+  // can't install middleware — the string wraps a lazy resolution
+  // we don't control. Fall back to the unwrapped model in that
+  // case; the other debug channels that don't depend on middleware
+  // (system-prompt, cache via onStepFinish) still fire.
+  if (typeof config.model === 'string') {
+    return { model: config.model, emit, stepRef };
+  }
+  const model = wrapLanguageModel({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    model: config.model as any,
+    middleware: createDebugMiddleware(debug, emit, stepRef),
+  }) as LanguageModel;
+
+  return { model, emit, stepRef };
+}
+
+/**
+ * Emit the one-shot system-prompt debug event. Fires before the first
+ * model call so the operator can see the exact resolved prompt that
+ * will ride through every iteration's cache breakpoint.
+ */
+function emitSystemPromptDebug(
+  debug: DebugConfig | undefined,
+  emit: (event: DebugEvent) => void,
+  systemPrompt: string,
+): void {
+  if (!debug || !(debug.all || debug.systemPrompt)) return;
+  const maxBytes = debug.maxBodyBytes ?? 16 * 1024;
+  const { content, bytes, truncated } = clampString(systemPrompt, maxBytes);
+  emit({ channel: 'system-prompt', step: 0, content, bytes, truncated });
+}
+
+/**
+ * Emit a per-step cache debug event. Called from the existing
+ * `buildOnStepFinish` hook so cache metrics land adjacent to usage
+ * recording and can be correlated with cost.
+ */
+function emitCacheDebug(
+  debug: DebugConfig | undefined,
+  emit: (event: DebugEvent) => void,
+  step: number,
+  stepPayload: unknown,
+): void {
+  if (!debug || !(debug.all || debug.cache)) return;
+  const usage = (stepPayload as { usage?: unknown } | undefined)?.usage;
+  const providerMetadata = (stepPayload as { providerMetadata?: Record<string, unknown> } | undefined)
+    ?.providerMetadata;
+  const breakdown = extractCacheUsage(usage);
+  emit({
+    channel: 'cache',
+    step,
+    ...breakdown,
+    providerMetadata,
+  });
+}
 
 /**
  * Build the full system prompt from config.
@@ -392,8 +510,11 @@ export function buildOnStepFinish(
   tracker: UsageTracker,
   abortController: AbortController,
   outerStep: number,
+  emitDebug?: (event: DebugEvent) => void,
 ): ((step: unknown) => void) | undefined {
-  if (config.usage?.enabled === false) return undefined;
+  // Debug-only configs still need onStepFinish so cache events fire.
+  const wantCache = config.debug && (config.debug.all || config.debug.cache);
+  if (config.usage?.enabled === false && !wantCache) return undefined;
   const softLimit = config.usage?.limits?.perRun;
   const multiplier = config.usage?.hardLimitMultiplier ?? 1.25;
   const hardLimit = softLimit !== undefined ? softLimit * multiplier : undefined;
@@ -403,6 +524,13 @@ export function buildOnStepFinish(
       : config.model.modelId;
 
   return (step: unknown) => {
+    // Cache debug event — fire regardless of usage.enabled because
+    // operators debugging cache effectiveness still want the numbers.
+    if (wantCache && emitDebug) {
+      emitCacheDebug(config.debug, emitDebug, outerStep, step);
+    }
+
+    if (config.usage?.enabled === false) return;
     const usage = (step as { usage?: { inputTokens?: number; outputTokens?: number } })
       .usage;
     if (!usage) return;
@@ -470,8 +598,15 @@ async function runAgentLoopDirect(
     onLimitExceeded: config.usage?.onLimitExceeded,
   });
 
+  // Debug surface (#72). No-op when config.debug is undefined.
+  // runAgentLoopDirect doesn't have a progress-event stream, so
+  // debug events flow only through the caller's sink (if any).
+  const debugSurface = setupDebug(config);
+  const model = debugSurface.model;
+
   // Build system prompt
   const systemPrompt = await buildSystemPrompt(config, context);
+  emitSystemPromptDebug(config.debug, debugSurface.emit, systemPrompt);
 
   // Message history — prepend conversation history if provided
   const messages: ModelMessage[] = [];
@@ -497,6 +632,8 @@ async function runAgentLoopDirect(
       break;
     }
     outerIterations = i + 1;
+    // Middleware needs the current iteration before any request fires.
+    debugSurface.stepRef.current = i;
 
     // Step start hook
     if (config.hooks?.onStepStart) {
@@ -548,11 +685,17 @@ async function runAgentLoopDirect(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
+    const onStepFinish = buildOnStepFinish(
+      config,
+      tracker,
+      stepAbort,
+      i,
+      debugSurface.emit,
+    );
 
     // Call streamText
     const result = streamText({
-      model: config.model,
+      model,
       system: systemPrompt,
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
@@ -690,8 +833,25 @@ export async function* streamAgentLoop(
     onLimitExceeded: config.usage?.onLimitExceeded,
   });
 
+  // Debug surface (#72). Generator can't yield from inside a middleware
+  // callback, so we buffer debug events into `debugQueue` and drain
+  // them between the explicit `yield` points below. `setupDebug`
+  // receives a push-to-queue callback; the caller-facing
+  // `AgentConfig.debug.sink` is still called synchronously from
+  // within `setupDebug` (that path doesn't go through the queue).
+  const debugQueue: ProgressEvent[] = [];
+  const debugSurface = setupDebug(config, (ev) => debugQueue.push(ev));
+  const model = debugSurface.model;
+  function drainDebug(): ProgressEvent[] {
+    const drained = debugQueue.slice();
+    debugQueue.length = 0;
+    return drained;
+  }
+
   // Build system prompt
   const systemPrompt = await buildSystemPrompt(config, context);
+  emitSystemPromptDebug(config.debug, debugSurface.emit, systemPrompt);
+  for (const ev of drainDebug()) yield ev;
 
   // Message history — prepend conversation history if provided
   const messages: ModelMessage[] = [];
@@ -717,6 +877,8 @@ export async function* streamAgentLoop(
       };
       break;
     }
+    // Middleware tags events with the iteration index.
+    debugSurface.stepRef.current = i;
 
     // Step start hook
     if (config.hooks?.onStepStart) {
@@ -775,11 +937,17 @@ export async function* streamAgentLoop(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(config, tracker, stepAbort, i);
+    const onStepFinish = buildOnStepFinish(
+      config,
+      tracker,
+      stepAbort,
+      i,
+      debugSurface.emit,
+    );
 
-    // Call streamText
+    // Call streamText (with the debug-wrapped model if debug is set).
     const result = streamText({
-      model: config.model,
+      model,
       system: systemPrompt,
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
@@ -804,6 +972,12 @@ export async function* streamAgentLoop(
           if (stepAbort.signal.aborted && !signal?.aborted) hardCapTripped = true;
           break;
         }
+
+        // Drain any debug events the middleware emitted since the
+        // last yield. `response-part` events fire from inside
+        // `wrapStream`'s TransformStream, which the consumer only
+        // sees after we yield back to it.
+        for (const ev of drainDebug()) yield ev;
 
         switch (part.type) {
           case 'text-delta':
@@ -889,6 +1063,10 @@ export async function* streamAgentLoop(
           }
         }
       }
+      // Drain any trailing debug events emitted during the final
+      // stream parts (cache breakdown fires from onStepFinish which
+      // runs after the last fullStream part).
+      for (const ev of drainDebug()) yield ev;
     } catch (err) {
       if (stepAbort.signal.aborted) {
         aborted = true;

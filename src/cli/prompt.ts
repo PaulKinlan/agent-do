@@ -19,6 +19,7 @@ import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
+import { buildDebugConfigFromArgs } from './debug-config.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -70,6 +71,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     // the user explicitly asked for it (`--show-content`). Defaults to
     // summary + data only so file contents don't leak into CI logs.
     emitFullResult: args.showContent,
+    // Wire deep observability (#72) when the operator asked for it.
+    // `--log-level debug` turns every channel on; `trace` adds the
+    // per-part response stream.
+    debug: buildDebugConfigFromArgs(args),
   });
 
   // Read stdin if piped
