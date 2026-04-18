@@ -9,12 +9,14 @@
  * any piped consumers.
  */
 
-import type { ProgressEvent } from '../types.js';
+import type { DebugEvent, ProgressEvent } from '../types.js';
 import type { ParsedArgs } from './args.js';
 
 export interface RenderOptions {
   verbose: boolean;
   showContent: boolean;
+  /** CLI log level (#72). Drives debug-event rendering. */
+  logLevel: ParsedArgs['logLevel'];
 }
 
 export function renderOptionsFromArgs(args: ParsedArgs): RenderOptions {
@@ -22,6 +24,7 @@ export function renderOptionsFromArgs(args: ParsedArgs): RenderOptions {
     verbose: args.verbose,
     // --show-content implies verbose (see args.ts).
     showContent: args.showContent,
+    logLevel: args.logLevel,
   };
 }
 
@@ -81,8 +84,89 @@ export function renderEvent(
       process.stderr.write(`Error: ${event.content}\n`);
       return { handled: false };
 
+    case 'debug':
+      if (event.debug) renderDebug(event.debug, opts);
+      return { handled: true };
+
     default:
       return { handled: false };
+  }
+}
+
+/**
+ * Render a DebugEvent. Only fires on `--log-level debug` or `trace`.
+ * Output is grouped by channel with greppable prefixes.
+ */
+function renderDebug(event: DebugEvent, opts: RenderOptions): void {
+  const rank = logLevelRank(opts.logLevel);
+  const wantDebug = rank >= logLevelRank('debug');
+  const wantTrace = rank >= logLevelRank('trace');
+  if (!wantDebug) return;
+
+  switch (event.channel) {
+    case 'system-prompt': {
+      const tag = event.truncated ? ' (truncated)' : '';
+      process.stderr.write(
+        `\n[debug:system-prompt] ${event.bytes} bytes${tag}\n─── system prompt ───\n${event.content}\n─────────────────────\n`,
+      );
+      return;
+    }
+    case 'messages': {
+      const tag = event.truncated ? ' (some bodies truncated)' : '';
+      process.stderr.write(
+        `\n[debug:messages] step=${event.step} count=${event.messages.length} bytes=${event.bytes}${tag}\n`,
+      );
+      if (wantTrace) {
+        for (const [idx, msg] of event.messages.entries()) {
+          const body = typeof msg.content === 'string'
+            ? msg.content
+            : JSON.stringify(msg.content);
+          process.stderr.write(
+            `  [${idx}] ${msg.role}: ${truncate(body, 200)}\n`,
+          );
+        }
+      }
+      return;
+    }
+    case 'request': {
+      const tools = event.toolNames.length > 0
+        ? ` tools=[${event.toolNames.slice(0, 6).join(',')}${event.toolNames.length > 6 ? ',…' : ''}]`
+        : ' tools=none';
+      process.stderr.write(
+        `[debug:request] step=${event.step} model=${event.model}${tools}\n`,
+      );
+      return;
+    }
+    case 'response-part': {
+      // Emit per-part output only at trace. At `debug` level we omit
+      // it — the full-stream firehose is too noisy for the compact
+      // view.
+      if (wantTrace) {
+        const detail = event.part ? ` ${truncate(JSON.stringify(event.part), 160)}` : '';
+        process.stderr.write(
+          `[debug:response-part] step=${event.step} ${event.partType}${detail}\n`,
+        );
+      }
+      return;
+    }
+    case 'cache': {
+      const total = event.cacheReadTokens + event.cacheWriteTokens + event.noCacheTokens;
+      const hitPct = total > 0 ? Math.round((event.cacheReadTokens / total) * 100) : 0;
+      process.stderr.write(
+        `[debug:cache] step=${event.step} read=${event.cacheReadTokens} write=${event.cacheWriteTokens} no-cache=${event.noCacheTokens} out=${event.outputTokens} hit=${hitPct}%\n`,
+      );
+      return;
+    }
+  }
+}
+
+function logLevelRank(level: ParsedArgs['logLevel']): number {
+  switch (level) {
+    case 'silent': return 0;
+    case 'info': return 1;
+    case 'verbose': return 2;
+    case 'debug': return 3;
+    case 'trace': return 4;
   }
 }
 

@@ -46,6 +46,7 @@ import { createWorkspaceTools } from '../tools/workspace-tools.js';
 import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
+import { buildDebugConfigFromArgs } from './debug-config.js';
 import type { Agent } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -324,6 +325,11 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
         allow: args.allow,
       });
     }
+    // Inject debug config from CLI flags unless the script set its own.
+    if (cfg.debug === undefined) {
+      const debug = buildDebugConfigFromArgs(args);
+      if (debug) cfg.debug = debug;
+    }
     agent = createAgent(cfg as any);
   } else if (exported.systemPrompt || exported.name) {
     // Simple config — resolve model from provider/args
@@ -376,6 +382,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
       usage: { enabled: true },
       emitFullResult: args.showContent,
+      debug: buildDebugConfigFromArgs(args),
     });
   } else {
     throw new Error(
@@ -456,6 +463,7 @@ async function runSavedAgent(
     permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
     usage: { enabled: true },
     emitFullResult: args.showContent,
+    debug: buildDebugConfigFromArgs(args),
   });
 
   const stdinContent = await readStdin();

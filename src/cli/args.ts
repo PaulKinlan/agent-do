@@ -74,6 +74,23 @@ export interface ParsedArgs {
    * semi-automated sessions where some destructive tools are expected.
    */
   allow: string[];
+  /**
+   * CLI log level (#72). Graduated observability:
+   *
+   * - `silent` — no stderr output, only the final answer on stdout
+   * - `info` (default) — errors only; final answer on stdout
+   * - `verbose` — adds thinking deltas + tool call/result summaries
+   *   (what `--verbose` used to do)
+   * - `debug` — adds system-prompt + messages + cache + request
+   *   metadata; raw response parts appear as compact summaries
+   * - `trace` — adds full raw stream parts (every text-delta /
+   *   tool-input-delta / finish event)
+   *
+   * Derived from `--log-level <level>` or from the legacy
+   * `--verbose` / `--show-content` / `--json` flag combinations for
+   * backward compatibility.
+   */
+  logLevel: 'silent' | 'info' | 'verbose' | 'debug' | 'trace';
 }
 
 /**
@@ -105,7 +122,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     yes: false,
     acceptAll: false,
     allow: [],
+    logLevel: 'info',
   };
+  // Track whether --log-level was explicitly set so backward-compat
+  // --verbose / --show-content don't silently demote a higher level
+  // picked by the operator.
+  let explicitLogLevel = false;
 
   const positional: string[] = [];
   let i = 0;
@@ -157,11 +179,33 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.noTools = true;
     } else if (arg === '--verbose') {
       args.verbose = true;
+      // `--verbose` is the legacy knob. Only promote `logLevel` to
+      // `verbose` if the operator hasn't already picked a higher
+      // level — otherwise `--log-level debug --verbose` would
+      // downgrade to verbose.
+      if (!explicitLogLevel && levelRank(args.logLevel) < levelRank('verbose')) {
+        args.logLevel = 'verbose';
+      }
     } else if (arg === '--show-content') {
       args.showContent = true;
-      // Showing full content implies verbose output; otherwise the flag
-      // has nothing to attach to in the default quiet mode.
       args.verbose = true;
+      if (!explicitLogLevel && levelRank(args.logLevel) < levelRank('verbose')) {
+        args.logLevel = 'verbose';
+      }
+    } else if (arg === '--log-level') {
+      const val = requireValue(argv, ++i, '--log-level');
+      if (val !== 'silent' && val !== 'info' && val !== 'verbose' && val !== 'debug' && val !== 'trace') {
+        throw new Error('--log-level must be one of: silent, info, verbose, debug, trace');
+      }
+      args.logLevel = val;
+      explicitLogLevel = true;
+      // debug/trace imply verbose-style visibility + full content.
+      if (val === 'verbose' || val === 'debug' || val === 'trace') {
+        args.verbose = true;
+      }
+      if (val === 'debug' || val === 'trace') {
+        args.showContent = true;
+      }
     } else if (arg === '--exclude') {
       const val = requireValue(argv, ++i, '--exclude');
       args.exclude.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
@@ -243,6 +287,21 @@ function requireValue(argv: string[], index: number, flag: string): string {
     throw new Error(`${flag} requires a value`);
   }
   return argv[index]!;
+}
+
+/**
+ * Ordinal for CLI log levels. Used so the legacy `--verbose` flag
+ * doesn't accidentally demote an already-higher level set via
+ * `--log-level`. (#72)
+ */
+export function levelRank(level: ParsedArgs['logLevel']): number {
+  switch (level) {
+    case 'silent': return 0;
+    case 'info': return 1;
+    case 'verbose': return 2;
+    case 'debug': return 3;
+    case 'trace': return 4;
+  }
 }
 
 /**

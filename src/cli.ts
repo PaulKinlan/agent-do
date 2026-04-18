@@ -91,6 +91,10 @@ Options:
   --no-tools             Disable all file tools
   --verbose              Show thinking, tool calls, and per-step summaries (stderr)
   --show-content         With --verbose: also print each tool's full result
+  --log-level <level>    silent | info | verbose | debug | trace (default: info).
+                         'debug' adds system prompt, messages, cache metrics,
+                         and request metadata. 'trace' adds every raw stream
+                         part. Overrides --verbose / --show-content.
   --json                 Output as JSON
   -h, --help             Show this help
 
@@ -114,6 +118,12 @@ Logs:
   stderr. The final answer still goes to stdout so you can pipe it. Full raw
   tool output is withheld by default to keep secrets out of CI logs; pass
   --show-content to include it.
+
+  --log-level debug adds a layer below verbose: the resolved system prompt,
+  the message list sent to the model per step, per-step cache read/write
+  tokens, and request metadata. --log-level trace adds every raw stream
+  part (text-delta, tool-call, finish) to that. Expect big output —
+  redirect stderr to a file.
 
 Eval options:
   --output <format>      console | json | csv (default: console)

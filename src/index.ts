@@ -40,6 +40,8 @@ export { createOrchestrator } from './orchestrator.js';
 // Types
 export type {
   ProgressEvent,
+  DebugEvent,
+  DebugConfig,
   Skill,
   SkillSearchResult,
   SkillStore,
