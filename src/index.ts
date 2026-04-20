@@ -20,9 +20,15 @@ export { evaluatePermission } from './permissions.js';
 // Skills
 export {
   buildSkillsPrompt,
+  buildSkillUsageInstruction,
   parseSkillMd,
   createSkillTools,
   InMemorySkillStore,
+  resolveSkillsMode,
+} from './skills.js';
+export type {
+  SkillsPromptMode,
+  BuildSkillsPromptOptions,
 } from './skills.js';
 
 // Routines — named prompt-as-macro procedures (#77)

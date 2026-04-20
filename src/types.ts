@@ -169,6 +169,14 @@ export interface Skill {
   content: string; // The actual skill instructions
   author?: string;
   version?: string;
+  /**
+   * Verbatim user phrases that should trigger this skill. Concatenated into
+   * the description when the manifest is built, so substring matching picks
+   * up how users actually phrase requests (not just how authors name skills).
+   * See issue #74 — addresses the "skills never fire because descriptions
+   * don't match the user's voice" problem.
+   */
+  triggers?: string[];
 }
 
 /**
@@ -393,6 +401,29 @@ export interface AgentConfig {
    * by name. Same threat model as {@link allowSkillInstall}.
    */
   allowRoutineSave?: boolean;
+  /**
+   * How installed skills are injected into the system prompt (#74).
+   *
+   * - `'full'` — every skill's full body is dumped into the prompt (the
+   *   pre-#74 behaviour). Good for small skill sets; works when the caller
+   *   has counted the byte budget.
+   * - `'manifest'` — only id / name / description (+ triggers) go in;
+   *   bodies are fetched on demand via the `load_skill({ skillId })` tool.
+   *   Essential for large skill libraries or cheaper models that can't
+   *   absorb many skill bodies at once.
+   * - `'auto'` (default) — start in `full`; switch to `manifest` once
+   *   the combined skill bodies cross the `skillsManifestThreshold` byte
+   *   budget. Gives the eager-load experience on tiny sets and the
+   *   lazy-load experience on big ones without the caller choosing.
+   */
+  skillsMode?: 'full' | 'manifest' | 'auto';
+  /**
+   * Byte budget for the eager-load path in `skillsMode: 'auto'` (#74).
+   * Default: `32 * 1024` (32 KB). Once the total of all skill bodies
+   * exceeds this, auto-mode flips to `manifest`. Ignored for explicit
+   * `skillsMode: 'full' | 'manifest'`.
+   */
+  skillsManifestThreshold?: number;
   maxIterations?: number;
   innerStepLimit?: number;
   hooks?: AgentHooks;
