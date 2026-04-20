@@ -32,23 +32,17 @@ import {
   createFileTools,
 } from 'agent-do';
 import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
 //  Configuration
 // ═══════════════════════════════════════════════
 
 const SANDBOX_DIR = resolve('sandbox');
-const MASTER_MODEL = 'claude-sonnet-4-6';
-const WORKER_MODEL = 'claude-haiku-4-5';
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required.');
-  process.exit(1);
-}
-
-const provider = createAnthropic({ apiKey });
+// Resolve provider from env — Anthropic / Google / OpenAI. See
+// ./provider.ts for DEMO_PROVIDER + per-provider key vars.
+const resolved = await resolveProvider();
 
 // ═══════════════════════════════════════════════
 //  Seed the workspace on first run
@@ -127,6 +121,7 @@ const TASKS = `# Tasks
 console.log('=======================================================');
 console.log('  Chief of Staff demo');
 console.log('=======================================================\n');
+announce(resolved);
 console.log(`  Workspace: ${SANDBOX_DIR}`);
 
 seed('priority-map.md', PRIORITY_MAP);
@@ -164,7 +159,7 @@ const orchestrator = createOrchestrator({
   master: {
     id: 'master',
     name: 'Chief of Staff',
-    model: provider(MASTER_MODEL) as any,
+    model: resolved.model(resolved.defaults.master),
     systemPrompt: `You are the principal's chief of staff, coordinating three specialists against a shared workspace.
 
 ${policyPreamble}
@@ -207,7 +202,7 @@ Silence contract: if there is nothing actionable in this run, respond with "OK" 
     {
       id: 'executive-assistant',
       name: 'Executive Assistant',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are the principal's executive assistant. You triage the inbox and handle scheduling.
 
 ${policyPreamble}
@@ -222,7 +217,7 @@ Deliverables:
     {
       id: 'business-development',
       name: 'Business Development',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are the principal's BD / CRM owner.
 
 ${policyPreamble}
@@ -239,7 +234,7 @@ Defer to executive-assistant when a signal is scheduling/calendar-only.`,
     {
       id: 'task-manager',
       name: 'Task Manager',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are the principal's task manager. You own tasks.md.
 
 ${policyPreamble}

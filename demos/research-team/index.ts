@@ -17,28 +17,21 @@ import {
   createFileTools,
 } from 'agent-do';
 import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
 //  Configuration
 // ═══════════════════════════════════════════════
 
 const DATA_DIR = '.data';
-const MASTER_MODEL = 'claude-sonnet-4-6';
-const WORKER_MODEL = 'claude-haiku-4-5';
 
 // ═══════════════════════════════════════════════
 //  Setup
 // ═══════════════════════════════════════════════
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required.');
-  console.error('  export ANTHROPIC_API_KEY=sk-ant-...');
-  process.exit(1);
-}
-
-const provider = createAnthropic({ apiKey });
+// Resolve provider from env — Anthropic / Google / OpenAI. See
+// ./provider.ts for DEMO_PROVIDER + per-provider key vars.
+const resolved = await resolveProvider();
 
 // Persistent filesystem store for the master (to save reports)
 const store = new FilesystemMemoryStore(DATA_DIR);
@@ -53,17 +46,19 @@ console.log('='.repeat(55));
 console.log('  Multi-Agent Research Pipeline');
 console.log('='.repeat(55));
 console.log('');
+announce(resolved);
+console.log('');
 console.log('  Agents:');
-console.log(`    Master:     ${MASTER_MODEL} (coordinates work)`);
-console.log(`    Researcher: ${WORKER_MODEL} (gathers information)`);
-console.log(`    Writer:     ${WORKER_MODEL} (drafts the report)`);
+console.log(`    Master:     ${resolved.defaults.master} (coordinates work)`);
+console.log(`    Researcher: ${resolved.defaults.worker} (gathers information)`);
+console.log(`    Writer:     ${resolved.defaults.worker} (drafts the report)`);
 console.log('');
 
 const orchestrator = createOrchestrator({
   master: {
     id: 'master',
     name: 'Master',
-    model: provider(MASTER_MODEL) as any,
+    model: resolved.model(resolved.defaults.master),
     systemPrompt: `You are a master agent coordinating a research pipeline.
 
 Your workflow:
@@ -128,7 +123,7 @@ Save the final report to a file before responding.`,
     {
       id: 'researcher',
       name: 'Researcher',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are a research specialist. When given a topic, provide comprehensive research including:
 
 - Overview and definition
@@ -145,7 +140,7 @@ Cite specific facts, dates, and numbers where possible.`,
     {
       id: 'writer',
       name: 'Writer',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are a writing specialist. When given research notes, produce a polished markdown report with:
 
 - A clear title (# heading)

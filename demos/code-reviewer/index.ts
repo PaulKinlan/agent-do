@@ -20,13 +20,12 @@ import {
   type AgentHooks,
 } from 'agent-do';
 import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { resolveProvider } from './provider.js';
 
 // ═══════════════════════════════════════════════
 //  Configuration
 // ═══════════════════════════════════════════════
 
-const MODEL_ID = 'claude-sonnet-4-6';
 const AGENT_ID = 'reviewer';
 const OUTPUT_DIR = '.data/reviews';
 
@@ -34,12 +33,9 @@ const OUTPUT_DIR = '.data/reviews';
 //  Setup
 // ═══════════════════════════════════════════════
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required.');
-  console.error('  export ANTHROPIC_API_KEY=sk-ant-...');
-  process.exit(1);
-}
+// Resolve provider from env — Anthropic / Google / OpenAI. See
+// ./provider.ts for DEMO_PROVIDER + per-provider key vars.
+const resolved = await resolveProvider();
 
 // Target directory from args or cwd
 const targetDir = path.resolve(process.argv[2] || process.cwd());
@@ -59,9 +55,9 @@ console.log('='.repeat(55));
 console.log('  Automated Code Reviewer');
 console.log('='.repeat(55));
 console.log('');
-console.log(`  Target:  ${targetDir}`);
-console.log(`  Model:   ${MODEL_ID}`);
-console.log(`  Mode:    READ-ONLY`);
+console.log(`  Target:   ${targetDir}`);
+console.log(`  Provider: ${resolved.name} (${resolved.defaults.master})`);
+console.log(`  Mode:     READ-ONLY`);
 console.log('');
 
 // ═══════════════════════════════════════════════
@@ -161,7 +157,7 @@ const hooks: AgentHooks = {
 const agent = createAgent({
   id: AGENT_ID,
   name: 'Code Reviewer',
-  model: createAnthropic({ apiKey })(MODEL_ID) as any,
+  model: resolved.model(resolved.defaults.master),
   systemPrompt: `You are an expert code reviewer. You analyze source code for issues across several categories.
 
 Your review process:
