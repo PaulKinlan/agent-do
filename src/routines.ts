@@ -184,11 +184,35 @@ const ROUTINE_ID_MAX = 64;
 const ROUTINE_NAME_MAX = 64;
 const ROUTINE_DESCRIPTION_MAX = 256;
 
+/**
+ * IDs that collide with `Object.prototype` members. Even though the
+ * store now validates/guards these paths, the best fix is to reject
+ * them at the entry point so a hostile id never reaches the store
+ * (Codex #77 review). Includes the classic prototype-pollution keys
+ * and a couple of filesystem gotchas (`.` / `..` already fail the
+ * regex, but kept for readers).
+ */
+const RESERVED_ROUTINE_IDS = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'hasOwnProperty',
+  'toString',
+  'valueOf',
+]);
+
+function isValidRoutineId(id: string): boolean {
+  return ROUTINE_ID_RE.test(id) && !RESERVED_ROUTINE_IDS.has(id);
+}
+
 const SaveRoutineInputSchema = z.object({
   id: z
     .string()
     .regex(ROUTINE_ID_RE)
     .max(ROUTINE_ID_MAX)
+    .refine((id) => !RESERVED_ROUTINE_IDS.has(id), {
+      message: 'Routine ID collides with a reserved name',
+    })
     .describe('Unique routine ID (kebab-case; alphanumerics, dashes, underscores only)'),
   name: z.string().min(1).max(ROUTINE_NAME_MAX).describe('Human-readable routine name'),
   description: z
@@ -273,7 +297,15 @@ export function createRoutineTools(
         if (!routine) {
           return `Routine "${routineId}" not found. Call list_routines to see available routines.`;
         }
-        await store.recordRun(routineId);
+        // Run tracking is observational — persistence failures shouldn't
+        // block the routine body from being returned to the model
+        // (Copilot #77 review). If the filesystem throws EACCES on
+        // .runs.json, the user still gets their routine.
+        try {
+          await store.recordRun(routineId);
+        } catch {
+          /* observational; keep going */
+        }
         const body = interpolateRoutine(routine.body, args ?? {});
         return `<routine name="${escapeAttr(routine.name)}" id="${escapeAttr(routine.id)}">\n${escapeRoutineBody(body)}\n</routine>`;
       },
@@ -386,12 +418,45 @@ export class FilesystemRoutineStore implements RoutineStore {
     Record<string, { runCount: number; lastRun?: string }>
   > {
     if (this.runsCache) return this.runsCache;
-    let cache: Record<string, { runCount: number; lastRun?: string }> = {};
+    // Null-prototype object so keys like `__proto__` / `constructor` /
+    // `prototype` can't shadow Object.prototype members from a hostile
+    // sidecar file (Copilot #77 review). Also validates per-entry so a
+    // malformed runCount (negative, float, NaN, non-number) doesn't
+    // corrupt subsequent increments.
+    const cache: Record<string, { runCount: number; lastRun?: string }> =
+      Object.create(null);
     try {
       const raw = await fs.readFile(this.runsFile(), 'utf8');
-      const parsed = JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw);
       if (typeof parsed === 'object' && parsed !== null) {
-        cache = parsed as Record<string, { runCount: number; lastRun?: string }>;
+        for (const [routineId, rawValue] of Object.entries(parsed)) {
+          if (
+            routineId === '__proto__' ||
+            routineId === 'constructor' ||
+            routineId === 'prototype'
+          ) {
+            continue;
+          }
+          if (!isValidRoutineId(routineId)) continue;
+          if (typeof rawValue !== 'object' || rawValue === null) continue;
+          const candidate = rawValue as {
+            runCount?: unknown;
+            lastRun?: unknown;
+          };
+          if (
+            !Number.isSafeInteger(candidate.runCount) ||
+            (candidate.runCount as number) < 0
+          ) {
+            continue;
+          }
+          const entry: { runCount: number; lastRun?: string } = {
+            runCount: candidate.runCount as number,
+          };
+          if (typeof candidate.lastRun === 'string') {
+            entry.lastRun = candidate.lastRun;
+          }
+          cache[routineId] = entry;
+        }
       }
     } catch {
       // Missing file / malformed JSON → start fresh. Runs tracking is
@@ -415,7 +480,7 @@ export class FilesystemRoutineStore implements RoutineStore {
     for (const entry of entries) {
       if (!entry.endsWith('.md')) continue;
       const id = entry.replace(/\.md$/, '');
-      if (!ROUTINE_ID_RE.test(id)) continue;
+      if (!isValidRoutineId(id)) continue;
       const content = await fs.readFile(join(this.rootDir, entry), 'utf8');
       const routine = parseRoutineMd(content, id);
       const runData = runs[id];
@@ -429,7 +494,7 @@ export class FilesystemRoutineStore implements RoutineStore {
   }
 
   async get(id: string): Promise<Routine | undefined> {
-    if (!ROUTINE_ID_RE.test(id)) return undefined;
+    if (!isValidRoutineId(id)) return undefined;
     try {
       const content = await fs.readFile(join(this.rootDir, `${id}.md`), 'utf8');
       const routine = parseRoutineMd(content, id);
@@ -446,9 +511,9 @@ export class FilesystemRoutineStore implements RoutineStore {
   }
 
   async save(routine: Routine): Promise<void> {
-    if (!ROUTINE_ID_RE.test(routine.id)) {
+    if (!isValidRoutineId(routine.id)) {
       throw new TypeError(
-        `Routine ID "${routine.id}" must match ${ROUTINE_ID_RE}`,
+        `Routine ID "${routine.id}" must match ${ROUTINE_ID_RE} and not be a reserved name`,
       );
     }
     await this.ensureDir();
@@ -472,7 +537,7 @@ export class FilesystemRoutineStore implements RoutineStore {
   }
 
   async remove(id: string): Promise<void> {
-    if (!ROUTINE_ID_RE.test(id)) return;
+    if (!isValidRoutineId(id)) return;
     try {
       await fs.unlink(join(this.rootDir, `${id}.md`));
     } catch {
@@ -486,6 +551,19 @@ export class FilesystemRoutineStore implements RoutineStore {
   }
 
   async recordRun(id: string): Promise<void> {
+    // Contract: `recordRun` is a no-op for missing routines. Without
+    // this check the sidecar could grow entries for routines that never
+    // existed (direct attacker-controlled IDs via a hostile `run_routine`
+    // call, or IDs the caller passed directly before saving). Also
+    // refuse IDs that fail the safe-char regex so prototype-polluting
+    // keys like `__proto__` can't enter `.runs.json` this way
+    // (Copilot + Codex #77 reviews).
+    if (!isValidRoutineId(id)) return;
+    try {
+      await fs.access(join(this.rootDir, `${id}.md`));
+    } catch {
+      return; // routine file doesn't exist → no-op
+    }
     const runs = await this.loadRuns();
     const existing = runs[id] ?? { runCount: 0 };
     runs[id] = {

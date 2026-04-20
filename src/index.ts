@@ -34,6 +34,7 @@ export {
   FilesystemRoutineStore,
 } from './routines.js';
 export type { CreateRoutineToolsOptions } from './routines.js';
+export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
 // Workspace tools (real project files) and memory tools (agent scratchpad)
 export { createWorkspaceTools } from './tools/workspace-tools.js';
