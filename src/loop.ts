@@ -74,6 +74,7 @@ function addCacheControl(messages: ModelMessage[], model: LanguageModel): ModelM
 import { evaluatePermission } from './permissions.js';
 import { buildSkillsPrompt, createSkillTools } from './skills.js';
 import { mountMcpServers, type MountedMcpServers } from './mcp.js';
+import { createRoutineTools } from './routines.js';
 import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
@@ -460,6 +461,17 @@ function buildTools(
       allowInstall: config.allowSkillInstall === true,
     });
     for (const [name, t] of Object.entries(skillTools)) {
+      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+    }
+  }
+
+  // Add routine tools if a store is provided. `save_routine` is only
+  // registered when `allowRoutineSave` is explicitly set — see #77.
+  if (config.routines) {
+    const routineTools = createRoutineTools(config.routines, {
+      allowSave: config.allowRoutineSave === true,
+    });
+    for (const [name, t] of Object.entries(routineTools)) {
       tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
     }
   }

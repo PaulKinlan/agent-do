@@ -204,6 +204,59 @@ export interface SkillStore {
   search(query: string): Promise<SkillSearchResult[]>;
 }
 
+// ─── Routines (#77) ─────────────────────────────────────────────────────
+
+/**
+ * A routine input arg. Kept minimal — routines are prompts, not
+ * typed DSLs. `optional` lets the routine author flag args that can be
+ * omitted without failing; the model sees the metadata and can ask
+ * the user for required args before calling `run_routine`.
+ */
+export interface RoutineInput {
+  name: string;
+  description?: string;
+  optional?: boolean;
+}
+
+/**
+ * A saved routine — a named procedure the agent can invoke by id.
+ *
+ * Routines differ from skills in *how they fire*: skills match against
+ * task intent autonomously; routines are invoked explicitly by name
+ * via `run_routine(id, args)`. They share the markdown-with-frontmatter
+ * storage shape. See issue #77.
+ */
+export interface Routine {
+  id: string;
+  name: string;
+  description: string;
+  /** The routine body — markdown prompt, may contain `{{arg}}` placeholders. */
+  body: string;
+  inputs?: RoutineInput[];
+  version?: string;
+  /** Incremented every time the routine is invoked via `run_routine`. */
+  runCount: number;
+  /** ISO timestamp of the most recent invocation. Undefined for never-run. */
+  lastRun?: string;
+}
+
+/**
+ * Storage interface for routines.
+ *
+ * Implementations are expected to be local (in-memory, filesystem,
+ * SQLite, …). Run metadata (`runCount`, `lastRun`) is tracked by the
+ * store so a future agent-proposed capture pass can detect "I've done
+ * this N times" without the agent having to maintain state.
+ */
+export interface RoutineStore {
+  list(): Promise<Routine[]>;
+  get(id: string): Promise<Routine | undefined>;
+  save(routine: Routine): Promise<void>;
+  remove(id: string): Promise<void>;
+  /** Increment runCount and stamp lastRun. No-op if the routine doesn't exist. */
+  recordRun(id: string): Promise<void>;
+}
+
 // Usage record
 export interface UsageRecord {
   timestamp: string;
@@ -325,6 +378,21 @@ export interface AgentConfig {
    * (`permissions: { mode: 'ask' }` or `hooks.onPreToolUse`).
    */
   allowSkillInstall?: boolean;
+  /**
+   * Saved routines — named prompt-as-macro procedures (#77). When set,
+   * the model gains `list_routines` and `run_routine(id, args)` tools
+   * that surface and execute routines by name.
+   */
+  routines?: RoutineStore;
+  /**
+   * Expose the privileged `save_routine` tool to the model (#77).
+   *
+   * Default **`false`**: the LLM cannot save routines. Save is privileged
+   * because a prompt-injected agent could persistently install a hostile
+   * "routine" that future runs would execute when the user invokes it
+   * by name. Same threat model as {@link allowSkillInstall}.
+   */
+  allowRoutineSave?: boolean;
   maxIterations?: number;
   innerStepLimit?: number;
   hooks?: AgentHooks;
