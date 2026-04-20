@@ -23,6 +23,30 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
+import { createRequire } from 'node:module';
+
+/**
+ * Library version used in the MCP `Client` handshake metadata (what the
+ * server sees as the connecting client). Resolved at module load from
+ * the real `package.json` so the value tracks the release version
+ * without a second source of truth to keep in sync (Copilot #75 review).
+ *
+ * Best-effort: if the JSON read fails (unlikely in a normal install,
+ * but possible in some bundled-runtime / edge-runtime configs), fall
+ * back to a known-stale constant. The server uses this purely for
+ * logging — a stale value is informational drift, not a correctness
+ * issue — so the fallback shouldn't throw and interrupt the mount.
+ */
+const LIB_VERSION: string = (() => {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require('../package.json') as { version?: string };
+    if (typeof pkg.version === 'string') return pkg.version;
+  } catch {
+    // fall through to the literal
+  }
+  return '0.0.0';
+})();
 
 /**
  * A single MCP server to mount. `name` is the namespace used to prefix
@@ -74,8 +98,19 @@ export interface MountedMcpServers {
   close: () => Promise<void>;
 }
 
-const NAMESPACE_RE = /^[a-zA-Z0-9_-]+$/;
-/** Prefix applied to every MCP-sourced tool name. Also used by loop.ts for logging. */
+/**
+ * Regex for acceptable MCP server namespaces *and* tool names.
+ *
+ * Excludes `__` (two underscores) specifically because the tool name
+ * assembled as `mcp__<server>__<tool>` uses `__` as the separator;
+ * allowing it inside either segment lets distinct `(server, tool)`
+ * pairs collapse to the same key (e.g. `server="a", tool="b__c"` and
+ * `server="a__b", tool="c"` both flatten to `mcp__a__b__c`). The
+ * later registration would silently overwrite the earlier one,
+ * hiding tools or mis-routing calls (Codex #75 review).
+ */
+const NAMESPACE_RE = /^(?!.*__)[a-zA-Z0-9_-]+$/;
+/** Prefix applied to every MCP-sourced tool name. */
 export const MCP_TOOL_PREFIX = 'mcp__';
 
 /**
@@ -139,12 +174,18 @@ export async function mountMcpServers(
     for (const config of configs) {
       const client = new Client({
         name: 'agent-do',
-        version: '0.2.0',
+        version: LIB_VERSION,
       });
+
+      // Track the client *before* `connect()` (Copilot #75 review). If
+      // `connect()` throws after the transport has already spawned a
+      // subprocess / opened a socket, `closeAll()` needs to close this
+      // client to release the resource — otherwise we leak on the
+      // all-or-nothing failure path.
+      clients.push(client);
 
       const transport = createTransport(config.transport);
       await client.connect(transport);
-      clients.push(client);
 
       const { tools: mcpTools } = await client.listTools();
       for (const mcpTool of mcpTools) {
@@ -155,7 +196,26 @@ export async function mountMcpServers(
           continue;
         }
 
+        // Reject tool names that contain the `__` separator — same
+        // rationale as the server namespace (a `tool.name` with `__`
+        // would collide with other (server, tool) pairs when flattened
+        // to `mcp__<server>__<tool>`). Codex #75.
+        if (!NAMESPACE_RE.test(mcpTool.name)) {
+          throw new TypeError(
+            `MCP server "${config.name}" exposes tool "${mcpTool.name}" which does not match ${NAMESPACE_RE} — names containing "__" or other unsafe characters would collide in the namespaced tool set.`,
+          );
+        }
+
         const toolName = namespacedToolName(config.name, mcpTool.name);
+        // Belt-and-braces: guard against the regex missing anything by
+        // also detecting duplicate computed names. With `__` excluded
+        // from both segments this should be unreachable, but a future
+        // regex weakening would still get caught here.
+        if (toolName in tools) {
+          throw new TypeError(
+            `MCP tool name collision for "${toolName}" (server "${config.name}", tool "${mcpTool.name}"). A tool with this namespaced name is already registered.`,
+          );
+        }
         toolOrigins[toolName] = config.name;
 
         // Dynamic tool: schema is not known at compile time, so we route

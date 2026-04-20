@@ -274,8 +274,11 @@ describe('mountMcpServers (#75)', () => {
   });
 
   it('closes all clients on failed mount (all-or-nothing)', async () => {
-    // First server connects fine, second throws. We expect the first
-    // client to be closed and the whole call to reject.
+    // First server connects fine, second throws. Both clients should be
+    // closed — the first because it succeeded, the second because its
+    // transport may have spawned a subprocess before `connect()` threw.
+    // Copilot #75 review: clients must be tracked *before* connect() so
+    // the failing client is included in the teardown list.
     let connectCount = 0;
     stubClient.connect.mockImplementation(async () => {
       connectCount++;
@@ -291,12 +294,45 @@ describe('mountMcpServers (#75)', () => {
       ]),
     ).rejects.toThrow(/boom/);
 
-    // The first client got created and connected; after the failure
-    // we expect it to be closed so no subprocess leaks.
-    expect(stubClient.close).toHaveBeenCalled();
+    // The stub is shared, so every tracked Client's `close()` call
+    // hits the same mock. With push-before-connect, both client-a
+    // (successful) and client-b (failed mid-connect) are tracked,
+    // and closeAll should call close on both.
+    expect(stubClient.close).toHaveBeenCalledTimes(2);
 
     stubClient.connect.mockReset();
     stubClient.connect.mockResolvedValue(undefined);
+  });
+
+  it('rejects server names containing "__" to prevent tool-key collisions', async () => {
+    await expect(
+      mountMcpServers([
+        { name: 'a__b', transport: { type: 'stdio', command: 'noop' } },
+      ]),
+    ).rejects.toThrow(/must match/);
+  });
+
+  it('rejects MCP tools whose names contain "__" (collision guard, Codex #75)', async () => {
+    stubClient.listTools.mockResolvedValue({
+      tools: [
+        {
+          name: 'ok_name',
+          description: 'good',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'bad__name',
+          description: 'ambiguous',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    });
+
+    await expect(
+      mountMcpServers([
+        { name: 'srv', transport: { type: 'stdio', command: 'noop' } },
+      ]),
+    ).rejects.toThrow(/match/);
   });
 
   it('close() is idempotent', async () => {
