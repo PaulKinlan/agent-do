@@ -231,8 +231,9 @@ describe('buildSkillsPrompt', () => {
     // Full body is NOT included — that's the whole point of the manifest.
     expect(result).not.toContain('A 5 KB body');
 
-    // Instruction to call load_skill first.
-    expect(result).toMatch(/load_skill\(id\)/);
+    // Instruction to call load_skill first — with the structured arg
+    // shape that matches the tool's Zod schema (#74 Copilot review).
+    expect(result).toMatch(/load_skill\(\{ skillId \}\)/);
   });
 
   it('manifest mode escapes skill-manifest-entry sequences in description (#74)', () => {
@@ -324,13 +325,16 @@ describe('buildSkillUsageInstruction (#74)', () => {
     const text = buildSkillUsageInstruction('full');
     expect(text).toContain('How to Use Skills');
     expect(text).toContain('apply');
-    expect(text).not.toMatch(/load_skill\(id\)/);
+    expect(text).not.toMatch(/load_skill/);
   });
 
-  it('manifest mode instructs the model to call load_skill first', () => {
+  it('manifest mode instructs the model to call load_skill first with the structured arg shape', () => {
     const text = buildSkillUsageInstruction('manifest');
     expect(text).toContain('How to Use Skills');
-    expect(text).toMatch(/load_skill\(id\)/);
+    // Must match the Zod schema shape the tool actually accepts — calling
+    // `load_skill("id")` or `load_skill(id)` would fail validation, so
+    // the prompt has to teach the structured form (#74 Copilot review).
+    expect(text).toMatch(/load_skill\(\{ skillId \}\)/);
     expect(text).toMatch(/search_skills/);
   });
 });

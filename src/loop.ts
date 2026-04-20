@@ -230,7 +230,7 @@ async function buildSystemPrompt(
   //   - full mode: every skill body inlined (pre-#74 behaviour, fine for
   //     small skill sets)
   //   - manifest mode: id/name/description/triggers only; bodies fetched
-  //     on demand via load_skill(id) — exposed by createSkillTools below.
+  //     on demand via load_skill({ skillId }) — exposed by createSkillTools below.
   //   - auto: flips to manifest once the combined bodies exceed
   //     config.skillsManifestThreshold (default 32 KB).
   //
