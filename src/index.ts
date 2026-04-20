@@ -25,6 +25,17 @@ export {
   InMemorySkillStore,
 } from './skills.js';
 
+// Routines — named prompt-as-macro procedures (#77)
+export {
+  parseRoutineMd,
+  interpolateRoutine,
+  createRoutineTools,
+  InMemoryRoutineStore,
+  FilesystemRoutineStore,
+} from './routines.js';
+export type { CreateRoutineToolsOptions } from './routines.js';
+export type { Routine, RoutineStore, RoutineInput } from './types.js';
+
 // Workspace tools (real project files) and memory tools (agent scratchpad)
 export { createWorkspaceTools } from './tools/workspace-tools.js';
 export type { WorkspaceToolsOptions } from './tools/workspace-tools.js';
