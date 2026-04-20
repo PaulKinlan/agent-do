@@ -178,7 +178,12 @@ describe('mountMcpServers (#75)', () => {
       name: 'read_file',
       arguments: { path: '/tmp/foo' },
     });
-    expect(result).toBe('stubbed');
+    // MCP tool output is wrapped in `<tool_output>` markers so the
+    // model treats it as untrusted data from a third-party server
+    // (matches the file_tools / memory_tools convention).
+    expect(result).toContain('<tool_output tool="mcp__fs__read_file" path="fs:read_file">');
+    expect(result).toContain('stubbed');
+    expect(result).toContain('</tool_output>');
 
     await mounted.close();
   });
@@ -228,7 +233,9 @@ describe('mountMcpServers (#75)', () => {
       { toolCallId: 't', messages: [] },
     )) as string;
 
-    expect(result).toBe('line one\nline two\n[image: image/png]');
+    expect(result).toContain('line one\nline two\n[image: image/png]');
+    expect(result).toContain('<tool_output');
+    expect(result).toContain('</tool_output>');
     await mounted.close();
   });
 
@@ -249,8 +256,11 @@ describe('mountMcpServers (#75)', () => {
       { toolCallId: 't', messages: [] },
     )) as string;
 
-    expect(result).toMatch(/^Tool error:/);
+    // "Tool error:" sits inside the <tool_output> wrapper, not at the
+    // very start of the string any more.
+    expect(result).toContain('Tool error:');
     expect(result).toContain('permission denied');
+    expect(result).toContain('<tool_output');
     await mounted.close();
   });
 
@@ -268,6 +278,9 @@ describe('mountMcpServers (#75)', () => {
       { toolCallId: 't', messages: [] },
     )) as string;
 
+    // The error path returns the raw error string (no <tool_output>
+    // wrap) because wrapForModel is only applied on the success path.
+    // It's a synthesised library message, not untrusted server content.
     expect(result).toMatch(/^Error calling mcp__srv__flaky:/);
     expect(result).toContain('connection reset');
     await mounted.close();

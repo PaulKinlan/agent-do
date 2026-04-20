@@ -24,6 +24,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
 import { createRequire } from 'node:module';
+import { wrapForModel } from './tools/content-guards.js';
 
 /**
  * Library version used in the MCP `Client` handshake metadata (what the
@@ -243,7 +244,19 @@ export async function mountMcpServers(
                 name: mcpTool.name,
                 arguments: (args ?? {}) as Record<string, unknown>,
               });
-              return formatMcpToolResult(result);
+              const body = formatMcpToolResult(result);
+              // Wrap in `<tool_output>` markers with injection-marker
+              // redaction — MCP responses come from a third party we
+              // don't control, so a hostile or compromised server could
+              // try to inject "ignore previous instructions" / fake
+              // `<system>` tags / similar. `wrapForModel` is the same
+              // guard file_tools and memory_tools already use; using it
+              // uniformly means MCP output is held to the same
+              // trust-boundary contract.
+              return wrapForModel(body, {
+                tool: toolName,
+                path: `${config.name}:${mcpTool.name}`,
+              }).content;
             } catch (error) {
               const msg =
                 error instanceof Error ? error.message : String(error);
