@@ -162,7 +162,7 @@ const manifestAgent = createAgent({
 });
 
 console.log('Task: "Can you summarise my meeting from this morning?"');
-console.log('The manifest-mode agent should call `load_skill("meeting-notes")`');
+console.log('The manifest-mode agent should call `load_skill({ skillId: "meeting-notes" })`');
 console.log('before acting — the prompt only shows each skill\'s description,');
 console.log('not the full body.\n');
 
