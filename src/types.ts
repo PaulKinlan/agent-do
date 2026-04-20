@@ -1,4 +1,5 @@
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import type { McpServerConfig } from './mcp.js';
 
 // Progress events emitted during agent execution
 export interface ProgressEvent {
@@ -297,6 +298,20 @@ export interface AgentConfig {
   model: LanguageModel;
   systemPrompt?: string; // Raw system prompt (CLAUDE.md content)
   tools?: ToolSet;
+  /**
+   * MCP (Model Context Protocol) servers to mount for this run (#75).
+   *
+   * Each entry spawns / connects to an MCP server; its tools are
+   * namespaced as `mcp__<server>__<tool>` and merged into `tools`
+   * before the loop starts. Permissions, hooks, usage tracking, and
+   * `toolLimits` apply to MCP tools exactly as they do to local tools.
+   *
+   * The lifecycle is managed by the loop: servers are mounted once at
+   * the start of each `run()` / `stream()` call and closed on
+   * completion, abort, or error. See `src/mcp.ts` for transport
+   * details (stdio, sse, streamable HTTP).
+   */
+  mcpServers?: McpServerConfig[];
   skills?: SkillStore;
   /**
    * Expose the privileged `install_skill` tool to the model (#24, H-05).
