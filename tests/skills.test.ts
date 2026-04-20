@@ -335,7 +335,10 @@ describe('buildSkillUsageInstruction (#74)', () => {
     // `load_skill("id")` or `load_skill(id)` would fail validation, so
     // the prompt has to teach the structured form (#74 Copilot review).
     expect(text).toMatch(/load_skill\(\{ skillId \}\)/);
-    expect(text).toMatch(/search_skills/);
+    // search_skills also takes a structured arg, not a positional string.
+    // Codex #74 follow-up: `search_skills("...")` in prompts was a bug
+    // because the Zod schema is z.object({ query: z.string() }).
+    expect(text).toMatch(/search_skills\(\{ query: "\.\.\." \}\)/);
   });
 });
 
@@ -573,6 +576,43 @@ describe('createSkillTools', () => {
     )) as string;
     expect(result).toMatch(/not found/);
     expect(result).toMatch(/list_skills/);
+  });
+
+  it('load_skill accepts `id` as an alias for `skillId` (#74 robustness)', async () => {
+    // Models occasionally call the tool with a shorter param name even
+    // when the prompt + schema clearly document `skillId`. Accepting a
+    // bare `id` alias turns what would've been a zod validation error
+    // into a successful lookup — same underlying concern as the original
+    // "load_skill(id) in prompts" alignment fix.
+    const store = new InMemorySkillStore();
+    await store.install({
+      id: 'research',
+      name: 'Research',
+      description: 'd',
+      content: 'body',
+    });
+    const tools = createSkillTools(store);
+    const result = (await tools.load_skill.execute!(
+      { id: 'research' } as never,
+      { toolCallId: 'l-alias', messages: [] },
+    )) as string;
+    expect(result).toContain('<skill name="Research" id="research">');
+    expect(result).toContain('body');
+  });
+
+  it('load_skill returns a readable error when neither skillId nor id is given', async () => {
+    const store = new InMemorySkillStore();
+    const tools = createSkillTools(store);
+    // Zod's .refine() catches the empty-shape case when the AI SDK runs
+    // input validation. When `execute` is called directly (as in tests,
+    // or if some custom runtime bypasses validation), the execute body
+    // still has to fail gracefully — returning a readable error string
+    // is the agent-do convention, not throwing.
+    const result = (await tools.load_skill.execute!(
+      {} as never,
+      { toolCallId: 'l-empty', messages: [] },
+    )) as string;
+    expect(result).toMatch(/requires/);
   });
 
   it('load_skill escapes <skill> sequences in the body (#74 + #67)', async () => {
