@@ -73,6 +73,7 @@ function addCacheControl(messages: ModelMessage[], model: LanguageModel): ModelM
 }
 import { evaluatePermission } from './permissions.js';
 import { buildSkillsPrompt, createSkillTools } from './skills.js';
+import { mountMcpServers, type MountedMcpServers } from './mcp.js';
 import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
@@ -557,7 +558,36 @@ export function buildOnStepFinish(
 }
 
 /**
+ * Mount any MCP servers declared on `config`, returning a config with
+ * the discovered tools merged in alongside the caller's local tools,
+ * plus the mounted-servers handle so the caller can close them.
+ *
+ * Returns `{ config: original, mcp: undefined }` when `mcpServers` is
+ * absent or empty — zero-overhead path for the common case.
+ */
+async function mountConfigMcp(
+  config: AgentConfig,
+): Promise<{ config: AgentConfig; mcp: MountedMcpServers | undefined }> {
+  if (!config.mcpServers || config.mcpServers.length === 0) {
+    return { config, mcp: undefined };
+  }
+  const mcp = await mountMcpServers(config.mcpServers);
+  // Local tools win on name collisions — the caller's explicit `tools`
+  // map is authoritative, and MCP servers can't silently shadow a local
+  // tool just by naming something the same. Server-side tools always
+  // live under the `mcp__<server>__` prefix so collisions only happen if
+  // the caller's local tool is already named with that prefix, which
+  // would be their choice.
+  const mergedTools = { ...mcp.tools, ...(config.tools ?? {}) };
+  return { config: { ...config, tools: mergedTools }, mcp };
+}
+
+/**
  * Run the agent loop and return the final result.
+ *
+ * If `config.mcpServers` is set, the servers are mounted at the start
+ * and closed after the run completes (or errors) so the caller doesn't
+ * have to manage their lifecycle manually.
  */
 export async function runAgentLoop(
   config: AgentConfig,
@@ -565,7 +595,12 @@ export async function runAgentLoop(
   context?: string,
   history?: ConversationMessage[],
 ): Promise<RunResult> {
-  return runAgentLoopDirect(config, task, context, history);
+  const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
+  try {
+    return await runAgentLoopDirect(resolvedConfig, task, context, history);
+  } finally {
+    if (mcp) await mcp.close();
+  }
 }
 
 /**
@@ -808,8 +843,32 @@ async function runAgentLoopDirect(
 
 /**
  * Stream the agent loop, yielding progress events.
+ *
+ * If `config.mcpServers` is set, the servers are mounted at the start
+ * and closed after the generator completes (or the caller returns early),
+ * so MCP subprocesses don't leak.
  */
 export async function* streamAgentLoop(
+  config: AgentConfig,
+  task: string,
+  context?: string,
+  history?: ConversationMessage[],
+): AsyncGenerator<ProgressEvent> {
+  const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
+  try {
+    yield* streamAgentLoopDirect(resolvedConfig, task, context, history);
+  } finally {
+    if (mcp) await mcp.close();
+  }
+}
+
+/**
+ * Direct (non-MCP-managing) implementation of {@link streamAgentLoop}.
+ * Kept as a private function so MCP lifecycle is handled exactly once
+ * by the exported entry point; external callers should stick to
+ * `streamAgentLoop`.
+ */
+async function* streamAgentLoopDirect(
   config: AgentConfig,
   task: string,
   context?: string,

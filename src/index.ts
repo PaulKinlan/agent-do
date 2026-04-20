@@ -2,6 +2,18 @@
 export { createAgent } from './agent.js';
 export { runAgentLoop, streamAgentLoop } from './loop.js';
 
+// MCP (Model Context Protocol) — mount external tool servers
+export {
+  mountMcpServers,
+  namespacedToolName,
+  MCP_TOOL_PREFIX,
+} from './mcp.js';
+export type {
+  McpServerConfig,
+  McpTransportConfig,
+  MountedMcpServers,
+} from './mcp.js';
+
 // Permissions
 export { evaluatePermission } from './permissions.js';
 

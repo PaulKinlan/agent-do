@@ -52,9 +52,10 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "3.0.71",
-    "@ai-sdk/google": "3.0.64",
-    "@ai-sdk/openai": "3.0.53",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^6.0.168",
     "ignore": "^7.0.5",
     "yaml": "^2.8.3",
