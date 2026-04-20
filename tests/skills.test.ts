@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseSkillMd,
   buildSkillsPrompt,
@@ -263,6 +263,54 @@ describe('buildSkillsPrompt', () => {
     ];
     const result = buildSkillsPrompt(skills);
     expect(result).toContain(`id="${longId}"`);
+  });
+
+  it('excludes skills with unrenderable IDs and warns (Codex #74 P2 follow-up)', () => {
+    // IDs containing `"` / `<` / `>` / newline can't be safely emitted
+    // in `id="..."` attributes AND round-tripped back to store.get,
+    // because any attribute-safe escape mutates the rendered id away
+    // from the real store key. Rather than rendering an id the model
+    // can't load, we exclude the skill from the manifest/full output
+    // and log a warning pointing at the name + bad id.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const skills: Skill[] = [
+      { id: 'safe-id', name: 'Safe', description: 's', content: 'safe body' },
+      {
+        id: 'bad"id',
+        name: 'Bad Quoted',
+        description: 'unsafe quote',
+        content: 'bad body (quote)',
+      },
+      {
+        id: 'bad\nid',
+        name: 'Bad Newline',
+        description: 'unsafe newline',
+        content: 'bad body (newline)',
+      },
+    ];
+
+    // Manifest mode: safe skill rendered; bad skills excluded.
+    const manifest = buildSkillsPrompt(skills, { mode: 'manifest' });
+    expect(manifest).toContain('id="safe-id"');
+    expect(manifest).not.toContain('bad body (quote)');
+    expect(manifest).not.toContain('bad body (newline)');
+    // No mutated-id attribute sneaks through.
+    expect(manifest).not.toMatch(/id="bad ?id"/);
+
+    // Full mode: same behaviour.
+    const full = buildSkillsPrompt(skills);
+    expect(full).toContain('safe body');
+    expect(full).not.toContain('bad body (quote)');
+    expect(full).not.toContain('bad body (newline)');
+
+    // Two warnings — one per excluded skill, across both renderings.
+    // (buildSkillsPrompt may be called multiple times per test above,
+    // so assert "at least 2" rather than an exact count.)
+    expect(warnSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(warnSpy.mock.calls.flat().join(' ')).toMatch(/Bad Quoted/);
+
+    warnSpy.mockRestore();
   });
 
   it('manifest mode escapes skill-manifest-entry sequences in description (#74)', () => {
