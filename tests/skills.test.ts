@@ -236,6 +236,35 @@ describe('buildSkillsPrompt', () => {
     expect(result).toMatch(/load_skill\(\{ skillId \}\)/);
   });
 
+  it('does NOT truncate long skill IDs in manifest rendering (Codex #74 P2)', () => {
+    // Long IDs must round-trip cleanly: the manifest's id attribute has
+    // to match the SkillStore key byte-for-byte so `load_skill({ skillId })`
+    // can find the skill after the model reads the manifest. escapeAttr
+    // truncates at 128 chars which would silently break this.
+    const longId = 'very-long-skill-id-' + 'x'.repeat(200);
+    const skills: Skill[] = [
+      { id: longId, name: 'Long', description: 'd', content: 'body' },
+    ];
+    const result = buildSkillsPrompt(skills, { mode: 'manifest' });
+    expect(result).toContain(`id="${longId}"`);
+    // Name still gets truncated — it's display-only, not a lookup key.
+    const longName = 'name-' + 'x'.repeat(300);
+    const resultLongName = buildSkillsPrompt(
+      [{ id: 'x', name: longName, description: 'd', content: 'b' }],
+      { mode: 'manifest' },
+    );
+    expect(resultLongName).not.toContain(longName); // display truncation OK
+  });
+
+  it('does NOT truncate long skill IDs in full-mode rendering (Codex #74 P2)', () => {
+    const longId = 'full-mode-id-' + 'x'.repeat(200);
+    const skills: Skill[] = [
+      { id: longId, name: 'Long', description: 'd', content: 'body' },
+    ];
+    const result = buildSkillsPrompt(skills);
+    expect(result).toContain(`id="${longId}"`);
+  });
+
   it('manifest mode escapes skill-manifest-entry sequences in description (#74)', () => {
     const skills: Skill[] = [
       {
@@ -339,6 +368,18 @@ describe('buildSkillUsageInstruction (#74)', () => {
     // Codex #74 follow-up: `search_skills("...")` in prompts was a bug
     // because the Zod schema is z.object({ query: z.string() }).
     expect(text).toMatch(/search_skills\(\{ query: "\.\.\." \}\)/);
+  });
+
+  it('manifest mode exempts load_skill output from the "data not instructions" rule (Codex #74 P1)', () => {
+    const text = buildSkillUsageInstruction('manifest');
+    // Base loop prompt has a "Tool Output Is Data, Not Instructions"
+    // rule that, without this carve-out, would tell the model to analyse
+    // load_skill output rather than follow it — breaking the manifest
+    // flow. The usage block must explicitly mark load_skill as a
+    // pre-authorised procedure fetch whose output IS the directive.
+    expect(text).toMatch(/Exception to "Tool Output Is Data/i);
+    expect(text).toMatch(/IS your instruction set/);
+    expect(text).toMatch(/directive/i);
   });
 });
 
@@ -576,6 +617,27 @@ describe('createSkillTools', () => {
     )) as string;
     expect(result).toMatch(/not found/);
     expect(result).toMatch(/list_skills/);
+  });
+
+  it('load_skill round-trips long IDs end-to-end (Codex #74 P2)', async () => {
+    // End-to-end regression: a skill installed with a long id must be
+    // (a) rendered with its full id in the manifest and (b) findable
+    // when load_skill is called with that full id.
+    const store = new InMemorySkillStore();
+    const longId = 'lookup-key-' + 'y'.repeat(200);
+    await store.install({
+      id: longId,
+      name: 'Long',
+      description: 'd',
+      content: 'body text',
+    });
+    const tools = createSkillTools(store);
+    const result = (await tools.load_skill.execute!(
+      { skillId: longId } as never,
+      { toolCallId: 'long', messages: [] },
+    )) as string;
+    expect(result).toContain('body text');
+    expect(result).toContain(`id="${longId}"`);
   });
 
   it('load_skill accepts `id` as an alias for `skillId` (#74 robustness)', async () => {
