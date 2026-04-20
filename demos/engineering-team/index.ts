@@ -47,9 +47,14 @@ const provider = createAnthropic({ apiKey });
 
 mkdirSync(SPRINT_DIR, { recursive: true });
 
+// `agentId: ''` mounts both master and workers at the workspace root
+// (SPRINT_DIR) so every phase's artifact lands in `sprint/01-…` through
+// `sprint/05-…` as documented. Binding to 'master' would send writes
+// to `sprint/master/*` — the README and final console output would
+// then point at the wrong place.
 const store = new FilesystemMemoryStore(SPRINT_DIR);
-const masterFileTools = createFileTools(store, 'master');
-const workerFileTools = createFileTools(store, 'master'); // shared workspace
+const masterFileTools = createFileTools(store, '');
+const workerFileTools = createFileTools(store, '');
 
 // ═══════════════════════════════════════════════
 //  Build the orchestrator

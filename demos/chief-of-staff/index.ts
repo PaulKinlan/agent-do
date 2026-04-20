@@ -139,11 +139,17 @@ seed('tasks.md', TASKS);
 //  File stores (workspace tools for each role)
 // ═══════════════════════════════════════════════
 
+// FilesystemMemoryStore scopes paths to `{baseDir}/{agentId}/`. Using
+// `agentId: ''` puts all roles at the workspace root — which is what we
+// want here because every specialist reads/writes the same shared
+// files (priority-map.md, inbox.md, tracker.md, tasks.md) seeded above.
+// Binding to 'master' would send reads/writes to `sandbox/master/*`,
+// missing the seeded source-of-truth files entirely.
 const store = new FilesystemMemoryStore(SANDBOX_DIR);
-const masterFileTools = createFileTools(store, 'master');
-const eaFileTools = createFileTools(store, 'master'); // shared workspace
-const bdFileTools = createFileTools(store, 'master');
-const taskFileTools = createFileTools(store, 'master');
+const masterFileTools = createFileTools(store, '');
+const eaFileTools = createFileTools(store, '');
+const bdFileTools = createFileTools(store, '');
+const taskFileTools = createFileTools(store, '');
 
 // ═══════════════════════════════════════════════
 //  Build the orchestrator
