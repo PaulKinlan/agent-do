@@ -38,6 +38,15 @@ sandbox/        — created on first run
   tasks.md
 ```
 
+All four roles (master + 3 specialists) bind their file tools with
+`agentId: ''` — the workspace-root mode documented in
+`src/stores/agent-id.ts`. That's why every specialist reads/writes
+directly in `sandbox/` rather than a per-agent subdirectory
+(`sandbox/master/`, `sandbox/executive-assistant/`, …). This is a
+single shared workspace by design — the orthogonal-policy pattern
+(`priority-map.md` / `auto-resolver.md`) only works if every role
+sees the same files.
+
 ## Extensions (what the pack abstraction would bundle)
 
 When #78 (template packs) lands, this shape becomes:

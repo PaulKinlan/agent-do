@@ -41,6 +41,14 @@ sprint/         — created on first run
   05-rollout.md         (from release-engineer)
 ```
 
+All six roles (master + 5 phase workers) bind their file tools with
+`agentId: ''` — the workspace-root mode documented in
+`src/stores/agent-id.ts`. That's why every phase's artifact lands
+directly in `sprint/` rather than `sprint/master/` or
+`sprint/office-hours/`. The pipeline depends on each phase reading
+the previous phase's output by name, so a single shared workspace
+is the whole point.
+
 ## Role-pair idea (not implemented here)
 
 gstack uses a role-pair pattern: plan-time twins (`plan-design-review`, `plan-devex-review`, `plan-eng-review`) paired with audit-time twins (`design-review`, `devex-review`, `review`) that score the built result against what the plan predicted. This demo only runs the plan-time phases. The audit pair would run after implementation and would be a natural extension once the engineering-team pack abstracts this pipeline (#78).
