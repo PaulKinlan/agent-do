@@ -9,17 +9,21 @@
  * key is available, in order anthropic → google → openai. Fails with a
  * readable error if nothing is set.
  *
- * Per-provider env vars:
+ * Per-provider env vars (matches the main CLI's convention — see
+ * src/cli/resolve-model.ts):
  *   ANTHROPIC_API_KEY
- *   GOOGLE_API_KEY  (or GEMINI_API_KEY — both accepted)
+ *   GOOGLE_GENERATIVE_AI_API_KEY   (canonical)
+ *     GOOGLE_API_KEY               (alias, also accepted)
+ *     GEMINI_API_KEY               (alias, also accepted)
  *   OPENAI_API_KEY
  *
  * Per-demo model overrides (optional):
  *   DEMO_MASTER_MODEL
  *   DEMO_WORKER_MODEL
  *
- * The SDKs are imported dynamically so installing only the provider you
- * actually want keeps the demo usable.
+ * The SDKs are imported dynamically so only the selected provider is
+ * imported and initialised at runtime — the unused providers stay out
+ * of the process even though they're present in node_modules.
  */
 
 import type { LanguageModel } from 'ai';
@@ -38,10 +42,32 @@ const DEFAULTS: Record<Provider, { master: string; worker: string }> = {
   openai: { master: 'gpt-5', worker: 'gpt-5-mini' },
 };
 
+/**
+ * Minimum plausible API-key length. The main CLI uses the same floor
+ * (src/cli/resolve-model.ts `value.length < 4`) so an obviously empty
+ * or placeholder value ("x", "123") produces a clean error instead of
+ * a confusing 4xx from the provider.
+ */
+const MIN_KEY_LENGTH = 4;
+
+function keyFor(name: Provider): string | undefined {
+  if (name === 'anthropic') {
+    return process.env.ANTHROPIC_API_KEY;
+  }
+  if (name === 'google') {
+    // Accept the canonical name first, then the two common aliases.
+    return (
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GEMINI_API_KEY
+    );
+  }
+  return process.env.OPENAI_API_KEY;
+}
+
 function envHas(name: Provider): boolean {
-  if (name === 'anthropic') return Boolean(process.env.ANTHROPIC_API_KEY);
-  if (name === 'google') return Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY);
-  return Boolean(process.env.OPENAI_API_KEY);
+  const key = keyFor(name);
+  return Boolean(key && key.length >= MIN_KEY_LENGTH);
 }
 
 export async function resolveProvider(): Promise<ResolvedProvider> {
@@ -51,7 +77,7 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
   if (requested === 'anthropic' || requested === 'google' || requested === 'openai') {
     if (!envHas(requested)) {
       console.error(
-        `Error: DEMO_PROVIDER=${requested} but the corresponding API key is not set.`,
+        `Error: DEMO_PROVIDER=${requested} but the corresponding API key is not set (or shorter than ${MIN_KEY_LENGTH} chars).`,
       );
       console.error(missingKeyHint(requested));
       process.exit(1);
@@ -71,7 +97,10 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
 
   if (!chosen) {
     console.error('Error: No provider API key found.');
-    console.error('  Set one of: ANTHROPIC_API_KEY, GOOGLE_API_KEY (or GEMINI_API_KEY), OPENAI_API_KEY.');
+    console.error('  Set one of:');
+    console.error('    ANTHROPIC_API_KEY');
+    console.error('    GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY / GEMINI_API_KEY)');
+    console.error('    OPENAI_API_KEY');
     console.error('  Optionally set DEMO_PROVIDER=anthropic|google|openai to force a choice.');
     process.exit(1);
   }
@@ -84,7 +113,7 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
   switch (chosen) {
     case 'anthropic': {
       const { createAnthropic } = await import('@ai-sdk/anthropic');
-      const provider = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const provider = createAnthropic({ apiKey: keyFor('anthropic')! });
       return {
         name: 'anthropic',
         // Cast through unknown because each provider's model type is
@@ -96,8 +125,7 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
     }
     case 'google': {
       const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
-      const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY!;
-      const provider = createGoogleGenerativeAI({ apiKey });
+      const provider = createGoogleGenerativeAI({ apiKey: keyFor('google')! });
       return {
         name: 'google',
         model: (id) => provider(id) as unknown as LanguageModel,
@@ -106,7 +134,7 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
     }
     case 'openai': {
       const { createOpenAI } = await import('@ai-sdk/openai');
-      const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+      const provider = createOpenAI({ apiKey: keyFor('openai')! });
       return {
         name: 'openai',
         model: (id) => provider(id) as unknown as LanguageModel,
@@ -118,7 +146,9 @@ export async function resolveProvider(): Promise<ResolvedProvider> {
 
 function missingKeyHint(provider: Provider): string {
   if (provider === 'anthropic') return '  Set ANTHROPIC_API_KEY=sk-ant-...';
-  if (provider === 'google') return '  Set GOOGLE_API_KEY (or GEMINI_API_KEY).';
+  if (provider === 'google') {
+    return '  Set GOOGLE_GENERATIVE_AI_API_KEY=... (or GOOGLE_API_KEY / GEMINI_API_KEY).';
+  }
   return '  Set OPENAI_API_KEY=sk-...';
 }
 

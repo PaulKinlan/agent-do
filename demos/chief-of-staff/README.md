@@ -12,7 +12,11 @@ Founder's chief of staff pattern ([inspired by clawchief](https://github.com/sna
 ## Setup
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set an API key for any supported provider:
+export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)
+# export GOOGLE_GENERATIVE_AI_API_KEY=...      # Google / Gemini
+# export OPENAI_API_KEY=sk-...                 # OpenAI
+
 npm install
 npm start
 # Or with an explicit instruction:
@@ -20,6 +24,8 @@ npm start "Triage the inbox and add follow-ups to tasks.md"
 ```
 
 First run seeds `./sandbox/` with mock `inbox.md`, `tracker.md`, `tasks.md` plus the two policy files.
+
+This demo auto-detects the provider from whichever API key is set. To force a specific provider when multiple keys are present, set `DEMO_PROVIDER=anthropic|google|openai`. See [demos/README.md](../README.md#choose-a-model-provider) for the full env surface.
 
 ## What's mocked vs real
 

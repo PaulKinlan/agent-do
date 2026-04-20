@@ -19,14 +19,18 @@ A multi-agent orchestrator where a Master agent coordinates a Researcher and Wri
 # Install demo dependencies
 npm install
 
-# Set your API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set an API key for any supported provider:
+export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)
+# export GOOGLE_GENERATIVE_AI_API_KEY=...      # Google / Gemini
+# export OPENAI_API_KEY=sk-...                 # OpenAI
 
 # Run with a topic (passed as argument or prompted)
 npm start "Rust programming language"
 npm start "the history of the internet"
 npm start  # prompts for a topic interactively
 ```
+
+This demo auto-detects the provider from whichever API key is set. To force a specific provider when multiple keys are present, set `DEMO_PROVIDER=anthropic|google|openai`. Default model IDs differ per provider — see [demos/README.md](../README.md#choose-a-model-provider) for the full env surface.
 
 ## What to expect
 
@@ -44,17 +48,17 @@ npm start  # prompts for a topic interactively
 User (topic)
   |
   v
-Master Agent (claude-sonnet-4-6)
+Master Agent (master model — e.g. claude-sonnet-4-6 / gemini-2.5-pro / gpt-5)
   |--- delegate_task("researcher", "Research X...")
   |      |
   |      v
-  |    Researcher Agent (claude-haiku-4-5)
+  |    Researcher Agent (worker model — e.g. claude-haiku-4-5)
   |      returns findings
   |
   |--- delegate_task("writer", "Write a report using...")
   |      |
   |      v
-  |    Writer Agent (claude-haiku-4-5)
+  |    Writer Agent (worker model)
   |      returns polished report
   |
   v
