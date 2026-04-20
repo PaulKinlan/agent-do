@@ -72,7 +72,12 @@ function addCacheControl(messages: ModelMessage[], model: LanguageModel): ModelM
   });
 }
 import { evaluatePermission } from './permissions.js';
-import { buildSkillsPrompt, createSkillTools } from './skills.js';
+import {
+  buildSkillsPrompt,
+  buildSkillUsageInstruction,
+  createSkillTools,
+  resolveSkillsMode,
+} from './skills.js';
 import { mountMcpServers, type MountedMcpServers } from './mcp.js';
 import { createRoutineTools } from './routines.js';
 import { UsageTracker, estimateCost } from './usage.js';
@@ -219,12 +224,30 @@ async function buildSystemPrompt(
     parts.push(config.systemPrompt);
   }
 
-  // Skills from store
+  // Skills from store (#74).
+  //
+  // Two-tier loading:
+  //   - full mode: every skill body inlined (pre-#74 behaviour, fine for
+  //     small skill sets)
+  //   - manifest mode: id/name/description/triggers only; bodies fetched
+  //     on demand via load_skill(id) — exposed by createSkillTools below.
+  //   - auto: flips to manifest once the combined bodies exceed
+  //     config.skillsManifestThreshold (default 32 KB).
+  //
+  // Whichever mode is picked, we also push an explicit "How to Use Skills"
+  // instruction. agent-do is provider-agnostic, so we can't rely on the
+  // model's trained behaviour around SKILL.md discovery — the lookup flow
+  // has to be made explicit in the prompt and tool surface.
   if (config.skills) {
     const skills = await config.skills.list();
-    const skillsSection = buildSkillsPrompt(skills);
-    if (skillsSection) {
-      parts.push(skillsSection);
+    if (skills.length > 0) {
+      const threshold = config.skillsManifestThreshold ?? 32 * 1024;
+      const mode = resolveSkillsMode(skills, config.skillsMode, threshold);
+      const skillsSection = buildSkillsPrompt(skills, { mode });
+      if (skillsSection) {
+        parts.push(skillsSection);
+        parts.push(buildSkillUsageInstruction(mode));
+      }
     }
   }
 
