@@ -150,9 +150,13 @@ export function buildSkillsPrompt(
   ];
 
   for (const skill of skills) {
+    if (!isRenderableSkillId(skill.id)) {
+      warnUnrenderableSkill(skill);
+      continue;
+    }
     const attrs =
       `name="${escapeAttr(skill.name)}"` +
-      ` id="${escapeAttrId(skill.id)}"`;
+      ` id="${skill.id}"`;
     parts.push(`<skill ${attrs}>`);
     if (skill.description) {
       parts.push(`Description: ${escapeSkillBody(skill.description)}`);
@@ -194,9 +198,13 @@ function buildSkillsManifest(skills: Skill[]): string {
   ];
 
   for (const skill of skills) {
+    if (!isRenderableSkillId(skill.id)) {
+      warnUnrenderableSkill(skill);
+      continue;
+    }
     const attrs =
       `name="${escapeAttr(skill.name)}"` +
-      ` id="${escapeAttrId(skill.id)}"`;
+      ` id="${skill.id}"`;
     parts.push(`<skill-manifest-entry ${attrs}>`);
     if (skill.description) {
       parts.push(
@@ -297,32 +305,57 @@ export function buildSkillUsageInstruction(mode: SkillsPromptMode): string {
 }
 
 /**
- * Defensive escape for values that land inside `"..."` attribute
- * markers. The preamble tells the model these are attribute values,
- * not instructions, but we still strip the quote and control chars
- * so a skill named `evil" ...ignore previous` can't accidentally
- * close the marker. Truncates to 128 chars — fine for display
- * attributes like `name`; **not** suitable for `id` (see
- * {@link escapeAttrId} — the id must stay usable as a key).
+ * Defensive escape for the `name` attribute — the display string. Strips
+ * attribute-breaking chars (`"`, `<`, `>`, newlines) and truncates to
+ * 128 chars since this only affects rendering.
+ *
+ * IDs are handled differently: skills whose id contains the same
+ * attribute-breaking chars are excluded from rendering entirely via
+ * {@link isRenderableSkillId}, because any mutation would break the
+ * `rendered_id → load_skill({ skillId })` round-trip.
  */
 function escapeAttr(value: string): string {
   return value.replace(/["<>\n\r]/g, ' ').slice(0, 128);
 }
 
 /**
- * Id-specific escape. Strips the same attribute-breaking characters as
- * {@link escapeAttr} but does **not** truncate — the id is a lookup
- * key, not a display string, and silently truncating it means
- * `load_skill({ skillId })` from the manifest can't find the skill
- * that was displayed (Codex #74 P2 review).
- *
- * SkillStore doesn't currently cap id length on its own, so any id
- * that made it in via `parseSkillMd` or a direct store.install() is
- * rendered verbatim in the manifest and round-trips cleanly through
- * load_skill.
+ * Regex of characters that would break out of a `id="..."` attribute
+ * if emitted verbatim. An id containing any of these can't be safely
+ * rendered in the manifest, and — even if it were — the model would
+ * pass back a sanitised form that wouldn't match the original key in
+ * `SkillStore`. See {@link isRenderableSkillId}.
  */
-function escapeAttrId(value: string): string {
-  return value.replace(/["<>\n\r]/g, ' ');
+const UNSAFE_ID_CHARS = /["<>\n\r]/;
+
+/**
+ * Whether a skill id can be emitted verbatim in manifest / wrapper
+ * attributes AND still round-trip back through `load_skill`. IDs
+ * containing `"` / `<` / `>` / newline mutate under any attribute-safe
+ * escape, so the rendered id no longer matches `skill.id` in the
+ * store — `load_skill({ skillId: rendered })` then fails.
+ *
+ * Callers that render skill IDs into prompt attributes should exclude
+ * skills whose id is unrenderable (and warn); otherwise the manifest
+ * advertises skills the model can't actually load (Codex #74 P2
+ * follow-up).
+ */
+function isRenderableSkillId(id: string): boolean {
+  return !UNSAFE_ID_CHARS.test(id);
+}
+
+/**
+ * Warn once per unrenderable skill. Bypass: `install_skill` already
+ * enforces a safe-char regex, so this only fires when a library
+ * caller directly feeds a SkillStore a skill with attribute-hostile
+ * characters in its id. The fix is on their side — sanitise the id
+ * at install — so surfacing the skill name + a reason helps them
+ * locate the offending entry.
+ */
+function warnUnrenderableSkill(skill: Skill): void {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[agent-do] Skill "${skill.name}" (id: ${JSON.stringify(skill.id)}) excluded from the skills prompt — its id contains characters ("<>\\n\\r that would mutate under attribute escaping, so load_skill wouldn't be able to round-trip from the rendered form. Sanitise the id at install time.`,
+  );
 }
 
 /**
@@ -577,7 +610,12 @@ export function createSkillTools(
         const description = skill.description
           ? `Description: ${escapeSkillBody(skill.description)}\n\n`
           : '';
-        return `<skill name="${escapeAttr(skill.name)}" id="${escapeAttrId(skill.id)}">\n${description}${body}\n</skill>`;
+        // `skill.id` here round-trips the resolvedId the model just passed
+        // us — store.get only matched because it's safe (otherwise the
+        // skill wouldn't have appeared in the manifest in the first
+        // place). Use it verbatim; any mutation would break the
+        // attribute-value round-trip contract this fix is guarding.
+        return `<skill name="${escapeAttr(skill.name)}" id="${skill.id}">\n${description}${body}\n</skill>`;
       },
     }),
 
