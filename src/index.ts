@@ -104,6 +104,36 @@ export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
 export type { FilesystemMemoryStoreOptions } from './types.js';
 
+// Template Packs (#78) — installable compositions of skills, routines,
+// policies, tools, and MCP server bindings.
+export {
+  createTemplatePack,
+  installPack,
+  uninstallPack,
+  listPacks,
+  readInstallRegistry,
+  loadPack,
+  loadPackFromDir,
+  resolvePackDir,
+  findBundledPacksDir,
+  listPacksInDir,
+  parsePackManifest,
+  PackManifestSchema,
+} from './packs/index.js';
+export type {
+  PackManifest,
+  PackVariable,
+  LoadedPack,
+  CreateTemplatePackOptions,
+  TemplatePack,
+  InstallPackOptions,
+  UninstallPackOptions,
+  ListPacksOptions,
+  PackListEntry,
+  InstalledPackEntry,
+  InstallRegistry,
+} from './packs/index.js';
+
 // Prompt builder
 export { buildSystemPrompt, interpolate } from './prompts/builder.js';
 export { builtinSections } from './prompts/sections.js';

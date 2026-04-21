@@ -19,6 +19,11 @@ import { runPromptMode } from './cli/prompt.js';
 import { runScriptMode } from './cli/script.js';
 import { runEvalMode } from './cli/eval-cmd.js';
 import { createSavedAgent, listSavedAgents } from './cli/agents.js';
+import {
+  runInstallCommand,
+  runUninstallCommand,
+  runListPacksCommand,
+} from './cli/pack-cmd.js';
 
 async function main(): Promise<void> {
   let args: ParsedArgs;
@@ -51,6 +56,15 @@ async function main(): Promise<void> {
       case 'list':
         await listSavedAgents();
         break;
+      case 'install':
+        await runInstallCommand(args);
+        break;
+      case 'uninstall':
+        await runUninstallCommand(args);
+        break;
+      case 'list-packs':
+        await runListPacksCommand(args);
+        break;
     }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -72,6 +86,9 @@ Usage:
   npx agent-do list                        List saved agents
   npx agent-do run <name|file> [task]      Run a saved agent or script file
   npx agent-do eval <file|dir> [options]   Run eval cases
+  npx agent-do install <pack> [--force]    Install a template pack
+  npx agent-do uninstall <pack>            Remove an installed template pack
+  npx agent-do list-packs                  List bundled and installed packs
 
 Piping:
   echo "context" | npx agent-do "prompt"   Merge piped input with prompt
@@ -129,6 +146,11 @@ Eval options:
   --output <format>      console | json | csv (default: console)
   --compare <providers>  Compare across providers (comma-separated)
   --concurrency <n>      Parallel case execution (default: 1)
+
+Pack options:
+  --from <dir>           Install a pack from a local directory (for
+                         authoring / testing) instead of the bundled set
+  --force                Overwrite an existing installation of the same pack
 
 Environment:
   ANTHROPIC_API_KEY      Required for Anthropic models

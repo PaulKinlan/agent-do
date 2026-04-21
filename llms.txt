@@ -45,6 +45,18 @@
 - `buildSkillsPrompt(skills: Skill[]): string` — build system prompt section
 - `createSkillTools(store: SkillStore): ToolSet` — search/install/list/remove skills
 
+## Template Packs (#78)
+
+- `createTemplatePack(name, options): Promise<TemplatePack>` — compose a ready-to-run agent from a pack. Options take `model` (required), `variables`, `mcpServers` (keyed by name), `workingDir`, `packsDir`, `hooks`, `permissions`, etc.
+- `installPack(name, { cwd?, from?, force? }): Promise<PackManifest>` — copy a pack into `.agent-do/packs/<name>/`
+- `uninstallPack(name, { cwd? }): Promise<boolean>` — remove an installed pack
+- `listPacks({ cwd? }): Promise<PackListEntry[]>` — list bundled + user-installed packs
+- `loadPack(name, options?): Promise<LoadedPack>` — parse pack files without composing an agent
+- `parsePackManifest(json, sourcePath?): PackManifest` — validate a raw `pack.json` body
+- Bundled packs: `chief-of-staff`, `engineering-team`, `research-team`
+- Manifest shape: `name`, `version`, `description`, `roles?`, `skills?`, `routines?`, `policies?`, `mcpServers?`, `tools?` (`'workspace'|'memory'`), `heartbeat?`, `systemPrompt?`, `variables?`
+- Pack layout on disk: `pack.json`, `policies/*.md` (concatenated into system prompt), `skills/*.md` (SKILL.md format), `routines/*.md`, `README.md`
+
 ## Orchestration
 
 - `createOrchestrator(config: OrchestratorConfig): Orchestrator` — master + workers
@@ -118,6 +130,9 @@
 - `npx agent-do list` — list saved agents
 - `npx agent-do run <name|file>` — run a saved agent by name, or a script file
 - `npx agent-do eval <file|dir>` — run eval cases from file or directory
+- `npx agent-do install <pack> [--force] [--from <dir>]` — install a template pack into `.agent-do/packs/`
+- `npx agent-do uninstall <pack>` — remove an installed template pack
+- `npx agent-do list-packs` — list bundled and installed packs
 - `--provider <name>` — anthropic | google | openai | ollama (default: anthropic)
 - `--model <id>` — model ID (default: provider-specific)
 - `--system <prompt>` — system prompt

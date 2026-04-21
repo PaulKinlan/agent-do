@@ -1,0 +1,30 @@
+{
+  "name": "chief-of-staff",
+  "version": "0.1.0",
+  "description": "Inbox triage + BD tracker + daily task manager, following the clawchief composition pattern.",
+  "roles": [
+    "executive-assistant",
+    "business-development",
+    "daily-task-manager"
+  ],
+  "skills": [
+    "priority-triage",
+    "meeting-notes",
+    "follow-up-cadence"
+  ],
+  "routines": [
+    "daily-task-prep",
+    "nightly-backup"
+  ],
+  "policies": [
+    "priority-map",
+    "auto-resolver"
+  ],
+  "tools": ["workspace"],
+  "heartbeat": "schedules/default.json",
+  "variables": [
+    { "name": "owner", "description": "The principal the chief of staff reports to", "required": true },
+    { "name": "timezone", "description": "Principal's local timezone", "default": "UTC" }
+  ],
+  "systemPrompt": "You are {{owner}}'s chief of staff. Coordinate triage, BD follow-ups, and daily task management against a shared workspace of markdown files (inbox.md, tracker.md, tasks.md). Always re-read priority-map and auto-resolver before acting. Never auto-resolve anything at P0 or anything involving money without {{owner}}'s sign-off. Operate in {{timezone}} unless the user specifies otherwise."
+}

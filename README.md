@@ -51,6 +51,7 @@ There is no undo. Proceed with caution.
 - **Usage tracking** -- built-in cost estimation for 50+ models with per-run and per-day spending limits
 - **Testable** -- `createMockModel()` returns a mock `LanguageModel` with predetermined responses
 - **Eval framework** -- `defineEval()` + `runEvals()` to measure agent quality with 13 assertion types, LLM-as-judge, and multi-provider comparison
+- **Template packs** -- `createTemplatePack(name, options)` composes skills, routines, policies, tools, and MCP bindings into a ready-to-run agent; `npx agent-do install <pack>` copies a pack into your project
 
 ## Install
 
@@ -116,6 +117,12 @@ npx agent-do run code-reviewer "Review this function"
 
 # List saved agents
 npx agent-do list
+
+# Install a template pack — a ready-to-run composition of skills +
+# routines + policies. See "Template packs" below.
+npx agent-do install chief-of-staff
+npx agent-do list-packs
+npx agent-do uninstall chief-of-staff
 
 # Run a custom agent script (.js/.mjs/.cjs/.ts files).
 # --script is required to import local JavaScript/TypeScript; see
@@ -1020,6 +1027,98 @@ const result = await agent.run('Weather in London?');
 | `inputTokensPerCall` | `10` | Simulated input tokens per call |
 | `outputTokensPerCall` | `20` | Simulated output tokens per call |
 
+## Template Packs
+
+Template packs are opinionated compositions that turn a pile of primitives
+(skills, routines, policy modules, tool groups, MCP bindings) into a
+turn-key agent. Think of them as the "plugins" layer on top of agent-do:
+you install a pack with one command and get a working chief of staff,
+research team, or engineering reviewer.
+
+### Bundled packs
+
+| Pack | Description |
+|------|-------------|
+| `chief-of-staff` | Inbox triage + BD tracker + daily task manager, with `priority-map` and `auto-resolver` policy modules |
+| `engineering-team` | Sprint-ordered Think → Plan → Build → Review → Ship → Reflect pipeline |
+| `research-team` | Daily digest pipeline — scout, analyst, synthesiser, fact-checker |
+
+### Using a pack
+
+```ts
+import { createTemplatePack } from 'agent-do';
+import { createAnthropic } from '@ai-sdk/anthropic';
+
+const { agent } = await createTemplatePack('chief-of-staff', {
+  model: createAnthropic()('claude-sonnet-4-6'),
+  variables: { owner: 'Paul Kinlan' },
+  workingDir: './workspace',
+  // mcpServers: { gmail: {...}, calendar: {...} },  // when the pack declares them
+});
+
+await agent.run('Do the morning pass: triage inbox, update tasks.md.');
+```
+
+`createTemplatePack` resolves the pack (bundled or user-installed),
+interpolates `{{variable}}` placeholders in the system prompt / policies
+/ skills / routines, installs the skills into a `SkillStore`, saves the
+routines into a `RoutineStore`, wires declared tool groups
+(`workspace`, `memory`) and MCP servers, and returns the ready-to-run
+agent. Required variables must be supplied (`options.variables`); required
+MCP servers must be supplied (`options.mcpServers`) or the call fails fast.
+
+### Installing and customising
+
+```bash
+npx agent-do install chief-of-staff    # copies to .agent-do/packs/chief-of-staff/
+npx agent-do list-packs                # shows bundled and installed packs
+npx agent-do uninstall chief-of-staff  # removes the local copy
+```
+
+Once installed, the pack lives in `.agent-do/packs/<name>/` — edit the
+policies, skills, and routines in place to customise. User-installed
+packs shadow bundled ones.
+
+### Authoring a pack
+
+A pack is a directory with this layout:
+
+```
+my-pack/
+  pack.json        # manifest — see below
+  policies/*.md    # concatenated into the system prompt
+  skills/*.md      # SKILL.md-style with YAML frontmatter
+  routines/*.md    # routine prompt-as-macros (#77)
+  README.md        # shown by list-packs
+```
+
+`pack.json` is JSON:
+
+```json
+{
+  "name": "my-pack",
+  "version": "0.1.0",
+  "description": "One-line summary",
+  "skills": ["skill-one", "skill-two"],
+  "routines": ["routine-one"],
+  "policies": ["policy-one"],
+  "tools": ["workspace"],
+  "mcpServers": ["gmail"],
+  "variables": [
+    { "name": "owner", "required": true }
+  ],
+  "systemPrompt": "You are {{owner}}'s assistant."
+}
+```
+
+File references can be bare (`priority-triage`) — the loader adds `.md`
+— or explicit (`subdir/priority-triage.md`). Absolute paths and `..`
+segments are rejected. To test an in-development pack locally:
+
+```bash
+npx agent-do install my-pack --from ./path/to/my-pack
+```
+
 ## Eval Framework
 
 Define eval cases to measure agent quality, compare providers, and catch regressions.
@@ -1145,6 +1244,12 @@ const result = await runEvals(suite, { output: 'silent' });
 | `UsageTracker` | class | Track usage and costs within a run |
 | `estimateCost` | `(model, input, output, pricing?) => number` | Estimate cost in USD |
 | `DEFAULT_PRICING` | `PricingTable` | Built-in pricing for 50+ models |
+| `createTemplatePack` | `(name, options) => Promise<TemplatePack>` | Compose a ready-to-run agent from a bundled or installed pack |
+| `installPack` | `(name, options?) => Promise<PackManifest>` | Install a template pack into `.agent-do/packs/` |
+| `uninstallPack` | `(name, options?) => Promise<boolean>` | Remove an installed template pack |
+| `listPacks` | `(options?) => Promise<PackListEntry[]>` | List bundled + installed packs |
+| `loadPack` | `(name, options?) => Promise<LoadedPack>` | Parse pack files without composing an agent |
+| `parsePackManifest` | `(json, sourcePath?) => PackManifest` | Validate a raw `pack.json` body |
 
 ### Test exports (`agent-do/testing`)
 
@@ -1230,6 +1335,9 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
 | 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
 | 13 | [`13-eval-framework.ts`](examples/13-eval-framework.ts) | Eval framework — define cases, assert quality, compare providers |
+| 14 | [`14-mcp.ts`](examples/14-mcp.ts) | MCP — mount external tool servers alongside local tools |
+| 15 | [`15-routines.ts`](examples/15-routines.ts) | Routines — named prompt-as-macro procedures |
+| 16 | [`16-template-packs.ts`](examples/16-template-packs.ts) | Template packs — `createTemplatePack('chief-of-staff', ...)` |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

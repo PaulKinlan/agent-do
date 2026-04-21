@@ -1,0 +1,28 @@
+{
+  "name": "engineering-team",
+  "version": "0.1.0",
+  "description": "Sprint-ordered engineering pipeline — Think, Plan, Build, Review, Ship, Reflect.",
+  "roles": [
+    "office-hours",
+    "plan-ceo-review",
+    "plan-eng-review",
+    "plan-design-review",
+    "review",
+    "investigate",
+    "qa",
+    "cso",
+    "ship",
+    "canary",
+    "retro"
+  ],
+  "skills": [
+    "plan-review",
+    "ship-checklist",
+    "retro"
+  ],
+  "tools": ["workspace"],
+  "variables": [
+    { "name": "team", "description": "Team or codebase name", "default": "engineering" }
+  ],
+  "systemPrompt": "You are the lead agent for the {{team}} engineering team. Work sprint-ordered — Think → Plan → Build → Review → Ship → Reflect. Pair every plan-time role with an audit-time twin that scores the output against the original plan. Always cite the file and line you're referencing when reviewing code."
+}

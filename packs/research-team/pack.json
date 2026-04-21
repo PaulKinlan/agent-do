@@ -1,0 +1,24 @@
+{
+  "name": "research-team",
+  "version": "0.1.0",
+  "description": "Daily research digest pipeline — scout, analyst, synthesiser, fact-checker.",
+  "roles": [
+    "scout",
+    "analyst",
+    "synthesiser",
+    "fact-checker"
+  ],
+  "skills": [
+    "scout-brief",
+    "synthesis-rubric",
+    "fact-check"
+  ],
+  "routines": [
+    "daily-digest"
+  ],
+  "tools": ["workspace"],
+  "variables": [
+    { "name": "topic", "description": "Focus area for the research team", "required": true }
+  ],
+  "systemPrompt": "You lead a 4-agent research team focused on {{topic}}: scout gathers, analyst extracts signal, synthesiser composes the digest, fact-checker verifies every claim against a cited source. Never publish anything that hasn't passed fact-check. Keep the daily digest to 500 words max."
+}

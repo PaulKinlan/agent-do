@@ -6,10 +6,25 @@
  */
 
 export interface ParsedArgs {
-  command: 'prompt' | 'run' | 'eval' | 'create' | 'list';
+  command: 'prompt' | 'run' | 'eval' | 'create' | 'list' | 'install' | 'uninstall' | 'list-packs';
   prompt?: string;
   file?: string;
   agentName?: string;
+  /**
+   * Pack name positional, for `install <pack>` / `uninstall <pack>` (#78).
+   */
+  packName?: string;
+  /**
+   * Explicit source directory for `install --from <dir>`. When set,
+   * installation copies from this directory instead of the bundled
+   * packs. Useful during pack development.
+   */
+  fromPath?: string;
+  /**
+   * Overwrite an existing installation of the same pack. Required by
+   * `install` when the target already exists.
+   */
+  force?: boolean;
   provider: string;
   model?: string;
   systemPrompt: string;
@@ -152,6 +167,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (first === 'list') {
       args.command = 'list';
       i = 1;
+    } else if (first === 'install') {
+      args.command = 'install';
+      i = 1;
+    } else if (first === 'uninstall') {
+      args.command = 'uninstall';
+      i = 1;
+    } else if (first === 'list-packs') {
+      args.command = 'list-packs';
+      i = 1;
     }
   }
 
@@ -244,6 +268,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === '--allow') {
       const val = requireValue(argv, ++i, '--allow');
       args.allow.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
+    } else if (arg === '--from') {
+      args.fromPath = requireValue(argv, ++i, '--from');
+    } else if (arg === '--force') {
+      args.force = true;
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}. Use --help for usage.`);
     } else {
@@ -271,6 +299,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     args.agentName = positional[0];
   } else if (args.command === 'list') {
+    // no positional args needed
+  } else if (args.command === 'install' || args.command === 'uninstall') {
+    if (positional.length === 0 && !args.help) {
+      throw new Error(`Usage: npx agent-do ${args.command} <pack>`);
+    }
+    args.packName = positional[0];
+  } else if (args.command === 'list-packs') {
     // no positional args needed
   } else {
     // prompt mode — all positional args become the prompt

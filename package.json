@@ -39,6 +39,7 @@
   },
   "files": [
     "dist/src/",
+    "packs/",
     "README.md",
     "LICENSE"
   ],
