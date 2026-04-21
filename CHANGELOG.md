@@ -1,5 +1,137 @@
 # agent-do
 
+## 0.4.0
+
+### Minor Changes
+
+- [#73](https://github.com/PaulKinlan/agent-do/pull/73) [`7caffa4`](https://github.com/PaulKinlan/agent-do/commit/7caffa444dcc77e4fbe89f3c50306c38a48a947c) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - Deeper observability: middleware-level debug hooks + CLI log levels (closes [#72](https://github.com/PaulKinlan/agent-do/issues/72)).
+
+  New `AgentConfig.debug` surfaces a layer below `--verbose`:
+
+  - **`system-prompt`** — the resolved prompt, emitted once per run.
+  - **`messages`** — the full message list before each `streamText` call.
+  - **`request`** — model id, tool names, provider options.
+  - **`response-part`** — raw stream parts (partType always; full payload at `trace` level).
+  - **`cache`** — per-step `cacheReadTokens` / `cacheWriteTokens` / `noCacheTokens` / `outputTokens`, so you can tell whether Anthropic prompt caching is firing.
+
+  The CLI gains `--log-level silent | info | verbose | debug | trace`. `--verbose` / `--show-content` stay as aliases. New channels render as labelled single-line entries on stderr (`[debug:cache] step=1 read=1198 write=0 no-cache=14 out=87 hit=98%`).
+
+  Library callers pass a `debug: DebugConfig` option with per-channel flags plus an optional `sink` for routing events in addition to the existing progress stream. Events flow as `type: 'debug'` progress events so consumers that iterate `agent.stream()` see them without new plumbing.
+
+  Wired via `wrapLanguageModel` from the AI SDK for `messages` / `request` / `response-part`, and via the existing `onStepFinish` hook for `cache`. Zero overhead when `debug` is undefined (default).
+
+  Passing a string model id (e.g. `model: 'claude-sonnet-4-6'`) skips middleware-dependent channels because the SDK resolves providers lazily from strings; `system-prompt` and `cache` still fire.
+
+- [#82](https://github.com/PaulKinlan/agent-do/pull/82) [`cbe3bef`](https://github.com/PaulKinlan/agent-do/commit/cbe3bef426e6c2135016d68dca3166e27f3678f2) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - MCP (Model Context Protocol) server mounting (closes [#75](https://github.com/PaulKinlan/agent-do/issues/75)).
+
+  agent-do can now mount external MCP servers and expose their tools to the model alongside local tools. Three transports supported: stdio (subprocess), SSE (legacy HTTP long-polling), and streamable HTTP.
+
+  New `AgentConfig.mcpServers` option:
+
+  ```ts
+  const agent = createAgent({
+    model,
+    mcpServers: [
+      {
+        name: "fs",
+        transport: {
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+        },
+        allowedTools: ["read_text_file", "list_directory"],
+      },
+      {
+        name: "search",
+        transport: { type: "http", url: "https://example.com/mcp" },
+      },
+    ],
+  });
+  ```
+
+  ### Design
+
+  - **Tool namespacing** — discovered tools are renamed `mcp__<server>__<tool>` so two servers exposing a same-named tool don't collide. `namespacedToolName()` exported for use in logs / debug output.
+  - **Lifecycle handled by the loop** — `runAgentLoop` and `streamAgentLoop` mount servers before starting and close them in a `finally` block. Subprocesses don't leak on abort/error/completion.
+  - **All-or-nothing mount** — if any server fails to connect, previously-connected servers are closed before the error propagates. No half-mounted state.
+  - **Optional `allowedTools` filter** — expose only a subset of a server's tools to the model. Useful when a server offers many tools but the agent needs a couple.
+  - **Permissions + hooks apply uniformly** — MCP tools go through the same `wrapToolWithPermissions` path as local tools, so `onPreToolUse` / `onPostToolUse` fire for them, permissions gate them, and `toolLimits` count them.
+  - **Content flattening** — MCP tool responses can be mixed content (text, images, embedded resources). Today we flatten to concatenated text with short descriptors for non-text parts (`[image: image/png]`, `[resource: <uri>]`).
+
+  ### New exports
+
+  - `mountMcpServers(configs)` → `{ tools, toolOrigins, close }` — standalone mounting helper for callers who don't want the loop's lifecycle management.
+  - `namespacedToolName(server, tool)` — build the namespaced name without duplicating the `mcp__` convention.
+  - `MCP_TOOL_PREFIX = 'mcp__'` — the stable prefix constant.
+  - Types: `McpServerConfig`, `McpTransportConfig`, `MountedMcpServers`.
+
+  ### Dependencies
+
+  Adds `@modelcontextprotocol/sdk` as a runtime dependency.
+
+  Example: see `examples/14-mcp.ts` — mounts the filesystem reference server against a sandbox directory.
+
+- [#83](https://github.com/PaulKinlan/agent-do/pull/83) [`d4eade5`](https://github.com/PaulKinlan/agent-do/commit/d4eade53a696e8379fdff30c6007edf4abd81f75) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - Saved Routines: prompt-as-macro primitive (closes [#77](https://github.com/PaulKinlan/agent-do/issues/77)).
+
+  A routine is a named, reusable procedure — "like a bash script but it's a prompt." Routines are distinct from skills:
+
+  |                  | Skill                            | Routine                                      |
+  | ---------------- | -------------------------------- | -------------------------------------------- |
+  | Purpose          | Instructions on when/how to do X | Named saved procedure                        |
+  | Triggering       | Autonomous, description-matched  | **Explicit by name**, optionally with args   |
+  | Grows over time? | Hand-written                     | **Accumulates** — runCount + lastRun tracked |
+
+  ### New exports
+
+  - `AgentConfig.routines` — any `RoutineStore`
+  - `AgentConfig.allowRoutineSave` — privileged flag to expose the `save_routine` tool (default false, same threat model as `allowSkillInstall`)
+  - `InMemoryRoutineStore`, `FilesystemRoutineStore`
+  - `parseRoutineMd(content, id?)` — markdown + YAML frontmatter parser
+  - `interpolateRoutine(body, args)` — `{{name}}` placeholder substitution
+  - `createRoutineTools(store, { allowSave })` — produces the tool set below
+  - Types: `Routine`, `RoutineStore`, `RoutineInput`
+
+  ### Tools exposed to the model
+
+  Always:
+
+  - `list_routines` — id / name / description / runCount per routine
+  - `run_routine(routineId, args?)` — retrieve a routine, interpolate `{{arg}}` placeholders, return the body wrapped in `<routine>` markers for the model to follow. Bumps runCount + lastRun.
+
+  Gated behind `allowRoutineSave: true`:
+
+  - `save_routine` — persist a new routine. Same validation surface as `install_skill`.
+
+  ### Storage
+
+  `FilesystemRoutineStore` stores each routine as `<rootDir>/<id>.md` with YAML frontmatter + body. Run metadata (runCount, lastRun) lives in a single `.runs.json` sidecar so routine files don't get rewritten on every invocation.
+
+  ### Body interpolation
+
+  Bodies may contain `{{name}}` placeholders that get filled from the `args` object passed to `run_routine`. Unknown placeholders are left in place — the model can see which args it still needs.
+
+  Deliberately minimal: no conditionals, loops, or expressions. Routines are prompts, not DSLs.
+
+  ### Example
+
+  See `examples/15-routines.ts` — pre-saves two routines (`triage-inbox`, `weekly-report`), then the agent runs one with an argument. `runCount` persists across runs.
+
+- [#81](https://github.com/PaulKinlan/agent-do/pull/81) [`8934b69`](https://github.com/PaulKinlan/agent-do/commit/8934b69ccb9eb562e62ffb1e606a83c37b036883) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - Two-tier skill loading: manifest mode + `load_skill(id)` tool (closes [#74](https://github.com/PaulKinlan/agent-do/issues/74)).
+
+  agent-do is provider-agnostic, so we can't rely on any model's trained behaviour around skill discovery — the lookup flow has to be explicit in the prompt and tool surface. Three additions make that happen:
+
+  - **`AgentConfig.skillsMode`** — `'full'` (pre-[#74](https://github.com/PaulKinlan/agent-do/issues/74) behaviour, every body inlined), `'manifest'` (compact id/name/description/triggers only), or `'auto'` (default — flips to manifest once the combined bodies exceed `skillsManifestThreshold`, default 32 KB).
+  - **`load_skill(id)` tool** — automatically added by `createSkillTools`. Returns the full skill body wrapped in `<skill>` markers, so the model can retrieve a skill on demand instead of scanning an ever-growing system prompt.
+  - **"How to Use Skills" system-prompt section** — appended whenever skills are present, explicitly tells the model to scan the manifest / apply the inline skill before starting a sub-task.
+
+  Skill frontmatter now supports a `triggers:` array of verbatim user phrases. Entries are validated individually (bad ones dropped, not the whole list) and capped at 32. `InMemorySkillStore.search()` matches against triggers, so the substring-search fallback picks up how users actually phrase requests — not just how authors name skills.
+
+  Manifest-mode entries are wrapped in `<skill-manifest-entry>` markers with the same injection-safety escapes as `<skill>` bodies (`escapeSkillManifestBody`).
+
+  New exports: `resolveSkillsMode`, `buildSkillUsageInstruction`, `SkillsPromptMode`, `BuildSkillsPromptOptions`.
+
+  Backwards compatible: if you don't set `skillsMode`, agent-do auto-picks. Small skill sets stay in full mode and behave identically to before. Existing `buildSkillsPrompt(skills)` calls default to `mode: 'full'`.
+
 ## 0.3.0
 
 ### Minor Changes
