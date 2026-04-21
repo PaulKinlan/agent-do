@@ -96,7 +96,7 @@ fi
 
 # ── 5. Push commit + tags ────────────────────────────────────────────
 
-log "Pushing commit + tags to origin/$current_branch…"
+log "Pushing commit + tags to origin/${current_branch}…"
 git push origin "$current_branch" --follow-tags
 
 log "✅ Release v$new_version complete."
