@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -243,7 +243,7 @@ describe('lock files', () => {
       JSON.stringify({
         taskId: 'task1',
         pid: 2_147_483_646,
-        host: require('node:os').hostname(),
+        host: hostname(),
         startedAt: new Date().toISOString(),
       }),
     );
@@ -269,14 +269,43 @@ describe('lock files', () => {
     expect(await acquireLock(tmpDir, 'task1')).toBe(false);
   });
 
-  it('treats malformed lock files as stale', async () => {
+  it('refuses to break a malformed lock file', async () => {
+    // Defensive default (docs + code review feedback): if we can't
+    // parse the lock record, we can't prove the holder is dead, so
+    // we conservatively refuse to break it. An operator can
+    // manually `rm .agent-do/scheduler/<id>.lock` when they know
+    // it's safe.
     const lockFile = join(tmpDir, 'task1.lock');
     writeFileSync(lockFile, 'not-json');
-    // Malformed → same-host same-pid fallthrough isn't triggered (parse
-    // returns null), but the lock file already exists so `wx` fails —
-    // the function then consults readLock, which returns null, and
-    // declines to break it. That's the safe default.
     expect(await acquireLock(tmpDir, 'task1')).toBe(false);
+  });
+
+  it('rejects path-traversal task IDs in lock primitives', async () => {
+    // Defence in depth: even if a caller bypasses
+    // validateScheduledTasks, the low-level primitives validate the
+    // task id so `../../etc/passwd` can't escape lockDir.
+    await expect(acquireLock(tmpDir, '../escape')).rejects.toThrow(/taskId must match/);
+    await expect(releaseLock(tmpDir, '../escape')).rejects.toThrow(/taskId must match/);
+  });
+
+  it('recovers atomically when two concurrent acquirers race a stale lock', async () => {
+    // Two concurrent acquires against the same stale lock should
+    // serialise via `open('wx')` — exactly one wins.
+    writeFileSync(
+      join(tmpDir, 'task1.lock'),
+      JSON.stringify({
+        taskId: 'task1',
+        pid: 2_147_483_646,
+        host: hostname(),
+        startedAt: new Date().toISOString(),
+      }),
+    );
+    const [a, b] = await Promise.all([
+      acquireLock(tmpDir, 'task1'),
+      acquireLock(tmpDir, 'task1'),
+    ]);
+    // Exactly one winner.
+    expect([a, b].filter(Boolean).length).toBe(1);
   });
 
   it('release is idempotent', async () => {
@@ -400,7 +429,7 @@ describe('runScheduledTask', () => {
       JSON.stringify({
         taskId: 'task1',
         pid: 2_147_483_646,
-        host: require('node:os').hostname(),
+        host: hostname(),
         startedAt: new Date().toISOString(),
       }),
     );
@@ -466,6 +495,31 @@ describe('tickScheduler', () => {
     expect(runs.length).toBe(0);
     await tickScheduler(agent, parsed, state, new Date(2026, 3, 21, 10, 2, 0), { lockDir: tmpDir });
     expect(runs.length).toBe(1);
+  });
+
+  it('serialises concurrent status updates without dropping counters', async () => {
+    // Regression guard for the review feedback: `updateStatus` does a
+    // read-modify-write of the shared `status.json`; without a per-
+    // `lockDir` async mutex, two parallel runs can both read the old
+    // map and the last writer wins, losing a successCount increment.
+    const agent = mockAgent(() => 'ok');
+    // Fan three tasks in parallel, all firing on the same tick.
+    const tasks: { task: ScheduledTask; cron: ReturnType<typeof parseCron> }[] = [
+      { id: 'a', cron: '* * * * *', payload: 'A' },
+      { id: 'b', cron: '* * * * *', payload: 'B' },
+      { id: 'c', cron: '* * * * *', payload: 'C' },
+    ].map((task) => ({ task, cron: parseCron(task.cron) }));
+    const state = createSchedulerState();
+    await tickScheduler(agent, tasks, state, new Date(2026, 3, 21, 10, 0, 0), {
+      lockDir: tmpDir,
+    });
+    const status = await readStatus(tmpDir);
+    // All three tasks recorded one successful run each — if the
+    // read-modify-write raced, one or more of these would be missing
+    // or have successCount: 0.
+    expect(status.a?.successCount).toBe(1);
+    expect(status.b?.successCount).toBe(1);
+    expect(status.c?.successCount).toBe(1);
   });
 
   it('invokes onOutcome for each fired task', async () => {

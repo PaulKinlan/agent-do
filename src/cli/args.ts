@@ -254,7 +254,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
         throw new Error('--concurrency must be a positive integer');
       }
     } else if (arg === '--script') {
+      // Dual form (#79):
+      // - `agent-do run <file> --script` — `--script` is a boolean
+      //   confirming "yes I know I'm executing this positional file".
+      // - `agent-do scheduled-tasks <action> --script <path>` —
+      //   `--script` takes the path because there's no positional for
+      //   the file.
+      //
+      // Disambiguate by command: for `scheduled-tasks` we always
+      // consume the next argv as the path; everything else keeps the
+      // legacy boolean semantics so existing `run --script` calls
+      // don't break.
       args.script = true;
+      if (args.command === 'scheduled-tasks') {
+        args.file = requireValue(argv, ++i, '--script');
+      }
     } else if (arg === '--accept-all') {
       args.acceptAll = true;
     } else if (arg === '-y' || arg === '--yes') {

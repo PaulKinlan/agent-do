@@ -4,7 +4,7 @@
  *
  * This module is a primitive kit, not a daemon:
  *
- * 1. `validateScheduledTask` — called from `createAgent` to fail loud
+ * 1. `validateScheduledTasks` — called from `createAgent` to fail loud
  *    on bad cron, duplicate IDs, or unsafe task IDs.
  * 2. `parseCron` / `cronMatches` — a minimal, dependency-free cron
  *    evaluator. Supports the standard star, numeric, range, list, and
@@ -266,7 +266,27 @@ interface LockRecord {
   startedAt: string;
 }
 
+/**
+ * Guard lock-primitive callers against path traversal. `ScheduledTask`
+ * IDs are already validated at `createAgent` time, but the low-level
+ * `acquireLock` / `releaseLock` / `readLock` helpers are exported so
+ * an unvalidated `taskId` (e.g. `../../etc/passwd`) mustn't be able to
+ * escape `lockDir`. Defence in depth — we keep this even though
+ * `validateScheduledTasks` should already catch bad IDs upstream.
+ */
+function assertValidTaskId(taskId: string): void {
+  if (typeof taskId !== 'string' || taskId.length === 0) {
+    throw new TypeError('taskId must be a non-empty string');
+  }
+  if (taskId.length > TASK_ID_MAX_LENGTH || !TASK_ID_RE.test(taskId)) {
+    throw new TypeError(
+      `taskId must match ${TASK_ID_RE.toString()} and be ≤ ${TASK_ID_MAX_LENGTH} chars`,
+    );
+  }
+}
+
 function lockPath(lockDir: string, taskId: string): string {
+  assertValidTaskId(taskId);
   return path.join(lockDir, `${taskId}.lock`);
 }
 
@@ -289,9 +309,11 @@ function isPidAlive(pid: number): boolean {
 }
 
 /**
- * Read a lock-file record. Returns `null` when the file is absent or
- * malformed — a malformed lock is treated as stale and will be broken
- * on the next acquire.
+ * Read a lock-file record. Returns `null` when the file is absent,
+ * unreadable, or malformed. Callers treat `null` as "no usable lock
+ * record"; malformed lock files are **not** automatically broken by
+ * this reader — `acquireLock` is conservative and only breaks locks
+ * it can positively identify as stale (same host, dead PID).
  */
 export async function readLock(lockDir: string, taskId: string): Promise<LockRecord | null> {
   try {
@@ -317,49 +339,88 @@ export async function readLock(lockDir: string, taskId: string): Promise<LockRec
 }
 
 /**
+ * How many times `acquireLock` retries the stale-lock recovery dance
+ * before giving up. The dance is: read the lock, confirm it's stale,
+ * unlink it, try `open('wx')` again. Each unlink/open round can race
+ * with another process doing the same thing on the same stale lock;
+ * cap the retries so we don't spin forever if a never-ending stream
+ * of processes keeps winning.
+ */
+const STALE_LOCK_RETRIES = 5;
+
+/**
  * Attempt to acquire a lock for the given task. Returns `true` on
- * success, `false` when another live process already holds it.
+ * success, `false` when another live process already holds it (or a
+ * foreign-host process, or a malformed lock we conservatively refuse
+ * to break).
  *
- * Uses `fs.open(..., 'wx')` for atomic create-if-not-exists. If the
- * file already exists, we inspect it — if the PID is dead (or on
- * another host, if we decide to break foreign locks later), we
- * reclaim it. Otherwise we return false.
+ * The happy path uses `open(..., 'wx')` — atomic create-if-not-exists.
+ * If the file already exists, we inspect it:
+ *
+ * - Foreign host → refuse (we can't probe remote liveness).
+ * - Malformed / unreadable → refuse (can't prove it's stale).
+ * - Same host, live PID → refuse (the lock is genuinely held).
+ * - Same host, dead PID → **stale-lock recovery**: `unlink` + retry
+ *   `open('wx')`. This is atomic wrt concurrent recoverers: two
+ *   processes can both unlink, but only one `wx` wins — the loser
+ *   sees EEXIST and re-reads the lock (now owned by the winner) and
+ *   returns false.
  */
 export async function acquireLock(lockDir: string, taskId: string): Promise<boolean> {
+  // Validate up-front so a bad `taskId` fails loud instead of silently
+  // no-op-ing downstream — even if the caller validated already.
+  assertValidTaskId(taskId);
   await fsp.mkdir(lockDir, { recursive: true });
   const file = lockPath(lockDir, taskId);
-  const record: LockRecord = {
-    taskId,
-    pid: process.pid,
-    host: hostName(),
-    startedAt: new Date().toISOString(),
-  };
-  const body = JSON.stringify(record, null, 2);
-  try {
-    // 'wx' — fail if the file already exists. Atomic wrt concurrent
-    // acquire attempts on the same host.
-    const handle = await fsp.open(file, 'wx');
+  const body = () =>
+    JSON.stringify(
+      {
+        taskId,
+        pid: process.pid,
+        host: hostName(),
+        startedAt: new Date().toISOString(),
+      } satisfies LockRecord,
+      null,
+      2,
+    );
+
+  for (let attempt = 0; attempt < STALE_LOCK_RETRIES; attempt++) {
     try {
-      await handle.writeFile(body, 'utf8');
-    } finally {
-      await handle.close();
+      // 'wx' — fail if the file already exists. Atomic wrt concurrent
+      // acquire attempts on the same host.
+      const handle = await fsp.open(file, 'wx');
+      try {
+        await handle.writeFile(body(), 'utf8');
+      } finally {
+        await handle.close();
+      }
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-  }
-  // Lock exists — is it live?
-  const existing = await readLock(lockDir, taskId);
-  if (existing && existing.host === hostName() && !isPidAlive(existing.pid)) {
-    // Stale local lock — break it by overwriting.
-    await fsp.writeFile(file, body, 'utf8');
-    return true;
+    // Lock exists — is it recoverably stale?
+    const existing = await readLock(lockDir, taskId);
+    if (!existing) return false; // malformed → refuse
+    if (existing.host !== hostName()) return false; // foreign host → refuse
+    if (isPidAlive(existing.pid)) return false; // live holder → refuse
+    // Stale local lock. Unlink then retry `wx`. If another process is
+    // racing the same recovery, exactly one `wx` wins; the loser sees
+    // EEXIST on the next iteration, re-reads the (now-fresh) lock,
+    // finds a live PID (the winner), and returns false.
+    try {
+      await fsp.unlink(file);
+    } catch (err) {
+      // ENOENT means someone else already unlinked it — that's fine,
+      // let the next `wx` attempt race for the new lock.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
   }
   return false;
 }
 
 /** Release the lock for `taskId`. Idempotent — no-op if already gone. */
 export async function releaseLock(lockDir: string, taskId: string): Promise<void> {
+  assertValidTaskId(taskId);
   try {
     await fsp.unlink(lockPath(lockDir, taskId));
   } catch (err) {
@@ -406,9 +467,48 @@ export async function readStatus(lockDir: string): Promise<Record<string, Schedu
   }
 }
 
+/**
+ * Atomic write: render to a tempfile in the same directory, then
+ * `rename` over the target. On POSIX `rename` is atomic within a
+ * filesystem, so readers either see the old file or the new one —
+ * never a half-written `status.json`. Crash safety: a dangling
+ * tempfile is garbage but never corrupts the live file.
+ */
+async function atomicWriteJson(target: string, body: string): Promise<void> {
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await fsp.writeFile(tmp, body, 'utf8');
+  try {
+    await fsp.rename(tmp, target);
+  } catch (err) {
+    // Best-effort tempfile cleanup on rename failure.
+    await fsp.unlink(tmp).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Serialize status updates within a single process. `tickScheduler`
+ * fires matching tasks in parallel, and each one does a
+ * read-modify-write of the shared `status.json`. Without this
+ * promise-chained mutex, two parallel `updateStatus` calls can both
+ * read the old map, each overwrite the other's changes, and drop
+ * counters. The per-`lockDir` keying lets multiple schedulers in the
+ * same process (running against different dirs) update independently.
+ *
+ * Cross-process safety still relies on the per-task lock file —
+ * two different processes updating the *same* task's status are
+ * already serialised by the task lock. Cross-process status races on
+ * *different* tasks hitting the same `status.json` simultaneously
+ * could still lose a write, but status is observational: the next
+ * run of either task rewrites its entry. The atomic rename above
+ * means the file itself is never corrupt.
+ */
+const statusChains = new Map<string, Promise<void>>();
+
 async function writeStatus(lockDir: string, map: Record<string, ScheduledTaskStatus>): Promise<void> {
   await fsp.mkdir(lockDir, { recursive: true });
-  await fsp.writeFile(statusPath(lockDir), JSON.stringify(map, null, 2), 'utf8');
+  await atomicWriteJson(statusPath(lockDir), JSON.stringify(map, null, 2));
 }
 
 async function updateStatus(
@@ -416,10 +516,21 @@ async function updateStatus(
   taskId: string,
   patch: Partial<ScheduledTaskStatus>,
 ): Promise<void> {
-  const all = await readStatus(lockDir);
-  const prev = all[taskId] ?? { id: taskId, successCount: 0, failureCount: 0 };
-  all[taskId] = { ...prev, ...patch, id: taskId };
-  await writeStatus(lockDir, all);
+  const prev = statusChains.get(lockDir) ?? Promise.resolve();
+  const next = prev.then(async () => {
+    const all = await readStatus(lockDir);
+    const existing = all[taskId] ?? { id: taskId, successCount: 0, failureCount: 0 };
+    all[taskId] = { ...existing, ...patch, id: taskId };
+    await writeStatus(lockDir, all);
+  });
+  // Swallow downstream errors from the chain so one failed update
+  // doesn't break every subsequent caller. `next` (as returned to the
+  // caller) still rejects on its own failure.
+  statusChains.set(
+    lockDir,
+    next.catch(() => {}),
+  );
+  return next;
 }
 
 // ─── Task runtime ───────────────────────────────────────────────────────

@@ -280,8 +280,9 @@ export interface RoutineStore {
  *
  * - `runScheduledTask(agent, task)` — fire a single task now, acquiring
  *   its lock file to prevent overlap with an already-running copy.
- * - `runScheduler(agent, options)` — a foreground loop that ticks once
- *   per minute and fires any task whose cron expression matches.
+ * - `runScheduler(agent, tasks, options?)` — a foreground loop that
+ *   ticks once per minute and fires any task whose cron expression
+ *   matches.
  *
  * For production, most users will install a crontab entry per task
  * (via `agent-do scheduled-tasks install`) that calls
