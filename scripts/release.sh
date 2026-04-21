@@ -81,8 +81,18 @@ git commit -m "chore: release v$new_version"
 
 # ── 4. Publish to npm + create git tag ───────────────────────────────
 
-log "Publishing to npm (provenance enabled)…"
-NPM_CONFIG_PROVENANCE=true "$CHANGESET_BIN" publish
+# npm provenance is a CI-only feature: npm needs to detect a supported
+# provider (GitHub Actions, GitLab CI, CircleCI) + an OIDC token. In a
+# local shell there's no provider, so setting NPM_CONFIG_PROVENANCE=true
+# aborts publish with "Automatic provenance generation not supported
+# for provider: null". Only enable it when we're actually in a CI run.
+if [ -n "${CI:-}" ] && [ -n "${GITHUB_ACTIONS:-${ACTIONS_ID_TOKEN_REQUEST_URL:-}}" ]; then
+  log "Publishing to npm (provenance enabled — CI detected)…"
+  NPM_CONFIG_PROVENANCE=true "$CHANGESET_BIN" publish
+else
+  log "Publishing to npm (local run — provenance disabled)…"
+  "$CHANGESET_BIN" publish
+fi
 
 # ── 5. Push commit + tags ────────────────────────────────────────────
 
