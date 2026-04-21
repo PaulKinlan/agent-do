@@ -1,5 +1,11 @@
 # agent-do
 
+## 0.4.2
+
+### Patch Changes
+
+- [`dd2b1e8`](https://github.com/PaulKinlan/agent-do/commit/dd2b1e80b1168da9a11ad63f8770155ef1267a2e) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - Fixing build process for releases
+
 ## 0.4.1
 
 ### Patch Changes
