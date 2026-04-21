@@ -22,12 +22,18 @@ Ship    → release-engineer    → 05-rollout.md        (stages, metrics, rollb
 ## Setup
 
 ```sh
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set an API key for any supported provider:
+export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)
+# export GOOGLE_GENERATIVE_AI_API_KEY=...      # Google / Gemini
+# export OPENAI_API_KEY=sk-...                 # OpenAI
+
 npm install
 npm start "Add an audit log for write operations"
 # Or run interactively:
 npm start
 ```
+
+This demo auto-detects the provider from whichever API key is set. To force a specific provider when multiple keys are present, set `DEMO_PROVIDER=anthropic|google|openai`. See [demos/README.md](../README.md#choose-a-model-provider) for the full env surface.
 
 ## Structure
 

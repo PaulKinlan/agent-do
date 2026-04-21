@@ -19,8 +19,10 @@ An agent that reads source files from a directory and produces a structured code
 # Install demo dependencies
 npm install
 
-# Set your API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# Set an API key for any supported provider:
+export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)
+# export GOOGLE_GENERATIVE_AI_API_KEY=...      # Google / Gemini
+# export OPENAI_API_KEY=sk-...                 # OpenAI
 
 # Review a specific directory
 npm start /path/to/your/project
@@ -28,6 +30,8 @@ npm start /path/to/your/project
 # Review the current directory (default)
 npm start
 ```
+
+This demo auto-detects the provider from whichever API key is set. To force a specific provider when multiple keys are present, set `DEMO_PROVIDER=anthropic|google|openai`. See [demos/README.md](../README.md#choose-a-model-provider) for the full env surface.
 
 ## What to expect
 

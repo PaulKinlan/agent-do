@@ -18,10 +18,27 @@ Then install each demo's dependencies (using subshells so your working directory
 (cd demos/code-reviewer && npm install)
 ```
 
-Make sure your `ANTHROPIC_API_KEY` environment variable is set:
+### Choose a model provider
+
+Each demo auto-detects which AI SDK provider to use from the environment. Set an API key for Anthropic, Google, or OpenAI:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...              # picks Anthropic (claude-sonnet-4-6 / claude-haiku-4-5)
+export GOOGLE_GENERATIVE_AI_API_KEY=...          # picks Google    (gemini-2.5-pro   / gemini-2.5-flash)
+#   …or GOOGLE_API_KEY / GEMINI_API_KEY, both accepted as aliases
+export OPENAI_API_KEY=sk-...                     # picks OpenAI    (gpt-5            / gpt-5-mini)
+```
+
+If more than one is set, the demos pick **anthropic → google → openai** in that order. To force a specific provider (useful when you have multiple keys set), set `DEMO_PROVIDER`:
+
+```bash
+DEMO_PROVIDER=google npm start
+```
+
+You can also override the default model IDs for a run:
+
+```bash
+DEMO_MASTER_MODEL=claude-opus-4-6 DEMO_WORKER_MODEL=claude-sonnet-4-6 npm start
 ```
 
 ## Demos

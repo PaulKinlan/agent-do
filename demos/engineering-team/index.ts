@@ -27,23 +27,17 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createOrchestrator, createFileTools } from 'agent-do';
 import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
 //  Configuration
 // ═══════════════════════════════════════════════
 
 const SPRINT_DIR = resolve('sprint');
-const MASTER_MODEL = 'claude-sonnet-4-6';
-const WORKER_MODEL = 'claude-haiku-4-5';
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required.');
-  process.exit(1);
-}
-
-const provider = createAnthropic({ apiKey });
+// Resolve provider from env — Anthropic / Google / OpenAI. See
+// ./provider.ts for DEMO_PROVIDER + per-provider key vars.
+const resolved = await resolveProvider();
 
 mkdirSync(SPRINT_DIR, { recursive: true });
 
@@ -64,7 +58,7 @@ const orchestrator = createOrchestrator({
   master: {
     id: 'master',
     name: 'Tech Lead',
-    model: provider(MASTER_MODEL) as any,
+    model: resolved.model(resolved.defaults.master),
     systemPrompt: `You are the tech lead running a 5-phase engineering sprint on a single feature request.
 
 Phases must happen in order. Each phase hands off a written artifact to the next via the shared workspace.
@@ -108,7 +102,7 @@ Do NOT skip phases. Do NOT write the artifacts yourself — each specialist writ
     {
       id: 'office-hours',
       name: 'Office Hours (Think)',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You run "office hours" for the tech lead. You answer six forcing questions about a feature request before any design work starts.
 
 Write 01-design-doc.md with exactly these sections:
@@ -126,7 +120,7 @@ Be concrete. Cite specifics, not generalities.`,
     {
       id: 'plan-eng-review',
       name: 'Engineering Plan Review',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are a senior engineer doing a plan review BEFORE any code gets written.
 
 Read 01-design-doc.md. Write 02-plan.md with:
@@ -143,7 +137,7 @@ Be specific. No hand-waving.`,
     {
       id: 'investigate',
       name: 'Investigator',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are the debugger/investigator. You do not propose fixes until you understand what's there.
 
 **Iron Law:** no recommendations without first investigating.
@@ -162,7 +156,7 @@ If you can't investigate something properly, say so explicitly ("Unable to verif
     {
       id: 'qa',
       name: 'QA',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are QA. Your job is to find the holes — red-team the plan, don't bless it.
 
 Read 02-plan.md and 03-investigation.md. Write 04-test-plan.md with:
@@ -178,7 +172,7 @@ Lean pessimistic. If something can't be tested cheaply, flag it.`,
     {
       id: 'release-engineer',
       name: 'Release Engineer',
-      model: provider(WORKER_MODEL) as any,
+      model: resolved.model(resolved.defaults.worker),
       systemPrompt: `You are the release engineer. You design the rollout plan and the rollback.
 
 Read all prior artifacts (01-05 up to this point). Write 05-rollout.md with:
@@ -224,6 +218,7 @@ if (!feature) {
 console.log('=======================================================');
 console.log('  Engineering team sprint');
 console.log('=======================================================');
+announce(resolved);
 console.log(`  Feature: ${feature}`);
 console.log(`  Workspace: ${SPRINT_DIR}\n`);
 

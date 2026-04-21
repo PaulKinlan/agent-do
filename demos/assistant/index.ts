@@ -24,7 +24,7 @@ import {
   type RunUsage,
 } from 'agent-do';
 import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
-import { createAnthropic } from '@ai-sdk/anthropic';
+import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
 //  Configuration
@@ -32,7 +32,6 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 
 const AGENT_ID = 'assistant';
 const DATA_DIR = '.data';
-const MODEL_ID = 'claude-sonnet-4-6';
 
 // ═══════════════════════════════════════════════
 //  Session state
@@ -48,15 +47,12 @@ let messageCount = 0;
 //  Setup
 // ═══════════════════════════════════════════════
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-if (!apiKey) {
-  console.error('Error: ANTHROPIC_API_KEY environment variable is required.');
-  console.error('  export ANTHROPIC_API_KEY=sk-ant-...');
-  process.exit(1);
-}
-
-const provider = createAnthropic({ apiKey });
-const model = provider(MODEL_ID);
+// Resolve provider from env — Anthropic / Google / OpenAI. See
+// ./provider.ts for the full env surface (DEMO_PROVIDER to force,
+// per-provider key vars, DEMO_MASTER_MODEL override).
+const resolved = await resolveProvider();
+announce(resolved);
+const model = resolved.model(resolved.defaults.master);
 
 // Persistent filesystem store
 const store = new FilesystemMemoryStore(DATA_DIR);
@@ -89,7 +85,7 @@ const hooks: AgentHooks = {
 const agent = createAgent({
   id: AGENT_ID,
   name: 'Assistant',
-  model: model as any,
+  model,
   systemPrompt: `You are a helpful interactive assistant with access to a persistent filesystem.
 
 You can:
