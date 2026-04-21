@@ -1,5 +1,11 @@
 # agent-do
 
+## 0.4.1
+
+### Patch Changes
+
+- [`d4efdc6`](https://github.com/PaulKinlan/agent-do/commit/d4efdc65122e4b07d2937f71377325520bb11ffa) Thanks [@PaulKinlan](https://github.com/PaulKinlan)! - Package fix
+
 ## 0.4.0
 
 ### Minor Changes
