@@ -1,5 +1,6 @@
 import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './types.js';
 import { runAgentLoop, streamAgentLoop } from './loop.js';
+import { validateScheduledTasks } from './scheduled-tasks.js';
 
 /**
  * Create an Agent instance from configuration.
@@ -8,6 +9,12 @@ import { runAgentLoop, streamAgentLoop } from './loop.js';
  * autonomous agent loop. Supports conversation history for multi-turn.
  */
 export function createAgent(config: AgentConfig): Agent {
+  // Fail loud on misconfigured scheduled tasks (#79). Invalid cron
+  // expressions or duplicate IDs should surface at construction time,
+  // not silently on the first tick hours later.
+  if (config.scheduledTasks !== undefined) {
+    validateScheduledTasks(config.scheduledTasks);
+  }
   let abortController: AbortController | null = null;
 
   return {

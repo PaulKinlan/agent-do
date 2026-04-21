@@ -6,10 +6,20 @@
  */
 
 export interface ParsedArgs {
-  command: 'prompt' | 'run' | 'eval' | 'create' | 'list';
+  command: 'prompt' | 'run' | 'eval' | 'create' | 'list' | 'scheduled-tasks';
   prompt?: string;
   file?: string;
   agentName?: string;
+  /**
+   * Sub-subcommand for `scheduled-tasks`: `run` | `start` | `status` |
+   * `install`. Only set when `command === 'scheduled-tasks'`.
+   */
+  schedulerAction?: 'run' | 'start' | 'status' | 'install';
+  /**
+   * Task id, positional after `scheduled-tasks run`. Required for the
+   * `run` action, ignored by other scheduler actions.
+   */
+  schedulerTaskId?: string;
   provider: string;
   model?: string;
   systemPrompt: string;
@@ -152,6 +162,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (first === 'list') {
       args.command = 'list';
       i = 1;
+    } else if (first === 'scheduled-tasks') {
+      args.command = 'scheduled-tasks';
+      i = 1;
+      const action = argv[1];
+      if (action === 'run' || action === 'start' || action === 'status' || action === 'install') {
+        args.schedulerAction = action;
+        i = 2;
+        if (action === 'run') {
+          const taskId = argv[2];
+          if (taskId && !taskId.startsWith('-')) {
+            args.schedulerTaskId = taskId;
+            i = 3;
+          }
+        }
+      }
     }
   }
 
@@ -272,6 +297,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
     args.agentName = positional[0];
   } else if (args.command === 'list') {
     // no positional args needed
+  } else if (args.command === 'scheduled-tasks') {
+    if (!args.schedulerAction && !args.help) {
+      throw new Error(
+        'Usage: npx agent-do scheduled-tasks <run|start|status|install> [options]',
+      );
+    }
+    if (args.schedulerAction === 'run' && !args.schedulerTaskId && !args.help) {
+      throw new Error('Usage: npx agent-do scheduled-tasks run <task-id> [options]');
+    }
   } else {
     // prompt mode — all positional args become the prompt
     if (positional.length > 0) {

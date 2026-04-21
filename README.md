@@ -51,6 +51,7 @@ There is no undo. Proceed with caution.
 - **Usage tracking** -- built-in cost estimation for 50+ models with per-run and per-day spending limits
 - **Testable** -- `createMockModel()` returns a mock `LanguageModel` with predetermined responses
 - **Eval framework** -- `defineEval()` + `runEvals()` to measure agent quality with 13 assertion types, LLM-as-judge, and multi-provider comparison
+- **Scheduled tasks** -- declarative cron-driven agent runs with lock-file concurrency; ships a CLI (`agent-do scheduled-tasks run|start|status|install`) for one-off execution and crontab generation
 
 ## Install
 
@@ -1123,6 +1124,89 @@ await runEvals(suite, { output: 'csv' });
 // Silent (programmatic use)
 const result = await runEvals(suite, { output: 'silent' });
 ```
+
+## Scheduled Tasks
+
+Declarative cron-driven agent runs with lock-file concurrency. See
+[issue #79](https://github.com/PaulKinlan/agent-do/issues/79) for the
+motivation — "agents as colleagues" need to run on a schedule, not
+just on-demand.
+
+```ts
+import { createAgent, runScheduledTask, type ScheduledTask } from 'agent-do';
+import { createAnthropic } from '@ai-sdk/anthropic';
+
+const anthropic = createAnthropic();
+
+const scheduledTasks: ScheduledTask[] = [
+  {
+    id: 'ea-sweep',
+    cron: '*/15 8-21 * * *',
+    payload: 'Run the inbox-triage routine.',
+  },
+  {
+    id: 'daily-prep',
+    cron: '0 2 * * *',
+    sessionTarget: 'isolated',
+    wakeMode: 'systemEvent',
+    payload: { event: 'daily-prep' },
+  },
+];
+
+const agent = createAgent({
+  id: 'ea',
+  name: 'EA',
+  model: anthropic('claude-haiku-4-5'),
+  systemPrompt: 'You are an executive assistant.',
+  scheduledTasks,
+});
+
+// Fire one task now (e.g. from a crontab entry)
+await runScheduledTask(agent, scheduledTasks[0]);
+```
+
+The runtime is primitive by design — a declarative config plus a
+small set of functions you can compose into whatever long-running
+surface you need:
+
+- `runScheduledTask(agent, task)` — run one task now. Acquires a
+  per-task lock at `.agent-do/scheduler/<id>.lock` so concurrent
+  invocations from cron never overlap; stale locks from crashed runs
+  are broken automatically.
+- `runScheduler(agent, tasks)` — foreground loop that ticks every
+  minute and fires matching tasks. Useful for development.
+- `generateCrontabEntries(tasks)` — render a crontab block you can
+  paste into `crontab -e`.
+
+### CLI
+
+```bash
+# Run a single task (for crontab / systemd to call)
+npx agent-do scheduled-tasks run ea-sweep --script ./ea.ts --yes
+
+# Run the scheduler in the foreground (Ctrl-C to stop)
+npx agent-do scheduled-tasks start --script ./ea.ts --yes
+
+# See last-run times, durations, and failure messages per task
+npx agent-do scheduled-tasks status --script ./ea.ts
+
+# Print crontab entries — review, then paste into `crontab -e`
+npx agent-do scheduled-tasks install --script ./ea.ts --yes
+```
+
+### Cron syntax
+
+Standard 5-field expression (`minute hour day-of-month month day-of-week`).
+Supports `*`, `N`, `N-M`, `N,M,…`, and step syntax. Numeric fields
+only — named months (`JAN`) and weekdays (`MON`) are not supported.
+
+### Wake modes
+
+- `agentTurn` (default) — payload becomes a regular user message.
+- `systemEvent` — payload is wrapped in a `<system-event>` envelope
+  with the "OK silence" contract: the model replies with a single
+  `OK` token when nothing actionable is pending, so periodic wakes
+  are cheap at scale.
 
 ## API Reference
 

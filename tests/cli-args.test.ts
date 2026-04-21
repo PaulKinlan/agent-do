@@ -218,6 +218,30 @@ describe('parseArgs', () => {
     expect(args.command).toBe('list');
   });
 
+  it('recognizes scheduled-tasks run subcommand', () => {
+    const args = parseArgs(['scheduled-tasks', 'run', 'ea-sweep', '--script', './agent.ts', '--yes']);
+    expect(args.command).toBe('scheduled-tasks');
+    expect(args.schedulerAction).toBe('run');
+    expect(args.schedulerTaskId).toBe('ea-sweep');
+    expect(args.file).toBeUndefined();
+  });
+
+  it('recognizes scheduled-tasks start / status / install', () => {
+    for (const action of ['start', 'status', 'install'] as const) {
+      const args = parseArgs(['scheduled-tasks', action]);
+      expect(args.command).toBe('scheduled-tasks');
+      expect(args.schedulerAction).toBe(action);
+    }
+  });
+
+  it('rejects scheduled-tasks with no action', () => {
+    expect(() => parseArgs(['scheduled-tasks'])).toThrow(/Usage: npx agent-do scheduled-tasks/);
+  });
+
+  it('rejects scheduled-tasks run without a task id', () => {
+    expect(() => parseArgs(['scheduled-tasks', 'run'])).toThrow(/scheduled-tasks run <task-id>/);
+  });
+
   it('parses --exclude as comma-separated patterns (repeatable)', () => {
     const args = parseArgs(['--exclude', 'secrets/**,*.cred', '--exclude', 'vendor/**']);
     expect(args.exclude).toEqual(['secrets/**', '*.cred', 'vendor/**']);
