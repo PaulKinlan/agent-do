@@ -81,6 +81,7 @@
     "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.31.0",
     "@types/node": "^25.6.0",
+    "agent-do-changelog-formatter": "file:./scripts/changelog-formatter",
     "typedoc": "^0.28.0",
     "typedoc-plugin-markdown": "^4.4.0",
     "typescript": "^6.0.3",
