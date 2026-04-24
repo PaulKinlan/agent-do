@@ -48,7 +48,7 @@ This demo auto-detects the provider from whichever API key is set. To force a sp
 User (topic)
   |
   v
-Master Agent (master model — e.g. claude-sonnet-4-6 / gemini-2.5-pro / gpt-5)
+Master Agent (master model — e.g. claude-opus-4-7 / gemini-3.1-pro-preview / gpt-5.4)
   |--- delegate_task("researcher", "Research X...")
   |      |
   |      v
