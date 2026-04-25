@@ -51,6 +51,34 @@
 - Master gets: delegate_task, list_agents, get_agent_status tools
 - `orchestrator.run(task)` / `orchestrator.stream(task)`
 
+## Scheduled Tasks (#79)
+
+Declarative cron-driven agent runs with lock-file concurrency.
+
+- `AgentConfig.scheduledTasks: ScheduledTask[]` — declarative schedule;
+  validated at `createAgent` time (bad cron / duplicate ids throw).
+- `runScheduledTask(agent, task, options?)` — fire one task now;
+  acquires a per-task lock, records status in `.agent-do/scheduler/`.
+  Returns `{ status: 'success' | 'skipped' | 'failed', ... }`.
+- `runScheduler(agent, tasks, options?)` — foreground loop that ticks
+  every `tickMs` (default one minute).
+- `tickScheduler(agent, parsed, state, date, options?)` — fire all
+  tasks whose cron matches `date` once; lets tests / hosts drive
+  scheduling without a timer.
+- `parseCron(expr): ParsedCron` + `cronMatches(parsed, date): boolean`
+  — minimal 5-field cron evaluator (numeric fields only).
+- `acquireLock/releaseLock/readLock(lockDir, taskId)` — lock file
+  primitives. Stale locks (dead PID, same host) are broken.
+- `readStatus(lockDir): Record<id, ScheduledTaskStatus>` — per-task
+  last run / status / duration.
+- `generateCrontabEntries(tasks, options?)` — render a crontab block.
+- CLI: `agent-do scheduled-tasks <run|start|status|install>`.
+
+`ScheduledTask` shape: `{ id, cron, payload, sessionTarget?, wakeMode?, description? }`.
+`wakeMode: 'systemEvent'` wraps payload in a `<system-event>` envelope
+with the "OK silence" contract — the model replies `OK` when nothing
+needs saying.
+
 ## Lifecycle Hooks
 
 - `onPreToolUse(event)` — before tool call, return HookDecision to allow/deny/modify

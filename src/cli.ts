@@ -19,6 +19,7 @@ import { runPromptMode } from './cli/prompt.js';
 import { runScriptMode } from './cli/script.js';
 import { runEvalMode } from './cli/eval-cmd.js';
 import { createSavedAgent, listSavedAgents } from './cli/agents.js';
+import { runScheduledTasksMode } from './cli/scheduled-tasks-cmd.js';
 
 async function main(): Promise<void> {
   let args: ParsedArgs;
@@ -51,6 +52,9 @@ async function main(): Promise<void> {
       case 'list':
         await listSavedAgents();
         break;
+      case 'scheduled-tasks':
+        await runScheduledTasksMode(args);
+        break;
     }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -72,6 +76,8 @@ Usage:
   npx agent-do list                        List saved agents
   npx agent-do run <name|file> [task]      Run a saved agent or script file
   npx agent-do eval <file|dir> [options]   Run eval cases
+  npx agent-do scheduled-tasks <action>    Manage cron-scheduled agent runs
+                                           (run|start|status|install)
 
 Piping:
   echo "context" | npx agent-do "prompt"   Merge piped input with prompt
@@ -129,6 +135,16 @@ Eval options:
   --output <format>      console | json | csv (default: console)
   --compare <providers>  Compare across providers (comma-separated)
   --concurrency <n>      Parallel case execution (default: 1)
+
+Scheduled tasks (#79):
+  npx agent-do scheduled-tasks run <id> --script ./agent.ts --yes
+      Run a single task once. Uses a lock file so two runs can't overlap.
+  npx agent-do scheduled-tasks start --script ./agent.ts --yes
+      Foreground scheduler — ticks every minute, fires matching tasks.
+  npx agent-do scheduled-tasks status [--script ./agent.ts]
+      Show last-run times and status per task.
+  npx agent-do scheduled-tasks install --script ./agent.ts --yes
+      Print a crontab block you can paste into \`crontab -e\`.
 
 Environment:
   ANTHROPIC_API_KEY      Required for Anthropic models

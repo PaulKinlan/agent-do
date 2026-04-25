@@ -265,6 +265,104 @@ export interface RoutineStore {
   recordRun(id: string): Promise<void>;
 }
 
+// ─── Scheduled tasks (#79) ──────────────────────────────────────────────
+
+/**
+ * A declarative scheduled task — a cron-driven agent run.
+ *
+ * Scheduled tasks turn agent-do into something closer to a long-running
+ * colleague: inbox sweeps every 15 min, daily prep at 2am, weekly digest
+ * on Sunday. Define them on {@link AgentConfig.scheduledTasks} and the
+ * CLI / scheduler primitive will invoke them at the right time.
+ *
+ * The runtime does **not** itself daemonise — `scheduledTasks` is a
+ * configuration primitive. Two execution surfaces use it:
+ *
+ * - `runScheduledTask(agent, task)` — fire a single task now, acquiring
+ *   its lock file to prevent overlap with an already-running copy.
+ * - `runScheduler(agent, tasks, options?)` — a foreground loop that
+ *   ticks once per minute and fires any task whose cron expression
+ *   matches.
+ *
+ * For production, most users will install a crontab entry per task
+ * (via `agent-do scheduled-tasks install`) that calls
+ * `agent-do scheduled-tasks run <id>` — the OS scheduler owns the
+ * cadence, agent-do owns the lock file and logging.
+ */
+export interface ScheduledTask {
+  /**
+   * Unique task ID within this agent. Used as the lock-file name and
+   * the handle for `agent-do scheduled-tasks run <id>`. Must match
+   * `/^[a-zA-Z0-9_-]+$/` so it's safe as a filename.
+   */
+  id: string;
+  /**
+   * Standard 5-field cron expression (minute, hour, day-of-month,
+   * month, day-of-week). Supports star, numeric, range, list, and
+   * step forms — see `parseCron` in `src/scheduled-tasks.ts` for the
+   * exact grammar. Numeric fields only; named months / weekdays are
+   * not supported. Sunday is `0` (Saturday is `6`); `7` is also
+   * accepted as Sunday for crontab compatibility.
+   */
+  cron: string;
+  /**
+   * Where the task's output goes:
+   *
+   * - `'isolated'` (default) — a fresh session. The task runs with no
+   *   prior conversation history; good for stateless sweeps and
+   *   digests.
+   * - `'main'` — the task's output flows into the agent's main
+   *   conversation. The caller is responsible for persisting and
+   *   replaying that history (the scheduler just runs the turn); this
+   *   is a primitive that higher-level hosts can build on.
+   */
+  sessionTarget?: 'isolated' | 'main';
+  /**
+   * How the payload is delivered to the agent:
+   *
+   * - `'agentTurn'` (default) — payload is injected as a user message,
+   *   triggering a normal agent turn. Use for "please do X" prompts.
+   * - `'systemEvent'` — payload is wrapped in a `<system-event>` envelope
+   *   and the agent is invited to respond only when there's something
+   *   to say (the "OK silence" contract). Use for heartbeat-style
+   *   wakes.
+   */
+  wakeMode?: 'agentTurn' | 'systemEvent';
+  /**
+   * The payload delivered to the agent. Strings are used verbatim;
+   * objects are serialised to JSON inside the envelope so the model
+   * sees structured data.
+   */
+  payload: string | Record<string, unknown>;
+  /**
+   * Optional per-task description, shown in `scheduled-tasks status`
+   * output.
+   */
+  description?: string;
+}
+
+/**
+ * Persisted run record for a scheduled task. One entry per task ID,
+ * updated on each run. Stored in `.agent-do/scheduler/status.json`.
+ */
+export interface ScheduledTaskStatus {
+  id: string;
+  /** ISO timestamp of the most recent run start. */
+  lastRun?: string;
+  /** ISO timestamp of the most recent run completion. */
+  lastFinished?: string;
+  /** 'success' | 'failed' | 'skipped' (lock held) | 'running'. */
+  lastStatus?: 'success' | 'failed' | 'skipped' | 'running';
+  /** Wall-clock duration of the most recent completed run. */
+  durationMs?: number;
+  /** Error message, set when `lastStatus === 'failed'`. */
+  lastError?: string;
+  /** Number of successful runs observed. */
+  successCount?: number;
+  /** Number of failed runs observed. */
+  failureCount?: number;
+}
+
 // Usage record
 export interface UsageRecord {
   timestamp: string;
@@ -515,6 +613,18 @@ export interface AgentConfig {
    * context forever" behaviour.
    */
   historyKeepWindow?: number;
+  /**
+   * Declarative scheduled tasks (#79). Each entry binds a cron expression
+   * to a payload that fires an agent run at its scheduled time.
+   *
+   * Validation happens once, at {@link createAgent} time: invalid cron
+   * expressions, duplicate IDs, and unsafe task IDs throw synchronously
+   * so misconfiguration fails loud. The runtime itself is optional —
+   * declaring tasks does not automatically start a scheduler. Use
+   * `runScheduler(agent, ...)` or install crontab entries via
+   * `agent-do scheduled-tasks install` to actually drive them.
+   */
+  scheduledTasks?: ScheduledTask[];
   /**
    * Debug / observability hooks (#72). See {@link DebugConfig}.
    *

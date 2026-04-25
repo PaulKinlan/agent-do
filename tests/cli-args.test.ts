@@ -218,6 +218,43 @@ describe('parseArgs', () => {
     expect(args.command).toBe('list');
   });
 
+  it('recognizes scheduled-tasks run subcommand', () => {
+    const args = parseArgs(['scheduled-tasks', 'run', 'ea-sweep', '--script', './agent.ts', '--yes']);
+    expect(args.command).toBe('scheduled-tasks');
+    expect(args.schedulerAction).toBe('run');
+    expect(args.schedulerTaskId).toBe('ea-sweep');
+    // For `scheduled-tasks`, `--script <path>` consumes the next argv
+    // as the script path. The legacy boolean form is kept for `run`.
+    expect(args.file).toBe('./agent.ts');
+    expect(args.script).toBe(true);
+    expect(args.yes).toBe(true);
+  });
+
+  it('keeps --script as a boolean for `run` (legacy form)', () => {
+    // `agent-do run ./file.ts --script -y` — the positional is the
+    // file, `--script` is the "yes I know" confirmation flag.
+    const args = parseArgs(['run', './agent.ts', '--script', '-y']);
+    expect(args.command).toBe('run');
+    expect(args.file).toBe('./agent.ts');
+    expect(args.script).toBe(true);
+  });
+
+  it('recognizes scheduled-tasks start / status / install', () => {
+    for (const action of ['start', 'status', 'install'] as const) {
+      const args = parseArgs(['scheduled-tasks', action]);
+      expect(args.command).toBe('scheduled-tasks');
+      expect(args.schedulerAction).toBe(action);
+    }
+  });
+
+  it('rejects scheduled-tasks with no action', () => {
+    expect(() => parseArgs(['scheduled-tasks'])).toThrow(/Usage: npx agent-do scheduled-tasks/);
+  });
+
+  it('rejects scheduled-tasks run without a task id', () => {
+    expect(() => parseArgs(['scheduled-tasks', 'run'])).toThrow(/scheduled-tasks run <task-id>/);
+  });
+
   it('parses --exclude as comma-separated patterns (repeatable)', () => {
     const args = parseArgs(['--exclude', 'secrets/**,*.cred', '--exclude', 'vendor/**']);
     expect(args.exclude).toEqual(['secrets/**', '*.cred', 'vendor/**']);

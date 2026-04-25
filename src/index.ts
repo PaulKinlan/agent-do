@@ -42,6 +42,34 @@ export {
 export type { CreateRoutineToolsOptions } from './routines.js';
 export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
+// Scheduled tasks — cron-driven agent runs with lock-file concurrency (#79)
+export {
+  validateScheduledTasks,
+  parseCron,
+  cronMatches,
+  acquireLock,
+  releaseLock,
+  readLock,
+  hasLockFile,
+  readStatus,
+  runScheduledTask,
+  runScheduler,
+  tickScheduler,
+  createSchedulerState,
+  buildScheduledTaskPrompt,
+  generateCrontabEntries,
+  DEFAULT_LOCK_DIR,
+} from './scheduled-tasks.js';
+export type {
+  ParsedCron,
+  RunScheduledTaskOptions,
+  RunSchedulerOptions,
+  ScheduledTaskRunOutcome,
+  GenerateCrontabOptions,
+  SchedulerState,
+} from './scheduled-tasks.js';
+export type { ScheduledTask, ScheduledTaskStatus } from './types.js';
+
 // Workspace tools (real project files) and memory tools (agent scratchpad)
 export { createWorkspaceTools } from './tools/workspace-tools.js';
 export type { WorkspaceToolsOptions } from './tools/workspace-tools.js';
