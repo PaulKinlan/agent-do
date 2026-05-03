@@ -53,7 +53,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/google": "^3.0.67",
     "@ai-sdk/openai": "^3.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^6.0.168",
@@ -63,7 +63,7 @@
   },
   "peerDependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/google": "^3.0.67",
     "@ai-sdk/openai": "^3.0.0"
   },
   "peerDependenciesMeta": {
