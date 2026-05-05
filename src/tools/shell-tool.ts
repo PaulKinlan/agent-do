@@ -1,5 +1,10 @@
 /**
- * `bash` tool — run shell commands through a {@link SandboxApi}.
+ * Shell tool — surface `SandboxApi.exec` as a single tool the model
+ * can invoke (default name: `bash`).
+ *
+ * If you're looking for a bundle of file tools + shell, that's
+ * {@link createSandboxedToolset}. This factory creates exactly one
+ * tool whose `execute` runs `sandbox.exec(...)`.
  *
  * When `sandbox` is undefined, the tool falls back to
  * {@link createHostSandbox} — i.e. it runs commands directly on the
@@ -30,12 +35,12 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const s = (schema: z.ZodType): any => schema;
 
-export interface CreateBashToolOptions {
+export interface CreateShellToolOptions {
   /** Default working directory passed to `sandbox.exec`. */
   cwd?: string;
   /**
    * Default timeout in milliseconds. The model can override per call up
-   * to {@link CreateBashToolOptions.maxTimeoutMs}.
+   * to {@link CreateShellToolOptions.maxTimeoutMs}.
    */
   defaultTimeoutMs?: number;
   /**
@@ -49,8 +54,10 @@ export interface CreateBashToolOptions {
    */
   maxOutputBytes?: number;
   /**
-   * Override the tool's name. Default `bash`. Useful if you want to
-   * mount more than one shell tool against different sandboxes.
+   * Override the tool's name. Default `bash` (so the model picks up
+   * familiar shell conventions). Useful if you want to mount more
+   * than one shell tool against different sandboxes — e.g. one named
+   * `host_shell` and another `vm_shell`.
    */
   name?: string;
   /**
@@ -60,11 +67,11 @@ export interface CreateBashToolOptions {
   description?: string;
 }
 
-export function createBashTool(
+export function createShellTool(
   sandbox: SandboxApi | undefined,
-  options: CreateBashToolOptions = {},
+  options: CreateShellToolOptions = {},
 ): ToolSet {
-  // Default to the host connector so `createBashTool()` works without
+  // Default to the host connector so `createShellTool()` works without
   // ceremony. This is *not* isolation — see the file header.
   const target = sandbox ?? createHostSandbox({ cwd: options.cwd });
 
@@ -79,7 +86,7 @@ export function createBashTool(
       'Filesystem and network access are scoped to whatever the connector allows. ' +
       'No stdin support — use `<<EOF` heredocs or input files.';
 
-  const bash = tool({
+  const shell = tool({
     description,
     inputSchema: s(
       z.object({
@@ -157,7 +164,7 @@ export function createBashTool(
     },
   });
 
-  return { [toolName]: bash };
+  return { [toolName]: shell };
 }
 
 interface Capped { content: string; truncated: boolean; }

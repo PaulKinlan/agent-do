@@ -2,16 +2,16 @@
  * `createSandboxedToolset` — convenience bundle for the common case.
  *
  * Wires the file tools (read/write/edit/list/delete/grep/find) and a
- * `bash` tool against a single {@link SandboxApi}. Equivalent to:
+ * shell tool against a single {@link SandboxApi}. Equivalent to:
  *
  *   const store = new SandboxBackedMemoryStore(sandbox, root);
  *   const tools = {
  *     ...createFileTools(store, agentId, fileToolsOptions),
- *     ...createBashTool(sandbox, bashOptions),
+ *     ...createShellTool(sandbox, shellOptions),
  *   };
  *
- * If you need finer control (e.g. file tools against one root and bash
- * exec against another), assemble the pieces yourself.
+ * If you need finer control (e.g. file tools against one root and a
+ * shell against another), assemble the pieces yourself.
  */
 
 import type { ToolSet } from 'ai';
@@ -21,7 +21,7 @@ import {
   type SandboxBackedMemoryStoreOptions,
 } from '../stores/sandbox.js';
 import { createFileTools, type FileToolsOptions } from './file-tools.js';
-import { createBashTool, type CreateBashToolOptions } from './bash-tool.js';
+import { createShellTool, type CreateShellToolOptions } from './shell-tool.js';
 
 export interface CreateSandboxedToolsetOptions {
   /** Root directory inside the sandbox. Defaults to `/workspace`. */
@@ -30,8 +30,8 @@ export interface CreateSandboxedToolsetOptions {
   store?: SandboxBackedMemoryStoreOptions;
   /** Forwarded to {@link createFileTools}. */
   fileTools?: FileToolsOptions;
-  /** Forwarded to {@link createBashTool}. Set `false` to omit the bash tool. */
-  bash?: CreateBashToolOptions | false;
+  /** Forwarded to {@link createShellTool}. Set `false` to omit the shell tool. */
+  shell?: CreateShellToolOptions | false;
 }
 
 export function createSandboxedToolset(
@@ -45,7 +45,7 @@ export function createSandboxedToolset(
     options.store,
   );
   const fileTools = createFileTools(store, agentId, options.fileTools);
-  if (options.bash === false) return fileTools;
-  const bashTools = createBashTool(sandbox, options.bash);
-  return { ...fileTools, ...bashTools };
+  if (options.shell === false) return fileTools;
+  const shellTools = createShellTool(sandbox, options.shell);
+  return { ...fileTools, ...shellTools };
 }

@@ -52,10 +52,10 @@ export { createMemoryTools } from './tools/memory-tools.js';
 export { createFileTools } from './tools/file-tools.js';
 export type { FileToolsOptions } from './tools/file-tools.js';
 
-// Sandbox tools — `bash` plus the convenience bundle that wires
-// file tools through a SandboxBackedMemoryStore (#3).
-export { createBashTool } from './tools/bash-tool.js';
-export type { CreateBashToolOptions } from './tools/bash-tool.js';
+// Sandbox tools — single-tool shell factory plus the convenience
+// bundle that wires file tools through a SandboxBackedMemoryStore (#3).
+export { createShellTool } from './tools/shell-tool.js';
+export type { CreateShellToolOptions } from './tools/shell-tool.js';
 export { createSandboxedToolset } from './tools/sandboxed-toolset.js';
 export type { CreateSandboxedToolsetOptions } from './tools/sandboxed-toolset.js';
 

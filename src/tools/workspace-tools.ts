@@ -27,6 +27,9 @@
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
+import { SandboxBackedMemoryStore } from '../stores/sandbox.js';
+import type { MemoryStore } from '../stores.js';
+import type { SandboxApi } from '../sandbox/types.js';
 import { createFileTools, type FileToolsOptions } from './file-tools.js';
 import {
   blockedByDenyList,
@@ -58,6 +61,22 @@ export interface WorkspaceToolsOptions extends FileToolsOptions {
   includeSensitive?: boolean;
   /** For tests: skip reading `.agent-doignore`. */
   skipAgentDoIgnore?: boolean;
+  /**
+   * Pluggable sandbox connector (#3). When set, file operations route
+   * through {@link SandboxBackedMemoryStore} backed by this sandbox
+   * instead of `FilesystemMemoryStore`. `workingDir` is then
+   * interpreted *inside the sandbox*, not on the host. The deny-list
+   * still applies on top.
+   *
+   * Use this when you want hard isolation — e.g. an in-process
+   * just-bash sandbox, or a remote VM connector — and you want the
+   * existing workspace-tools ergonomics (cwd-relative paths,
+   * sensitive-file deny-list) on top.
+   *
+   * Leave undefined to keep the legacy behaviour: file ops go directly
+   * to host fs through `FilesystemMemoryStore`.
+   */
+  sandbox?: SandboxApi;
 }
 
 /**
@@ -72,13 +91,21 @@ export function createWorkspaceTools(
   workingDir: string,
   options: WorkspaceToolsOptions = {},
 ): ToolSet {
-  const store = new FilesystemMemoryStore(workingDir, {
-    readOnly: options.readOnly,
-    onBeforeWrite: options.onBeforeWrite
-      ? async (_agentId, canonicalPath, op) =>
-          options.onBeforeWrite!(canonicalPath, op)
-      : undefined,
-  });
+  const store: MemoryStore = options.sandbox
+    ? new SandboxBackedMemoryStore(options.sandbox, workingDir, {
+        readOnly: options.readOnly,
+        onBeforeWrite: options.onBeforeWrite
+          ? async (_agentId, canonicalPath, op) =>
+              options.onBeforeWrite!(canonicalPath, op)
+          : undefined,
+      })
+    : new FilesystemMemoryStore(workingDir, {
+        readOnly: options.readOnly,
+        onBeforeWrite: options.onBeforeWrite
+          ? async (_agentId, canonicalPath, op) =>
+              options.onBeforeWrite!(canonicalPath, op)
+          : undefined,
+      });
 
   const guard = createDenyGuard(workingDir, {
     extra: options.exclude,
