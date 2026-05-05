@@ -36,7 +36,19 @@
 - `FilesystemMemoryStore(baseDir: string, options?: FilesystemMemoryStoreOptions)` — Node.js filesystem (persistent)
   - `options.readOnly: boolean` — block all write operations
   - `options.onBeforeWrite: (agentId, canonicalPath, operation) => boolean | Promise<boolean>` — approve/deny each write
+- `SandboxBackedMemoryStore(sandbox: SandboxApi, root?: string, options?)` — adapt any sandbox connector into a MemoryStore. Mirrors readOnly / onBeforeWrite from FilesystemMemoryStore.
 - `MemoryStore` interface: read, write, append, delete, list, mkdir, exists, search
+
+## Sandbox (#3)
+
+- `AgentConfig.sandbox?: SandboxApi` — optional pluggable sandbox attribute
+- `SandboxApi` contract (Flue spec): readFile, readFileBuffer, writeFile, stat, readdir, exists, mkdir, rm, exec
+- Connectors:
+  - `createNoopSandbox(opts?)` — host passthrough; **not a security boundary**
+  - `createJustBashSandbox(opts?)` / `wrapJustBashSandbox(instance)` — vercel-labs/just-bash virtual fs + bash interpreter (optional peer dep)
+  - `createSandboxRuntimeSandbox(cfg)` / `createVercelSandbox({ sandbox })` / `createDenoSandbox(opts)` — stubs documenting the integration shape
+- Tools: `createBashTool(sandbox, opts?)` (refuses without a sandbox), `createSandboxedToolset(sandbox, agentId, opts?)` (file tools + bash bundle)
+- Network policy is per-connector (allowNet / allowedDomains), not on the contract
 
 ## Skills
 

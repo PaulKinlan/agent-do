@@ -50,6 +50,14 @@ export { createMemoryTools } from './tools/memory-tools.js';
 // Lower-level file tools — backed by any MemoryStore. Prefer
 // createWorkspaceTools or createMemoryTools unless you need a custom store.
 export { createFileTools } from './tools/file-tools.js';
+export type { FileToolsOptions } from './tools/file-tools.js';
+
+// Sandbox tools — `bash` plus the convenience bundle that wires
+// file tools through a SandboxBackedMemoryStore (#3).
+export { createBashTool } from './tools/bash-tool.js';
+export type { CreateBashToolOptions } from './tools/bash-tool.js';
+export { createSandboxedToolset } from './tools/sandboxed-toolset.js';
+export type { CreateSandboxedToolsetOptions } from './tools/sandboxed-toolset.js';
 
 // Structured tool results (see issue #48)
 export type { ToolResult } from './tools/types.js';
@@ -99,10 +107,37 @@ export type {
 } from './orchestrator.js';
 
 // Store interfaces and default implementations
-export type { MemoryStore, FileEntry } from './stores.js';
+export type { MemoryStore, FileEntry, SearchOptions } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
 export type { FilesystemMemoryStoreOptions } from './types.js';
+export { SandboxBackedMemoryStore } from './stores/sandbox.js';
+export type { SandboxBackedMemoryStoreOptions } from './stores/sandbox.js';
+
+// Sandbox contract + connectors (#3).
+export type {
+  SandboxApi,
+  FileStat,
+  ExecOptions,
+  ExecResult,
+} from './sandbox/types.js';
+export {
+  createNoopSandbox,
+  createJustBashSandbox,
+  wrapJustBashSandbox,
+  createSandboxRuntimeSandbox,
+  createVercelSandbox,
+  createDenoSandbox,
+} from './sandbox/connectors/index.js';
+export type {
+  NoopSandboxOptions,
+  CreateJustBashSandboxOptions,
+  JustBashSandboxLike,
+  SandboxRuntimeOptions,
+  CreateVercelSandboxOptions,
+  VercelSandboxLike,
+  CreateDenoSandboxOptions,
+} from './sandbox/connectors/index.js';
 
 // Prompt builder
 export { buildSystemPrompt, interpolate } from './prompts/builder.js';

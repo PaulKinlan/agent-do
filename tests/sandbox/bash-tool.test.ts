@@ -1,0 +1,95 @@
+import { describe, it, expect, vi } from 'vitest';
+import { createBashTool } from '../../src/tools/bash-tool.js';
+import { createNoopSandbox } from '../../src/sandbox/connectors/noop.js';
+import type { SandboxApi } from '../../src/sandbox/types.js';
+import type { ToolResult } from '../../src/tools/types.js';
+
+function getExecute(tools: ReturnType<typeof createBashTool>) {
+  const t = tools.bash!;
+  if (!t.execute) throw new Error('bash tool has no execute');
+  return t.execute as (
+    args: { command: string; cwd?: string; timeoutMs?: number },
+    options?: unknown,
+  ) => Promise<ToolResult>;
+}
+
+describe('createBashTool', () => {
+  it('throws when no sandbox is supplied — making the unsafe choice deliberate', () => {
+    expect(() => createBashTool(undefined as unknown as SandboxApi)).toThrow(
+      /requires a SandboxApi/,
+    );
+  });
+
+  it('runs a command via the sandbox and surfaces stdout / exit code', async () => {
+    const tools = createBashTool(createNoopSandbox());
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'echo hi' });
+    expect(r.modelContent).toMatch(/exit_code: 0/);
+    expect(r.modelContent).toMatch(/hi/);
+    expect(r.data?.exitCode).toBe(0);
+    expect(r.blocked).toBeUndefined();
+  });
+
+  it('refuses a per-call timeout above the cap', async () => {
+    const tools = createBashTool(createNoopSandbox(), { maxTimeoutMs: 5_000 });
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'echo hi', timeoutMs: 60_000 });
+    expect(r.blocked).toBe(true);
+    expect(r.data?.reason).toBe('timeout-too-large');
+  });
+
+  it('forwards cwd/timeout to sandbox.exec', async () => {
+    const spy = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const sandbox = makeStubSandbox({ exec: spy });
+    const tools = createBashTool(sandbox);
+    const exec = getExecute(tools);
+    await exec({ command: 'ls', cwd: '/tmp', timeoutMs: 1000 });
+    expect(spy).toHaveBeenCalledWith('ls', { cwd: '/tmp', timeout: 1000 });
+  });
+
+  it('does not throw when the sandbox throws — surfaces an error ToolResult', async () => {
+    const sandbox = makeStubSandbox({
+      exec: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    const tools = createBashTool(sandbox);
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'whatever' });
+    expect(r.userSummary).toMatch(/threw/);
+    expect(r.data?.error).toBe(true);
+  });
+
+  it('caps stdout/stderr to maxOutputBytes and reports truncation', async () => {
+    const big = 'x'.repeat(10_000);
+    const sandbox = makeStubSandbox({
+      exec: vi.fn().mockResolvedValue({ stdout: big, stderr: '', exitCode: 0 }),
+    });
+    const tools = createBashTool(sandbox, { maxOutputBytes: 100 });
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'cat' });
+    expect(r.modelContent).toMatch(/truncated/);
+    expect(r.data?.stdoutTruncated).toBe(true);
+  });
+
+  it('honours the `name` option', async () => {
+    const tools = createBashTool(createNoopSandbox(), { name: 'shell' });
+    expect(tools.shell).toBeDefined();
+    expect(tools.bash).toBeUndefined();
+  });
+});
+
+function makeStubSandbox(
+  overrides: Partial<SandboxApi>,
+): SandboxApi {
+  const stub: SandboxApi = {
+    async readFile() { throw new Error('not implemented'); },
+    async readFileBuffer() { throw new Error('not implemented'); },
+    async writeFile() { throw new Error('not implemented'); },
+    async stat() { throw new Error('not implemented'); },
+    async readdir() { throw new Error('not implemented'); },
+    async exists() { return false; },
+    async mkdir() {},
+    async rm() {},
+    async exec() { return { stdout: '', stderr: '', exitCode: 0 }; },
+  };
+  return { ...stub, ...overrides };
+}
