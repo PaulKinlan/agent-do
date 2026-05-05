@@ -146,8 +146,9 @@ const asked = await evaluatePermission('write_file', { path: '/tmp/test' }, {
 Use in-memory store implementations for integration tests:
 
 ```typescript
-import { createAgent, createFileTools, InMemorySkillStore } from 'agent-do';
-import { InMemoryMemoryStore } from '';
+import {
+  createAgent, createMemoryTools, InMemorySkillStore, InMemoryMemoryStore,
+} from 'agent-do';
 
 const memoryStore = new InMemoryMemoryStore();
 const skillStore = new InMemorySkillStore();
@@ -160,18 +161,16 @@ const agent = createAgent({
   name: 'Test Agent',
   model: createMockModel({
     responses: [
-      { toolCalls: [{ toolName: 'read_file', args: { path: 'data.txt' } }] },
+      { toolCalls: [{ toolName: 'memory_read', args: { path: 'data.txt' } }] },
       { text: 'The file says: Hello world' },
     ],
   }),
-  tools: {
-    ...createFileTools(memoryStore, 'test-agent'),
-  },
+  tools: createMemoryTools(memoryStore, 'test-agent'),
   skills: skillStore,
 });
 
 const result = await agent.run('Read data.txt');
-// Agent reads the pre-populated file and produces output
+// Agent reads the pre-populated note and produces output
 ```
 
 ## Testing Tips

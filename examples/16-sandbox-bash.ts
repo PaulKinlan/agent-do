@@ -1,12 +1,12 @@
 /**
- * Example 16: Sandbox + bash tool
+ * Example 16: Shell tool
  *
- * The simplest end-to-end example of the sandbox attribute (#3): we
- * give the agent a `bash` tool wired to a SandboxApi connector. The
- * agent can run shell commands, but only ones the connector permits.
+ * The simplest end-to-end example of the shell tool: we give the
+ * agent a `bash` tool wired to a SandboxApi connector. The agent can
+ * run shell commands, but only ones the connector permits.
  *
  * This example uses `createHostSandbox()` — a passthrough to the host.
- * **It is not isolation.** The bash tool runs on your real shell, with
+ * **It is not isolation.** The shell tool runs on your real shell, with
  * the same privileges as the Node.js process. The point of this
  * example is to show the *shape* of the API; for real isolation, swap
  * `createHostSandbox` for `createJustBashSandbox` (see example 17).
@@ -16,13 +16,13 @@
 
 import {
   createAgent,
-  createBashTool,
+  createShellTool,
   createHostSandbox,
 } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');
-console.log('  Example 16: Sandbox + bash');
+console.log('  Example 16: Shell tool');
 console.log('═══════════════════════════════════════\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
@@ -33,10 +33,9 @@ const sandbox = createHostSandbox();
 
 const agent = createAgent({
   id: 'sandbox-bash',
-  name: 'Sandbox Bash',
+  name: 'Shell Demo',
   model: model as any,
-  sandbox,
-  tools: createBashTool(sandbox),
+  tools: createShellTool(sandbox),
   systemPrompt:
     'You can run shell commands via the bash tool. Use it sparingly. Be concise.',
   maxIterations: 5,

@@ -1,6 +1,5 @@
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import type { McpServerConfig } from './mcp.js';
-import type { SandboxApi } from './sandbox/types.js';
 
 // Progress events emitted during agent execution
 export interface ProgressEvent {
@@ -429,25 +428,6 @@ export interface AgentConfig {
   innerStepLimit?: number;
   hooks?: AgentHooks;
   permissions?: PermissionConfig;
-  /**
-   * Pluggable sandbox connector (#3). When set, callers can wire
-   * file/memory/workspace tools through a {@link SandboxBackedMemoryStore}
-   * and add a `bash` tool via `createBashTool` so every I/O call goes
-   * through the connector instead of the host. The bundled helper
-   * `createSandboxedToolset(sandbox, agentId)` packages the common case.
-   *
-   * The contract is the Flue `SandboxApi` — a lowest-common-denominator
-   * surface that every backend (just-bash, sandbox-runtime, Vercel
-   * Sandbox, Deno Sandbox, E2B) can implement. Network policy is a
-   * connector-level concern (each factory takes its own `allowNet` /
-   * `allowedDomains`); see `docs/sandbox.md`.
-   *
-   * When `undefined`, agent-do behaves exactly as before — every existing
-   * tool path is byte-for-byte unchanged. The `sandbox` field is the
-   * single source of truth so hooks and tools can look up the connector
-   * by reference.
-   */
-  sandbox?: SandboxApi;
   usage?: {
     enabled?: boolean;
     pricing?: PricingTable;

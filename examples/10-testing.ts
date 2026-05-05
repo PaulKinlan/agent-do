@@ -7,7 +7,7 @@
  * Run: npx tsx examples/10-testing.ts
  */
 
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
+import { createAgent, createMemoryTools, InMemoryMemoryStore } from 'agent-do';
 import { createMockModel } from 'agent-do/testing';
 
 console.log('═══════════════════════════════════════');
@@ -26,7 +26,7 @@ const model = createMockModel({
   responses: [
     {
       toolCalls: [
-        { toolName: 'write_file', args: { path: 'notes/test.md', content: '# Test\nThis is a test note.' } },
+        { toolName: 'memory_write', args: { path: 'notes/test.md', content: '# Test\nThis is a test note.' } },
       ],
     },
     { text: 'I saved a test note to notes/test.md.' },
@@ -40,7 +40,7 @@ const agent = createAgent({
   name: 'Test Agent',
   model: model as any,
   systemPrompt: 'You are a test agent.',
-  tools: createFileTools(memory, 'test-agent'),
+  tools: createMemoryTools(memory, 'test-agent'),
   maxIterations: 5,
 });
 

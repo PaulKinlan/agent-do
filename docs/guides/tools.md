@@ -35,27 +35,62 @@ const agent = createAgent({
 });
 ```
 
-## Built-in File Tools
+## Built-in tool factories
 
-`agent-do` ships with `createFileTools()` which creates a full set of file-manipulation tools backed by any `MemoryStore` from `
+There are three consumer-facing factories. Use whichever fits the
+agent's job; they can also be combined.
+
+### Workspace tools — `createWorkspaceTools(workingDir, opts?)`
+
+Project files rooted at a working directory, with a deny-list at the
+tool layer (`.env`, `.ssh/**`, etc.).
 
 ```typescript
-import { createAgent, createFileTools } from 'agent-do';
-import { InMemoryMemoryStore } from '';
-
-const memoryStore = new InMemoryMemoryStore();
+import { createAgent, createWorkspaceTools } from 'agent-do';
 
 const agent = createAgent({
   id: 'file-agent',
   name: 'File Agent',
   model: anthropic('claude-sonnet-4-5'),
-  tools: {
-    ...createFileTools(memoryStore, 'file-agent'),
-  },
+  tools: createWorkspaceTools(process.cwd()),
 });
 ```
 
-This provides six tools:
+### Memory tools — `createMemoryTools(store, agentId)`
+
+The agent's private scratchpad backed by any `MemoryStore`.
+
+```typescript
+import { createAgent, createMemoryTools, InMemoryMemoryStore } from 'agent-do';
+
+const memoryStore = new InMemoryMemoryStore();
+
+const agent = createAgent({
+  id: 'note-taker',
+  name: 'Note Taker',
+  model: anthropic('claude-sonnet-4-5'),
+  tools: createMemoryTools(memoryStore, 'note-taker'),
+});
+```
+
+### Shell tool — `createShellTool(sandbox?)`
+
+A single shell-exec tool wired to a `SandboxApi`. See
+[`docs/sandbox.md`](../sandbox.md).
+
+```typescript
+import { createAgent, createShellTool, createJustBashSandbox } from 'agent-do';
+
+const sandbox = await createJustBashSandbox();
+const agent = createAgent({
+  id: 'runner',
+  name: 'Runner',
+  model: anthropic('claude-sonnet-4-5'),
+  tools: createShellTool(sandbox),
+});
+```
+
+The workspace tools provide six tools:
 
 | Tool | Description |
 |------|-------------|

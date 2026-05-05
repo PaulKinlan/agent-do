@@ -1,39 +1,45 @@
 # Sandbox
 
-agent-do has a pluggable sandbox attribute on `createAgent` ([#3]). When
-set, callers can route every tool I/O call through a `SandboxApi`
-connector instead of the host filesystem and shell.
+agent-do has a pluggable sandbox layer (issue [#3]). It's a portable
+contract — the [Astro Flue `SandboxApi`][flue] — that backends like
+just-bash, Vercel Sandbox, Deno Sandbox, and Anthropic's
+sandbox-runtime can implement. agent-do ships two connectors out of
+the box (host and just-bash) and lets you bring your own.
+
+The agent itself doesn't know about sandboxes. **Sandboxing is a
+per-provider concern**: each store and each shell tool decides
+whether to route through one. This means you can sandbox just the
+shell, just the workspace tools, just memory — or any subset.
 
 ```ts
 import {
   createAgent,
+  createMemoryTools,
+  createWorkspaceTools,
+  createShellTool,
   createJustBashSandbox,
-  createSandboxedToolset,
+  SandboxBackedMemoryStore,
 } from 'agent-do';
 
-const sandbox = await createJustBashSandbox({
-  files: { '/data/seed.txt': 'hello' },
-  allowNet: false, // gate fetch/curl inside the interpreter
-});
+const sandbox = await createJustBashSandbox();
+const memoryStore = new SandboxBackedMemoryStore(sandbox, '/memory');
 
 const agent = createAgent({
-  id: 'geo',
-  name: 'Geo',
-  model,
-  sandbox,
-  tools: createSandboxedToolset(sandbox, 'geo'),
+  id: 'geo', name: 'Geo', model,
+  tools: {
+    ...createMemoryTools(memoryStore, 'geo'),       // memory_* through sandbox
+    ...createWorkspaceTools('/work', { sandbox }),  // file_* through sandbox
+    ...createShellTool(sandbox),                    // bash through sandbox
+  },
 });
 ```
 
-The `sandbox` field is the single source of truth that hooks and tools
-look up by reference. The loop does not auto-rewire your existing tools
-when it's set — wire them through `SandboxBackedMemoryStore` /
-`createBashTool` / `createSandboxedToolset` explicitly.
+You can mix freely: keep memory in-memory, route workspace through a
+sandbox, and use a different sandbox for the shell.
 
 ## Contract
 
-The contract is a verbatim port of the [Astro Flue sandbox-connector
-spec](https://github.com/withastro/flue/blob/main/docs/sandbox-connector-spec.md).
+A verbatim port of [Flue's spec][flue]:
 
 ```ts
 interface SandboxApi {
@@ -57,14 +63,14 @@ convention.
 
 | Factory | Backend | Network model | Notes |
 |---|---|---|---|
-| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Default fallback for `createBashTool()`. **Not a security boundary.** |
-| `createJustBashSandbox(opts?)` | [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash) virtual fs + interpreter | `allowNet` fetch hook inside the interpreter | Optional peer dep — install `just-bash` to use. |
+| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Default fallback for `createShellTool()`. **Not a security boundary.** |
+| `createJustBashSandbox(opts?)` | [vercel-labs/just-bash][just-bash] virtual fs + interpreter | `allowNet` fetch hook inside the interpreter | Optional peer dep — install `just-bash` to use. |
 | `wrapJustBashSandbox(instance)` | as above | as above | For callers that construct the underlying just-bash `Sandbox` themselves. |
 
-Other connectors (Vercel Sandbox, Deno Sandbox, Anthropic
-sandbox-runtime) are not shipped in this release. Implement your own
-against the `SandboxApi` interface; the contract test suite at
-`tests/sandbox/contract.ts` is reusable.
+Other backends (Vercel Sandbox, Deno Sandbox, Anthropic
+sandbox-runtime) aren't shipped — implement your own against
+`SandboxApi`. The contract suite at `tests/sandbox/contract.ts` is
+reusable.
 
 ## Network policy
 
@@ -76,8 +82,8 @@ matches what the underlying runtime exposes:
 - **host** has no network policy — every network call goes straight
   out.
 
-A `fetch?(url, init)` method on `SandboxApi` was deliberately rejected:
-different backends have fundamentally different network surfaces, and
+A `fetch?(url, init)` method on `SandboxApi` was deliberately
+rejected: backends have fundamentally different network surfaces, and
 a method that only some connectors implement would tempt callers to
 assume it exists. TypeScript interfaces are open, so a future
 `SandboxApiWithFetch extends SandboxApi` can land non-breakingly if
@@ -97,19 +103,36 @@ the sandbox.
 | Hypothetical `S3MemoryStore` | remote object store | No — different substrate. (Network policy could matter; see above.) |
 | `SandboxBackedMemoryStore` | whatever the sandbox protects | Yes — by definition. |
 
-The two shipped examples cover both patterns:
+## Tool factories
 
-- `examples/17-sandbox-with-memory.ts` — in-memory store + sandbox bash, side by side.
-- `examples/18-sandbox-with-filesystem.ts` — filesystem store + sandbox bash, with the strong-isolation pattern documented in a comment.
+The three consumer-facing tool factories are:
+
+| Factory | Tool names model sees | Sandbox involvement |
+|---|---|---|
+| `createMemoryTools(store, agentId)` | `memory_read`, `memory_write`, `memory_list`, `memory_delete`, `memory_search` | Pass a `SandboxBackedMemoryStore(sandbox, root)` if you want sandboxed memory. |
+| `createWorkspaceTools(workingDir, opts)` | `read_file`, `write_file`, `edit_file`, `list_directory`, `delete_file`, `grep_file`, `find_files` | Pass `{ sandbox }` to swap the internal store for a sandbox-backed one. |
+| `createShellTool(sandbox?)` | `bash` (or your `name` override) | Takes a sandbox directly. Defaults to `createHostSandbox()` if none supplied. |
+
+`createMemoryTools` and `createShellTool` overlap on capability with
+`createWorkspaceTools` (the shell can `cat`, `ls`, etc.) but they're
+positioned for different patterns:
+
+- **Workspace tools** — structured per-op tools, deny-list at the tool
+  layer, per-tool permissions, structured tool output.
+- **Shell tool** — one general-purpose tool, maximum flexibility.
+
+Use both together when you want guarded I/O *and* arbitrary command
+execution.
 
 ## Soft safety vs. strong isolation
 
-`FilesystemMemoryStore`'s `readOnly` / `onBeforeWrite` knobs remain in
-place. Those are **soft policy hooks** — not a security boundary, since
-a future tool that calls `node:fs` directly bypasses them. The sandbox
-is the **strong boundary**: when you wire tools through
-`SandboxBackedMemoryStore`, no path inside the agent can reach host fs
-without passing through the connector.
+`FilesystemMemoryStore`'s `readOnly` / `onBeforeWrite` knobs are
+**soft policy hooks** — useful for narrow gating, but not a security
+boundary (a future tool that calls `node:fs` directly bypasses them).
+The sandbox is the **strong boundary**: when you wire stores and
+shell through `SandboxBackedMemoryStore` / a real isolating
+connector, no path inside the agent can reach host fs without passing
+through the connector.
 
 `SandboxBackedMemoryStore` mirrors the same `readOnly` /
 `onBeforeWrite` shape so you can layer policy *on top* of isolation.
@@ -123,7 +146,7 @@ without passing through the connector.
 - **Resource limits** beyond `exec.timeout` — connector-specific.
 - **Snapshotting / restore** — deserves its own `SnapshotCapability`
   extension.
-- **Auto-wrapping `MemoryStore` when a sandbox is set** — possible
-  later as a non-breaking addition. v1 is intentionally explicit.
 
 [#3]: https://github.com/PaulKinlan/agent-do/issues/3
+[flue]: https://github.com/withastro/flue/blob/main/docs/sandbox-connector-spec.md
+[just-bash]: https://github.com/vercel-labs/just-bash

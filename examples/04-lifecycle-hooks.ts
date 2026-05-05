@@ -7,7 +7,7 @@
  * Run: npx tsx examples/04-lifecycle-hooks.ts
  */
 
-import { createAgent, InMemoryMemoryStore, createFileTools } from 'agent-do';
+import { createAgent, InMemoryMemoryStore, createMemoryTools } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');
@@ -21,7 +21,7 @@ console.log('  - onPostToolUse:  after a tool completes (timing info)');
 console.log('  - onUsage:        after each LLM call (token counts)');
 console.log('  - onComplete:     when the agent finishes (final stats)\n');
 
-console.log('The hooks are configured to BLOCK delete_file calls.');
+console.log('The hooks are configured to BLOCK memory_delete calls.');
 console.log('We will ask the agent to save a note, then try to delete it.\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
@@ -32,19 +32,19 @@ const agent = createAgent({
   name: 'Monitored Agent',
   model: model as any,
   systemPrompt: 'You are a helpful agent. Save notes to your memory.',
-  tools: createFileTools(memory, 'monitored-agent'),
+  tools: createMemoryTools(memory, 'monitored-agent'),
   maxIterations: 10,
   hooks: {
     onPreToolUse: async (event) => {
       console.log(`   [HOOK: onPreToolUse] Tool: ${event.toolName}`);
 
-      if (event.toolName === 'delete_file') {
+      if (event.toolName === 'memory_delete') {
         console.log('   [HOOK: onPreToolUse] DENIED — deletion is not allowed');
         return { decision: 'deny', reason: 'Deletion not allowed' };
       }
 
-      if (event.toolName === 'write_file') {
-        console.log('   [HOOK: onPreToolUse] ALLOWED — write_file is permitted');
+      if (event.toolName === 'memory_write') {
+        console.log('   [HOOK: onPreToolUse] ALLOWED — memory_write is permitted');
       }
 
       return { decision: 'allow' };
@@ -81,7 +81,7 @@ const agent = createAgent({
 // ── Task: Save a note, then try to delete it ──
 console.log('── Task ──');
 console.log('   Sending: "Save a note about today being a great day, then try to delete it"');
-console.log('   The agent will call write_file (allowed) then delete_file (blocked).\n');
+console.log('   The agent will call memory_write (allowed) then memory_delete (blocked).\n');
 
 for await (const event of agent.stream('Save a note about today being a great day, then try to delete it')) {
   if (event.type === 'text') process.stdout.write(event.content);
@@ -89,4 +89,4 @@ for await (const event of agent.stream('Save a note about today being a great da
 }
 
 console.log('Done — hooks intercepted every stage of the agent loop.');
-console.log('  write_file was allowed; delete_file was denied by onPreToolUse.');
+console.log('  memory_write was allowed; memory_delete was denied by onPreToolUse.');

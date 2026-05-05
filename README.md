@@ -44,7 +44,7 @@ There is no undo. Proceed with caution.
 - **Provider-agnostic** -- works with any Vercel AI SDK `LanguageModel` (OpenAI, Anthropic, Google, Mistral, Ollama, etc.)
 - **Autonomous loop** -- calls tools, reads results, and continues until the model responds without tool calls
 - **Streaming and non-streaming** -- `stream()` yields `ProgressEvent`s as an `AsyncIterable`; `run()` returns the final text
-- **Built-in file tools** -- `createFileTools()` gives agents read/write/search/delete backed by any `MemoryStore`
+- **Built-in tool factories** -- `createMemoryTools` (private scratchpad), `createWorkspaceTools` (project files + deny-list, optionally sandboxed), `createShellTool` (sandbox-mediated bash)
 - **Skills system** -- install, search, and manage skill definitions that extend the agent's system prompt
 - **Lifecycle hooks** -- intercept tool calls, track steps, modify arguments, or halt execution
 - **Permission system** -- accept-all, deny-all, or ask mode with per-tool overrides
@@ -464,60 +464,83 @@ only the most recent iteration's tool outputs flow in full to the next
 call). Set to `Infinity` to restore the historical
 "everything-stays-in-context" behaviour.
 
-## File Tools
+## Tool factories
 
-`createFileTools()` generates a set of file-manipulation tools backed by any `MemoryStore`:
+Three consumer-facing factories cover the common cases. See
+[`docs/sandbox.md`](docs/sandbox.md) for how each interacts with a
+sandbox.
+
+### Workspace tools
+
+`createWorkspaceTools(workingDir, opts?)` gives the agent file tools
+(`read_file`, `write_file`, `edit_file`, `list_directory`,
+`delete_file`, `grep_file`, `find_files`) rooted at `workingDir`,
+with a deny-list (`.env`, `.ssh/**`, ...) applied at the tool layer.
+Pass `{ sandbox }` to swap the internal store for a
+`SandboxBackedMemoryStore` and route every file op through the
+sandbox.
 
 ```ts
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
-import { createMockModel } from 'agent-do/testing';
-
-const store = new InMemoryMemoryStore();
-const fileTools = createFileTools(store, 'agent-1');
+import { createAgent, createWorkspaceTools } from 'agent-do';
 
 const agent = createAgent({
-  id: 'writer',
-  name: 'Writer',
-  model: createMockModel({
-    responses: [
-      { toolCalls: [{ toolName: 'write_file', args: { path: 'hello.txt', content: 'Hello!' } }] },
-      { text: 'File written.' },
-    ],
-  }),
-  tools: fileTools,
+  id: 'coder', name: 'Coder', model,
+  tools: createWorkspaceTools(process.cwd(), { readOnly: true }),
 });
-
-await agent.run('Create a hello.txt file');
 ```
 
-The generated tools are:
+### Memory tools
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read a file's contents |
-| `write_file` | Write content to a file (creates parent dirs) |
-| `edit_file` | Find-and-replace in a file (match must be unique) |
-| `list_directory` | List files and directories at a path |
-| `delete_file` | Delete a file |
-| `grep_file` | Search for a text pattern across files |
-| `find_files` | Recursively list all files from a path |
+`createMemoryTools(store, agentId, opts?)` gives the agent a private
+scratchpad (`memory_read`, `memory_write`, `memory_list`,
+`memory_delete`, `memory_search`) backed by any `MemoryStore`.
+
+```ts
+import {
+  createAgent, createMemoryTools, InMemoryMemoryStore,
+} from 'agent-do';
+
+const store = new InMemoryMemoryStore();
+const agent = createAgent({
+  id: 'writer', name: 'Writer', model,
+  tools: createMemoryTools(store, 'writer'),
+});
+```
+
+### Shell tool
+
+`createShellTool(sandbox?, opts?)` gives the agent a single shell
+tool (default name `bash`) wired to a `SandboxApi`. Defaults to
+`createHostSandbox()` when no sandbox is supplied; for real
+isolation, pass `createJustBashSandbox()` or your own connector.
+
+```ts
+import { createAgent, createShellTool, createJustBashSandbox } from 'agent-do';
+
+const sandbox = await createJustBashSandbox();
+const agent = createAgent({
+  id: 'runner', name: 'Runner', model,
+  tools: createShellTool(sandbox),
+});
+```
 
 ## MemoryStore
 
-The `MemoryStore` interface abstracts file storage for agents. Two implementations are included:
+The `MemoryStore` interface abstracts file storage for agents. Three implementations are included:
 
 - **`InMemoryMemoryStore`** — for testing and prototyping (data lost on exit)
 - **`FilesystemMemoryStore`** — persists to the local filesystem (survives restarts)
+- **`SandboxBackedMemoryStore`** — adapts a `SandboxApi` connector into a `MemoryStore` (see [`docs/sandbox.md`](docs/sandbox.md))
 
 ```ts
-import { FilesystemMemoryStore, createFileTools, createAgent } from 'agent-do';
+import { FilesystemMemoryStore, createMemoryTools, createAgent } from 'agent-do';
 
 const store = new FilesystemMemoryStore('./agent-data');
 const agent = createAgent({
   id: 'my-agent',
   name: 'My Agent',
   model: model as any,
-  tools: createFileTools(store, 'my-agent'),
+  tools: createMemoryTools(store, 'my-agent'),
 });
 // Files persist at ./agent-data/my-agent/
 ```
@@ -1133,9 +1156,7 @@ const result = await runEvals(suite, { output: 'silent' });
 | `createAgent` | `(config: AgentConfig) => Agent` | Create an agent with `run()`, `stream()`, and `abort()` |
 | `runAgentLoop` | `(config, task, context?) => Promise<RunResult>` | Run the loop directly (lower-level) |
 | `streamAgentLoop` | `(config, task, context?) => AsyncGenerator<ProgressEvent>` | Stream the loop directly (lower-level) |
-| `createFileTools` | `(store, agentId) => ToolSet` | Create file tools backed by a MemoryStore |
-| `createBashTool` | `(sandbox?, opts?) => ToolSet` | `bash` tool whose execute calls `sandbox.exec`. Defaults to host when no sandbox is supplied. ([docs/sandbox.md](docs/sandbox.md)) |
-| `createSandboxedToolset` | `(sandbox, agentId, opts?) => ToolSet` | File tools + `bash`, all wired to one sandbox |
+| `createShellTool` | `(sandbox?, opts?) => ToolSet` | A single shell tool (default name `bash`) whose execute calls `sandbox.exec`. Defaults to host when no sandbox is supplied. ([docs/sandbox.md](docs/sandbox.md)) |
 | `SandboxBackedMemoryStore` | class | Adapt a `SandboxApi` into a `MemoryStore` |
 | `createHostSandbox` | `(opts?) => SandboxApi` | Direct passthrough to the host — **not a security boundary** |
 | `createJustBashSandbox` | `(opts?) => Promise<SandboxApi>` | Wrap a [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash) `Sandbox` |

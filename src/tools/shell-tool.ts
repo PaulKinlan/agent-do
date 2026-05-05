@@ -2,9 +2,10 @@
  * Shell tool — surface `SandboxApi.exec` as a single tool the model
  * can invoke (default name: `bash`).
  *
- * If you're looking for a bundle of file tools + shell, that's
- * {@link createSandboxedToolset}. This factory creates exactly one
- * tool whose `execute` runs `sandbox.exec(...)`.
+ * If you're looking for structured per-op file tools (read_file,
+ * write_file, …) instead of (or in addition to) a shell, see
+ * `createWorkspaceTools`. This factory creates exactly one tool
+ * whose `execute` runs `sandbox.exec(...)`.
  *
  * When `sandbox` is undefined, the tool falls back to
  * {@link createHostSandbox} — i.e. it runs commands directly on the

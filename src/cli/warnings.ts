@@ -21,12 +21,6 @@ export interface SandboxWarningOptions {
   readOnly: boolean;
   /** Suppress all stderr output for programmatic consumers. */
   json: boolean;
-  /**
-   * Display name of the sandbox connector when one is configured. When
-   * set, the "NOT sandboxed" banner is replaced with a one-line
-   * acknowledgement. Suppressed entirely if blank/undefined.
-   */
-  sandboxName?: string;
 }
 
 /**
@@ -45,11 +39,6 @@ export interface SandboxWarningOptions {
 export function emitSandboxWarning(opts: SandboxWarningOptions): void {
   if (!opts.toolsEnabled) return;
   if (opts.json) return;
-
-  if (opts.sandboxName) {
-    process.stderr.write(`sandbox: ${opts.sandboxName}\n\n`);
-    return;
-  }
 
   const message = opts.readOnly
     ? '⚠️  agent-do is running in --read-only mode. Writes are blocked, but the agent can still ' +

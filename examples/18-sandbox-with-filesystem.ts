@@ -1,34 +1,32 @@
 /**
- * Example 18: Sandbox alongside the filesystem store
+ * Example 18: Workspace tools with sandbox isolation
  *
- * Unlike the in-memory store (example 17), a `FilesystemMemoryStore`
- * shares a substrate with the host: it writes real files to disk. So
- * you have a real choice about how it interacts with the sandbox:
+ * Unlike the in-memory store (example 17), the workspace tools'
+ * substrate IS the host filesystem. So you have a real choice about
+ * whether to route through a sandbox:
  *
  * **A) Soft policy + sandboxed bash** (the simpler pattern shown here)
- *    - File tools talk to `FilesystemMemoryStore` directly. The host
- *      filesystem IS the substrate.
+ *    - `createWorkspaceTools(workingDir)` — file tools talk to host
+ *      fs directly via the internal FilesystemMemoryStore.
  *    - Use `readOnly: true` and/or `onBeforeWrite` for soft policy.
- *    - Bash runs through the sandbox so untrusted commands are gated.
- *    - Tradeoff: file_tools and bash see different things — bash is
- *      isolated, but file_tools touch disk directly.
+ *    - Bash goes through the sandbox so untrusted commands are gated.
+ *    - Tradeoff: file tools and bash see different things — bash is
+ *      isolated, but file ops touch disk directly.
  *
- * **B) Strong isolation via `SandboxBackedMemoryStore`** (commented
- *     out below) — wrap the sandbox in a `MemoryStore` adapter so
- *     file_tools and bash both go through the same connector. With a
- *     truly isolating connector (e.g. just-bash), nothing reaches the
- *     real disk at all.
+ * **B) Strong isolation via `{ sandbox }` on workspace tools**
+ *     (commented out below) — pass a sandbox to `createWorkspaceTools`
+ *     so the internal store becomes `SandboxBackedMemoryStore`. With
+ *     a truly isolating connector (e.g. just-bash), nothing reaches
+ *     the real disk.
  *
  * Run: ANTHROPIC_API_KEY=... npx tsx examples/18-sandbox-with-filesystem.ts
  */
 
 import {
   createAgent,
-  createBashTool,
-  createFileTools,
+  createShellTool,
+  createWorkspaceTools,
   createHostSandbox,
-  FilesystemMemoryStore,
-  // SandboxBackedMemoryStore, // see pattern B below
 } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -36,7 +34,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
 console.log('═══════════════════════════════════════');
-console.log('  Example 18: Sandbox + FilesystemMemoryStore');
+console.log('  Example 18: Workspace tools + shell');
 console.log('═══════════════════════════════════════\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
@@ -45,27 +43,24 @@ const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
 
 const baseDir = await mkdtemp(path.join(tmpdir(), 'agent-do-ex18-'));
 
-// Pattern A — file tools on host fs, bash on the sandbox.
-const store = new FilesystemMemoryStore(baseDir, {
-  // Soft policy: even though file_tools bypass the sandbox, you can
-  // still gate writes per-path with onBeforeWrite, or block all
-  // writes with readOnly: true.
-  onBeforeWrite: async (_agentId, canonicalPath, op) => {
-    console.log(`  [policy] ${op} ${canonicalPath}`);
-    return !canonicalPath.endsWith('.secret');
-  },
-});
-
 const sandbox = createHostSandbox({ cwd: baseDir });
 
+// Pattern A — file tools on host fs (with policy gates), shell on the sandbox.
 const agent = createAgent({
   id: 'demo',
-  name: 'Filesystem + Sandbox Demo',
+  name: 'Filesystem + Shell Demo',
   model: model as any,
-  sandbox,
   tools: {
-    ...createFileTools(store, 'demo'),
-    ...createBashTool(sandbox),
+    ...createWorkspaceTools(baseDir, {
+      // Soft policy: even though file_tools bypass the sandbox, you
+      // can still gate writes per-path with onBeforeWrite, or block
+      // all writes with readOnly: true.
+      onBeforeWrite: async (canonicalPath, op) => {
+        console.log(`  [policy] ${op} ${canonicalPath}`);
+        return !canonicalPath.endsWith('.secret');
+      },
+    }),
+    ...createShellTool(sandbox),
   },
   systemPrompt:
     'You have file tools backed by a real filesystem store, and a ' +
@@ -89,14 +84,12 @@ console.log('✓ Done (cleaned up tempdir).');
 //
 // import { createJustBashSandbox } from 'agent-do';
 // const isolated = await createJustBashSandbox();
-// const isolatedStore = new SandboxBackedMemoryStore(isolated);
 // const isolatedAgent = createAgent({
 //   id: 'iso', name: 'Isolated', model: model as any,
-//   sandbox: isolated,
 //   tools: {
-//     ...createFileTools(isolatedStore, 'iso'),
-//     ...createBashTool(isolated),
+//     // workspace tools route through SandboxBackedMemoryStore(isolated, '/work')
+//     // — file ops never touch host fs.
+//     ...createWorkspaceTools('/work', { sandbox: isolated }),
+//     ...createShellTool(isolated),
 //   },
 // });
-// // Files written here live in just-bash's virtual fs and never touch
-// // the host. Bash commands run inside the just-bash interpreter.
