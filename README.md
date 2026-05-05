@@ -1134,10 +1134,10 @@ const result = await runEvals(suite, { output: 'silent' });
 | `runAgentLoop` | `(config, task, context?) => Promise<RunResult>` | Run the loop directly (lower-level) |
 | `streamAgentLoop` | `(config, task, context?) => AsyncGenerator<ProgressEvent>` | Stream the loop directly (lower-level) |
 | `createFileTools` | `(store, agentId) => ToolSet` | Create file tools backed by a MemoryStore |
-| `createBashTool` | `(sandbox, opts?) => ToolSet` | `bash` tool whose execute calls `sandbox.exec` ([docs/sandbox.md](docs/sandbox.md)) |
+| `createBashTool` | `(sandbox?, opts?) => ToolSet` | `bash` tool whose execute calls `sandbox.exec`. Defaults to host when no sandbox is supplied. ([docs/sandbox.md](docs/sandbox.md)) |
 | `createSandboxedToolset` | `(sandbox, agentId, opts?) => ToolSet` | File tools + `bash`, all wired to one sandbox |
 | `SandboxBackedMemoryStore` | class | Adapt a `SandboxApi` into a `MemoryStore` |
-| `createNoopSandbox` | `(opts?) => SandboxApi` | Host passthrough — **not a security boundary** |
+| `createHostSandbox` | `(opts?) => SandboxApi` | Direct passthrough to the host — **not a security boundary** |
 | `createJustBashSandbox` | `(opts?) => Promise<SandboxApi>` | Wrap a [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash) `Sandbox` |
 | `wrapJustBashSandbox` | `(instance) => SandboxApi` | Wrap an externally-constructed just-bash instance |
 | `createSkillTools` | `(store: SkillStore) => ToolSet` | Create skill management tools |
@@ -1238,7 +1238,9 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
 | 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
 | 13 | [`13-eval-framework.ts`](examples/13-eval-framework.ts) | Eval framework — define cases, assert quality, compare providers |
-| 16 | [`16-sandbox-noop.ts`](examples/16-sandbox-noop.ts) | Pluggable sandbox + `bash` tool (noop connector) |
+| 16 | [`16-sandbox-bash.ts`](examples/16-sandbox-bash.ts) | Pluggable sandbox + `bash` tool (host connector) |
+| 17 | [`17-sandbox-with-memory.ts`](examples/17-sandbox-with-memory.ts) | Sandbox alongside `InMemoryMemoryStore` (different substrates) |
+| 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

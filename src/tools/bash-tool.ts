@@ -1,21 +1,25 @@
 /**
  * `bash` tool — run shell commands through a {@link SandboxApi}.
  *
- * The tool is intentionally **sandbox-required**: a real shell with the
- * same privileges as the Node.js process is the wrong default for an
- * LLM-controlled tool, so `createBashTool(undefined)` throws. To opt
- * into native shell anyway, pass `createNoopSandbox()` explicitly —
- * making the unsafe choice a deliberate, named one.
+ * When `sandbox` is undefined, the tool falls back to
+ * {@link createHostSandbox} — i.e. it runs commands directly on the
+ * host. That keeps the API ergonomic but **is not isolating**; the CLI
+ * prints a warning, and library callers should pass an isolating
+ * connector (`createJustBashSandbox`, etc.) for any task that touches
+ * untrusted input.
  *
- * Output is bounded to a UTF-8 byte cap on each stream. Connectors are
- * expected to honour `timeout` (in milliseconds); if the connector
- * doesn't, the tool falls back to a hard wall-clock cap of 60s.
+ * Output is bounded to a UTF-8 byte cap on each stream. Per-call
+ * timeouts are forwarded to `sandbox.exec` — connectors are expected
+ * to honour them. The tool itself doesn't enforce a wall-clock cap on
+ * top, since racing a timer would leak the underlying process; if your
+ * connector ignores `timeout`, fix it there.
  */
 
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import type { SandboxApi } from '../sandbox/types.js';
+import { createHostSandbox } from '../sandbox/connectors/host.js';
 import type { ToolResult } from './types.js';
 import {
   DEFAULT_MAX_READ_BYTES,
@@ -31,7 +35,7 @@ export interface CreateBashToolOptions {
   cwd?: string;
   /**
    * Default timeout in milliseconds. The model can override per call up
-   * to {@link maxTimeoutMs}.
+   * to {@link CreateBashToolOptions.maxTimeoutMs}.
    */
   defaultTimeoutMs?: number;
   /**
@@ -60,14 +64,9 @@ export function createBashTool(
   sandbox: SandboxApi | undefined,
   options: CreateBashToolOptions = {},
 ): ToolSet {
-  if (!sandbox) {
-    throw new Error(
-      'createBashTool requires a SandboxApi. Pass `createNoopSandbox()` to ' +
-        'opt into a real host shell explicitly, or use one of the isolating ' +
-        'connectors (createJustBashSandbox, createSandboxRuntimeSandbox, ' +
-        'createVercelSandbox).',
-    );
-  }
+  // Default to the host connector so `createBashTool()` works without
+  // ceremony. This is *not* isolation — see the file header.
+  const target = sandbox ?? createHostSandbox({ cwd: options.cwd });
 
   const toolName = options.name ?? 'bash';
   const defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
@@ -77,9 +76,8 @@ export function createBashTool(
     options.description ??
     'Run a shell command in the configured sandbox. ' +
       'Returns stdout, stderr, and exit code. ' +
-      'Sandboxed: filesystem and network are restricted by the connector. ' +
-      'No stdin support — use `<<EOF` heredocs or input files. ' +
-      'Time out after a configured wall-clock cap.';
+      'Filesystem and network access are scoped to whatever the connector allows. ' +
+      'No stdin support — use `<<EOF` heredocs or input files.';
 
   const bash = tool({
     description,
@@ -96,7 +94,8 @@ export function createBashTool(
           .positive()
           .optional()
           .describe(
-            'Per-call timeout in milliseconds. Capped at the tool default.',
+            `Per-call timeout in milliseconds. Capped at the tool's maxTimeoutMs (default ${maxTimeoutMs}ms); ` +
+              `defaults to ${defaultTimeoutMs}ms when omitted.`,
           ),
       }),
     ),
@@ -121,7 +120,7 @@ export function createBashTool(
       const startedAt = Date.now();
       let result;
       try {
-        result = await sandbox.exec(command, {
+        result = await target.exec(command, {
           cwd: cwd ?? options.cwd,
           timeout: requested,
         });

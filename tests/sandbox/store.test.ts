@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { SandboxBackedMemoryStore } from '../../src/stores/sandbox.js';
-import { createNoopSandbox } from '../../src/sandbox/connectors/noop.js';
+import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
 
 /**
- * SandboxBackedMemoryStore round-trip tests. The noop sandbox is just a
+ * SandboxBackedMemoryStore round-trip tests. The host sandbox is just a
  * `node:fs/promises` passthrough — perfect for confirming the bridge
  * preserves MemoryStore semantics (path scoping, idempotent delete,
  * search). Real isolation is covered by the connector tests; this file
@@ -19,10 +19,11 @@ describe('SandboxBackedMemoryStore', () => {
 
   beforeEach(async () => {
     root = await mkdtemp(path.join(tmpdir(), 'agent-do-sbms-'));
-    store = new SandboxBackedMemoryStore(createNoopSandbox(), root);
-    return async () => {
-      await rm(root, { recursive: true, force: true });
-    };
+    store = new SandboxBackedMemoryStore(createHostSandbox(), root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
   });
 
   it('writes and reads under {root}/{agentId}/', async () => {
@@ -76,14 +77,14 @@ describe('SandboxBackedMemoryStore', () => {
   });
 
   it('readOnly blocks writes', async () => {
-    const ro = new SandboxBackedMemoryStore(createNoopSandbox(), root, {
+    const ro = new SandboxBackedMemoryStore(createHostSandbox(), root, {
       readOnly: true,
     });
     await expect(ro.write('alice', 'x.txt', 'no')).rejects.toThrow(/read-only/);
   });
 
   it('onBeforeWrite can deny operations', async () => {
-    const guarded = new SandboxBackedMemoryStore(createNoopSandbox(), root, {
+    const guarded = new SandboxBackedMemoryStore(createHostSandbox(), root, {
       onBeforeWrite: async (_a, p) => !p.endsWith('.secret'),
     });
     await expect(guarded.write('alice', 'a.secret', 'no')).rejects.toThrow(
@@ -91,5 +92,24 @@ describe('SandboxBackedMemoryStore', () => {
     );
     await guarded.write('alice', 'a.txt', 'yes');
     expect(await guarded.read('alice', 'a.txt')).toBe('yes');
+  });
+
+  it('read surfaces non-ENOENT errors instead of masking as File not found', async () => {
+    // Read failure due to a string-decoding error (binary content in
+    // an encoding the sandbox can't handle) should NOT be mapped to
+    // "File not found". Simulate with a stub sandbox that throws a
+    // permission-style error.
+    const failing = new SandboxBackedMemoryStore(
+      {
+        async readFile() {
+          const e = new Error('EACCES: permission denied');
+          (e as NodeJS.ErrnoException).code = 'EACCES';
+          throw e;
+        },
+        // unused below
+      } as unknown as Parameters<typeof Object.assign>[0] & import('../../src/sandbox/types.js').SandboxApi,
+      root,
+    );
+    await expect(failing.read('alice', 'x.txt')).rejects.toThrow(/EACCES/);
   });
 });

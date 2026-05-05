@@ -1,14 +1,20 @@
 /**
- * Noop sandbox — host passthrough.
+ * Host sandbox — direct passthrough to the host system.
  *
- * **Not a security boundary.** Reads and writes go straight to
- * `node:fs/promises`, exec spawns a real shell. Useful for:
+ * Implements {@link SandboxApi} by talking to `node:fs/promises` and
+ * `node:child_process` directly. **Not a security boundary** — agents
+ * can read, write, and execute anywhere the Node.js process can. Use
+ * it when:
  *
- * - Tests (the contract suite runs against this implementation).
- * - Explicit opt-out — when a caller wants the SandboxApi *shape*
- *   (e.g. for a `bash` tool) without isolation.
+ * - You want the `SandboxApi` *shape* (e.g. so tools like
+ *   `createBashTool` work) without adding isolation.
+ * - You're running tests and want to exercise the contract against
+ *   real fs / child_process behaviour.
+ * - You're shipping to an environment that already provides isolation
+ *   at a higher layer (Docker, Firecracker microVM, gVisor, Deno
+ *   Sandbox, Vercel Sandbox) and just need the API surface.
  *
- * For real isolation, use one of the other connectors.
+ * For real in-process isolation, use {@link createJustBashSandbox}.
  */
 
 import * as fsp from 'node:fs/promises';
@@ -23,7 +29,7 @@ import type {
 
 const execAsync = promisify(cpExec);
 
-export interface NoopSandboxOptions {
+export interface HostSandboxOptions {
   /**
    * Default `cwd` applied to `exec()` calls that don't supply their own.
    * Falls back to `process.cwd()` when omitted.
@@ -31,7 +37,7 @@ export interface NoopSandboxOptions {
   cwd?: string;
 }
 
-export function createNoopSandbox(options: NoopSandboxOptions = {}): SandboxApi {
+export function createHostSandbox(options: HostSandboxOptions = {}): SandboxApi {
   const defaultCwd = options.cwd;
 
   return {
@@ -40,10 +46,11 @@ export function createNoopSandbox(options: NoopSandboxOptions = {}): SandboxApi 
     },
     async readFileBuffer(path) {
       const buf = await fsp.readFile(path);
-      // Return a Uint8Array view; the underlying Buffer is already
-      // a Uint8Array on Node, but typing demands the explicit copy
-      // so consumers can't accidentally treat it as a Buffer.
-      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+      // Copy into a fresh Uint8Array so callers can't accidentally
+      // mutate Node's internal pool-backed Buffer. The
+      // `new Uint8Array(buf)` ctor copies; the three-arg form would
+      // alias.
+      return new Uint8Array(buf);
     },
     async writeFile(path, content) {
       if (typeof content === 'string') {

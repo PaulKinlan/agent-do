@@ -26,8 +26,8 @@
  *   `{root}` for the workspace-tools mode.
  * - Paths handed to the underlying `SandboxApi` are absolute strings
  *   joined with `/`. Connectors interpret them in their own root
- *   (host fs for noop, virtual fs for just-bash, VM fs for
- *   Vercel/Deno).
+ *   (host fs for the host connector, virtual fs for just-bash, VM fs
+ *   for any future remote connectors).
  *
  * Soft safety knobs (`readOnly`, `onBeforeWrite`) mirror the equivalents
  * on `FilesystemMemoryStore`. The sandbox itself is the strong boundary;
@@ -107,9 +107,14 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     try {
       return await this.sandbox.readFile(full);
     } catch (err) {
-      // Normalise to the contract used by other stores so file_tools'
-      // error mapping doesn't have to special-case the sandbox layer.
-      throw new Error(`File not found: ${filePath}`, { cause: err });
+      // Only normalise "not found" shapes to the cross-store
+      // `File not found:` contract — anything else (permissions,
+      // connector errors, decoding) bubbles up so the caller can
+      // distinguish real failures from a missing path.
+      if (isNotFoundError(err)) {
+        throw new Error(`File not found: ${filePath}`, { cause: err });
+      }
+      throw err;
     }
   }
 
@@ -123,6 +128,19 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     await this.sandbox.writeFile(full, content);
   }
 
+  /**
+   * Append content to a file. Implemented as read-existing + write
+   * (concatenated), which is **O(n) in the existing file size** and
+   * has no concurrency guarantee — interleaved appends from different
+   * callers can race. Acceptable for an agent's scratch logs (small,
+   * single-writer); not appropriate for high-volume append workloads.
+   *
+   * The {@link SandboxApi} contract intentionally lacks an append
+   * primitive (Flue parity); a future capability extension could add
+   * one and have specific connectors override this method. For now,
+   * use a connector-side append (e.g. `exec('cat >> …')`) if you need
+   * better behaviour.
+   */
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
     const full = this.resolve(agentId, filePath);
@@ -153,8 +171,11 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     let names: string[];
     try {
       names = await this.sandbox.readdir(full);
-    } catch {
-      return [];
+    } catch (err) {
+      // Only swallow "missing path" — let permission/connector errors
+      // surface so they're not silently masked as an empty directory.
+      if (isNotFoundError(err)) return [];
+      throw err;
     }
     const entries: FileEntry[] = [];
     for (const name of names) {
@@ -286,4 +307,24 @@ function relativeFrom(base: string, full: string): string {
   if (full === b) return '.';
   if (full.startsWith(`${b}/`)) return full.slice(b.length + 1);
   return full;
+}
+
+/**
+ * Best-effort detection of a "missing path" error across connector
+ * implementations. The {@link SandboxApi} contract doesn't dictate an
+ * error shape (Flue's spec is intentionally loose), so we accept:
+ *
+ *   - Node.js `ENOENT` / `ENOTDIR` codes (host connector).
+ *   - Error messages containing those tokens (most connectors that
+ *     re-wrap a Node error).
+ *   - Connector errors that just embed "not found" in the message.
+ *
+ * Anything else is treated as a real failure and propagated.
+ */
+function isNotFoundError(err: unknown): boolean {
+  if (!err) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /ENOENT|ENOTDIR|no such file|not found/i.test(msg);
 }

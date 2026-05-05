@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createAgent } from '../../src/agent.js';
-import { createNoopSandbox } from '../../src/sandbox/connectors/noop.js';
+import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
 import { createMockModel } from '../../src/testing/index.js';
 
 /**
@@ -19,7 +19,7 @@ describe('AgentConfig.sandbox', () => {
       id: 'sb-1',
       name: 'Sandbox Agent',
       model: createMockModel({ responses: [{ text: 'done.' }] }),
-      sandbox: createNoopSandbox(),
+      sandbox: createHostSandbox(),
     });
     const result = await agent.run('hello');
     expect(result).toBe('done.');

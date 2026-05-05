@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createBashTool } from '../../src/tools/bash-tool.js';
-import { createNoopSandbox } from '../../src/sandbox/connectors/noop.js';
+import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
 import type { SandboxApi } from '../../src/sandbox/types.js';
 import type { ToolResult } from '../../src/tools/types.js';
 
@@ -14,14 +14,16 @@ function getExecute(tools: ReturnType<typeof createBashTool>) {
 }
 
 describe('createBashTool', () => {
-  it('throws when no sandbox is supplied — making the unsafe choice deliberate', () => {
-    expect(() => createBashTool(undefined as unknown as SandboxApi)).toThrow(
-      /requires a SandboxApi/,
-    );
+  it('defaults to a host sandbox when none is supplied — `createBashTool()` works without ceremony', async () => {
+    const tools = createBashTool(undefined);
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'echo default-host' });
+    expect(r.data?.exitCode).toBe(0);
+    expect(r.modelContent).toMatch(/default-host/);
   });
 
   it('runs a command via the sandbox and surfaces stdout / exit code', async () => {
-    const tools = createBashTool(createNoopSandbox());
+    const tools = createBashTool(createHostSandbox());
     const exec = getExecute(tools);
     const r = await exec({ command: 'echo hi' });
     expect(r.modelContent).toMatch(/exit_code: 0/);
@@ -31,7 +33,7 @@ describe('createBashTool', () => {
   });
 
   it('refuses a per-call timeout above the cap', async () => {
-    const tools = createBashTool(createNoopSandbox(), { maxTimeoutMs: 5_000 });
+    const tools = createBashTool(createHostSandbox(), { maxTimeoutMs: 5_000 });
     const exec = getExecute(tools);
     const r = await exec({ command: 'echo hi', timeoutMs: 60_000 });
     expect(r.blocked).toBe(true);
@@ -71,7 +73,7 @@ describe('createBashTool', () => {
   });
 
   it('honours the `name` option', async () => {
-    const tools = createBashTool(createNoopSandbox(), { name: 'shell' });
+    const tools = createBashTool(createHostSandbox(), { name: 'shell' });
     expect(tools.shell).toBeDefined();
     expect(tools.bash).toBeUndefined();
   });

@@ -7,7 +7,7 @@
  * (`SandboxBackedMemoryStore`) and the bash tool both rely on.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { SandboxApi } from '../../src/sandbox/types.js';
 
 export interface ContractFactoryContext {
@@ -35,14 +35,15 @@ export function runSandboxApiContract(name: string, factory: ContractFactory) {
       } catch {
         // Some connectors create the dir as part of their virtual fs setup.
       }
-      return async () => {
-        try {
-          await sandbox.rm(scratch, { recursive: true, force: true });
-        } catch {
-          // ignore
-        }
-        await teardown?.();
-      };
+    });
+
+    afterEach(async () => {
+      try {
+        await sandbox.rm(scratch, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      await teardown?.();
     });
 
     it('writes and reads a file (string round-trip)', async () => {

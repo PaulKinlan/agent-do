@@ -14,21 +14,18 @@ file/shell call through the connector instead of the host.
 
 Two connectors ship in this release:
 
-- `createNoopSandbox()` — host passthrough (for tests / explicit opt-out;
-  **not a security boundary**).
+- `createHostSandbox()` — direct host passthrough. **Not a security
+  boundary.** Used as the default fallback when `createBashTool()` is
+  called without a sandbox.
 - `createJustBashSandbox(opts)` — wraps a [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash)
-  `Sandbox` with a virtual filesystem and an in-process bash interpreter.
-  `wrapJustBashSandbox(instance)` is also exported for callers that want
-  to construct the underlying `Sandbox` themselves.
-
-Stubs for `createSandboxRuntimeSandbox`, `createVercelSandbox`, and
-`createDenoSandbox` are exported with their integration shape
-documented; their implementations land in follow-up PRs once their
-optional peer dependencies are wired up.
+  `Sandbox` with a virtual filesystem and an in-process bash
+  interpreter (optional peer dep). `wrapJustBashSandbox(instance)` is
+  also exported for callers that want to construct the underlying
+  `Sandbox` themselves.
 
 Network policy is a connector-level concern (each factory takes its
-own `allowNet`/`allowedDomains`); the contract stays portable across
-backends with very different egress models.
+own `allowNet`); the contract stays portable across backends with very
+different egress models.
 
 Backward compatible — when `sandbox` is undefined, every existing tool
 path is byte-for-byte unchanged.

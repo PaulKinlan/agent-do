@@ -1,37 +1,39 @@
 /**
- * Example 16: Sandbox + bash tool (noop connector)
+ * Example 16: Sandbox + bash tool
  *
- * Demonstrates the new pluggable sandbox attribute on createAgent (#3).
- * The noop connector is a host-fs / host-shell passthrough — *not* a
- * security boundary. It exists so the SandboxApi shape is usable for
- * tests and so `createBashTool` can be opted into a real shell with a
- * deliberate, named choice. For real isolation, swap in
- * `createJustBashSandbox()` (in-process) or one of the future cloud
- * connectors (sandbox-runtime, Vercel Sandbox, Deno Sandbox).
+ * The simplest end-to-end example of the sandbox attribute (#3): we
+ * give the agent a `bash` tool wired to a SandboxApi connector. The
+ * agent can run shell commands, but only ones the connector permits.
  *
- * Run: ANTHROPIC_API_KEY=... npx tsx examples/16-sandbox-noop.ts
+ * This example uses `createHostSandbox()` — a passthrough to the host.
+ * **It is not isolation.** The bash tool runs on your real shell, with
+ * the same privileges as the Node.js process. The point of this
+ * example is to show the *shape* of the API; for real isolation, swap
+ * `createHostSandbox` for `createJustBashSandbox` (see example 17).
+ *
+ * Run: ANTHROPIC_API_KEY=... npx tsx examples/16-sandbox-bash.ts
  */
 
 import {
   createAgent,
   createBashTool,
-  createNoopSandbox,
+  createHostSandbox,
 } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');
-console.log('  Example 16: Sandbox + bash (noop)');
+console.log('  Example 16: Sandbox + bash');
 console.log('═══════════════════════════════════════\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
   'claude-sonnet-4-6',
 );
 
-const sandbox = createNoopSandbox();
+const sandbox = createHostSandbox();
 
 const agent = createAgent({
-  id: 'sandbox-demo',
-  name: 'Sandbox Demo',
+  id: 'sandbox-bash',
+  name: 'Sandbox Bash',
   model: model as any,
   sandbox,
   tools: createBashTool(sandbox),

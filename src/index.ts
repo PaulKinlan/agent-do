@@ -122,21 +122,14 @@ export type {
   ExecResult,
 } from './sandbox/types.js';
 export {
-  createNoopSandbox,
+  createHostSandbox,
   createJustBashSandbox,
   wrapJustBashSandbox,
-  createSandboxRuntimeSandbox,
-  createVercelSandbox,
-  createDenoSandbox,
 } from './sandbox/connectors/index.js';
 export type {
-  NoopSandboxOptions,
+  HostSandboxOptions,
   CreateJustBashSandboxOptions,
   JustBashSandboxLike,
-  SandboxRuntimeOptions,
-  CreateVercelSandboxOptions,
-  VercelSandboxLike,
-  CreateDenoSandboxOptions,
 } from './sandbox/connectors/index.js';
 
 // Prompt builder
