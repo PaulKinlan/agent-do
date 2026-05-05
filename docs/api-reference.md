@@ -330,20 +330,36 @@ Interface for skill storage backends.
 
 ## Tools
 
-### `createFileTools(store: MemoryStore, agentId: string): ToolSet`
+Three consumer-facing tool factories. See [`docs/sandbox.md`](sandbox.md) for how each interacts with a sandbox.
 
-Create a set of file-manipulation tools backed by a `MemoryStore` (from `
+### `createWorkspaceTools(workingDir: string, opts?: WorkspaceToolsOptions): ToolSet`
 
-**Returns tools:**
+Project files rooted at `workingDir`, with a sensible deny-list (`.env`, `.ssh/**`, `.git/objects/**`, etc.) at the tool layer.
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents at a path |
-| `write_file` | Write content to a file (creates parent dirs) |
-| `list_directory` | List files and directories at a path |
-| `delete_file` | Delete a file at a path |
-| `grep_file` | Search for a text pattern across files |
-| `find_files` | Recursively list all files from a path |
+**Options:**
+- `readOnly` — block all writes
+- `onBeforeWrite(canonicalPath, op)` — gate per-write
+- `exclude` — extra deny-list patterns
+- `includeSensitive` — opt out of built-in sensitive-file defaults
+- `sandbox?: SandboxApi` — when set, the internal store becomes `SandboxBackedMemoryStore` instead of `FilesystemMemoryStore`
+
+**Returns tools:** `read_file`, `write_file`, `edit_file`, `list_directory`, `delete_file`, `grep_file`, `find_files`.
+
+### `createMemoryTools(store: MemoryStore, agentId: string, opts?: MemoryToolsOptions): ToolSet`
+
+The agent's private scratchpad, backed by any `MemoryStore`. Pass an `InMemoryMemoryStore`, `FilesystemMemoryStore`, or `SandboxBackedMemoryStore` depending on where you want the data to live.
+
+**Returns tools:** `memory_read`, `memory_write`, `memory_list`, `memory_delete`, `memory_search`.
+
+### `createShellTool(sandbox?: SandboxApi, opts?: CreateShellToolOptions): ToolSet`
+
+A single shell-exec tool wired to a `SandboxApi`. Defaults to `createHostSandbox()` when no sandbox is supplied (host shell, **not** isolation).
+
+**Options:**
+- `name` — override the model-facing tool name (default `bash`)
+- `cwd`, `defaultTimeoutMs`, `maxTimeoutMs`, `maxOutputBytes`
+
+**Returns one tool** named after `opts.name` (default `bash`).
 
 ---
 

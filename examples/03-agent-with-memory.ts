@@ -1,14 +1,15 @@
 /**
- * Example 3: Agent with Memory (File Tools)
+ * Example 3: Agent with Memory (Scratchpad Tools)
  *
- * Agents can read and write files using the built-in file tools.
- * The InMemoryMemoryStore is included — for persistence, implement
- * your own MemoryStore backed by a filesystem, database, or cloud storage.
+ * Agents can read and write to a private scratchpad using `memory_*`
+ * tools. The InMemoryMemoryStore is included — for persistence,
+ * implement your own MemoryStore backed by a filesystem, database, or
+ * cloud storage.
  *
  * Run: npx tsx examples/03-agent-with-memory.ts
  */
 
-import { createAgent, createFileTools, InMemoryMemoryStore } from 'agent-do';
+import { createAgent, createMemoryTools, InMemoryMemoryStore } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 console.log('═══════════════════════════════════════');
@@ -34,32 +35,32 @@ const agent = createAgent({
   id: 'my-agent',
   name: 'My Agent',
   model: model as any,
-  systemPrompt: `You are a helpful agent with a private file system.
-Use read_file, write_file, list_directory, and grep_file to manage your memory.
-Your files persist across conversations.`,
+  systemPrompt: `You are a helpful agent with a private memory scratchpad.
+Use memory_read, memory_write, memory_list, and memory_search to manage your notes.
+Your notes persist across conversations.`,
   tools: {
-    ...createFileTools(memory, 'my-agent'),
+    ...createMemoryTools(memory, 'my-agent'),
   },
   maxIterations: 10,
 });
 
-// ── Task: Read and update a file ──
-console.log('── Task: Read and update a file ──');
-console.log('   Sending: "Read my notes/greeting.md file and update it with today\'s date"');
-console.log('   The agent will use file tools (read_file, write_file) to complete this.');
+// ── Task: Read and update a note ──
+console.log('── Task: Read and update a note ──');
+console.log('   Sending: "Read my notes/greeting.md note and update it with today\'s date"');
+console.log('   The agent will use memory tools (memory_read, memory_write) to complete this.');
 console.log('   Watch the tool calls as they happen:\n');
 
-for await (const event of agent.stream('Read my notes/greeting.md file and update it with today\'s date')) {
+for await (const event of agent.stream('Read my notes/greeting.md note and update it with today\'s date')) {
   if (event.type === 'tool-call') console.log(`   [TOOL CALL] ${event.toolName}(${JSON.stringify(event.toolArgs)})`);
   if (event.type === 'tool-result') console.log(`   [TOOL RESULT] ${String(event.toolResult).slice(0, 100)}`);
   if (event.type === 'text') process.stdout.write(event.content);
   if (event.type === 'done') console.log('\n');
 }
 
-// ── Verify: Check the file was updated ──
-console.log('── Verify: Reading the updated file directly from the memory store ──\n');
+// ── Verify: Check the note was updated ──
+console.log('── Verify: Reading the updated note directly from the memory store ──\n');
 
 const updated = await memory.read('my-agent', 'notes/greeting.md');
-console.log(`   File contents:\n   ${updated.replace(/\n/g, '\n   ')}\n`);
+console.log(`   Note contents:\n   ${updated.replace(/\n/g, '\n   ')}\n`);
 
-console.log('Done — the agent read and updated a file using its memory store.');
+console.log('Done — the agent read and updated a note using its memory scratchpad.');

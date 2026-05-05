@@ -42,14 +42,24 @@ export {
 export type { CreateRoutineToolsOptions } from './routines.js';
 export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
-// Workspace tools (real project files) and memory tools (agent scratchpad)
+// The three consumer-facing tool factories.
+//
+// - createMemoryTools — the agent's private scratchpad (memory_*).
+// - createWorkspaceTools — real project files (read_file/write_file/...)
+//   with a deny-list. Optional `sandbox` option swaps the internal
+//   store for a SandboxBackedMemoryStore.
+// - createShellTool — a single shell-exec tool wired to a SandboxApi
+//   (defaults to host).
+//
+// `createFileTools` is the raw primitive that workspace-tools is
+// built on; it's intentionally not exported here. Reach for
+// createWorkspaceTools (with a sandbox if you want isolation) or
+// createMemoryTools instead.
 export { createWorkspaceTools } from './tools/workspace-tools.js';
 export type { WorkspaceToolsOptions } from './tools/workspace-tools.js';
 export { createMemoryTools } from './tools/memory-tools.js';
-
-// Lower-level file tools — backed by any MemoryStore. Prefer
-// createWorkspaceTools or createMemoryTools unless you need a custom store.
-export { createFileTools } from './tools/file-tools.js';
+export { createShellTool } from './tools/shell-tool.js';
+export type { CreateShellToolOptions } from './tools/shell-tool.js';
 
 // Structured tool results (see issue #48)
 export type { ToolResult } from './tools/types.js';
@@ -99,10 +109,30 @@ export type {
 } from './orchestrator.js';
 
 // Store interfaces and default implementations
-export type { MemoryStore, FileEntry } from './stores.js';
+export type { MemoryStore, FileEntry, SearchOptions } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
 export type { FilesystemMemoryStoreOptions } from './types.js';
+export { SandboxBackedMemoryStore } from './stores/sandbox.js';
+export type { SandboxBackedMemoryStoreOptions } from './stores/sandbox.js';
+
+// Sandbox contract + connectors (#3).
+export type {
+  SandboxApi,
+  FileStat,
+  ExecOptions,
+  ExecResult,
+} from './sandbox/types.js';
+export {
+  createHostSandbox,
+  createJustBashSandbox,
+  wrapJustBashSandbox,
+} from './sandbox/connectors/index.js';
+export type {
+  HostSandboxOptions,
+  CreateJustBashSandboxOptions,
+  JustBashSandboxLike,
+} from './sandbox/connectors/index.js';
 
 // Prompt builder
 export { buildSystemPrompt, interpolate } from './prompts/builder.js';

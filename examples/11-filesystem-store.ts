@@ -12,7 +12,7 @@
  * Run: npx tsx examples/11-filesystem-store.ts
  */
 
-import { createAgent, createFileTools, FilesystemMemoryStore } from 'agent-do';
+import { createAgent, createMemoryTools, FilesystemMemoryStore } from 'agent-do';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -48,10 +48,9 @@ console.log('Files will persist across runs. Delete .agent-data/ to reset.\n');
 const store = new FilesystemMemoryStore(DATA_DIR);
 
 console.log('── Setting up agent ──');
-console.log('The agent gets file tools backed by the filesystem store.');
-console.log('Available tools: read_file, write_file, list_directory,');
-console.log('  delete_file, grep_file, find_files, append_file, edit_file,');
-console.log('  mkdir, rename_file, file_info\n');
+console.log('The agent gets memory tools backed by the filesystem store.');
+console.log('Available tools: memory_read, memory_write, memory_list,');
+console.log('  memory_delete, memory_search\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
 
@@ -59,19 +58,19 @@ const agent = createAgent({
   id: 'my-agent',
   name: 'My Agent',
   model: model as any,
-  systemPrompt: `You are a helpful agent with a persistent file system.
+  systemPrompt: `You are a helpful agent with a persistent memory backed by disk.
 Your files are stored at ${DATA_DIR}/my-agent/.
 
-Use your file tools to:
-- Save notes and memories to files
-- Organize information into directories
-- Search across your files for information
+Use your memory tools to:
+- Save notes and facts (memory_write)
+- Organize information into directories (paths can include /)
+- Search across your notes (memory_search)
 
 Create a sensible directory structure:
 - memories/ for facts you learn
 - notes/ for general notes
 - TODO.md for task tracking`,
-  tools: createFileTools(store, 'my-agent'),
+  tools: createMemoryTools(store, 'my-agent'),
   maxIterations: 10,
 });
 

@@ -26,9 +26,11 @@
 - `done` — agent completed
 - `error` — error or limit exceeded
 
-## File Tools
+## Tool factories
 
-- `createFileTools(store: MemoryStore, agentId: string): ToolSet` — creates read_file, write_file, edit_file, list_directory, delete_file, grep_file, find_files
+- `createMemoryTools(store: MemoryStore, agentId: string): ToolSet` — agent's private scratchpad (memory_read/write/list/delete/search). Pass any MemoryStore.
+- `createWorkspaceTools(workingDir: string, opts?): ToolSet` — project files (read_file/write_file/edit_file/list_directory/delete_file/grep_file/find_files) rooted at workingDir, with a sensible deny-list (.env/.ssh/**/...). `opts.sandbox?: SandboxApi` swaps the internal store for SandboxBackedMemoryStore.
+- `createShellTool(sandbox?: SandboxApi, opts?): ToolSet` — single shell tool (default model name `bash`) wired to a SandboxApi. Defaults to createHostSandbox() if undefined.
 
 ## Memory Stores
 
@@ -36,7 +38,22 @@
 - `FilesystemMemoryStore(baseDir: string, options?: FilesystemMemoryStoreOptions)` — Node.js filesystem (persistent)
   - `options.readOnly: boolean` — block all write operations
   - `options.onBeforeWrite: (agentId, canonicalPath, operation) => boolean | Promise<boolean>` — approve/deny each write
+- `SandboxBackedMemoryStore(sandbox: SandboxApi, root?: string, options?)` — adapt any sandbox connector into a MemoryStore. Mirrors readOnly / onBeforeWrite from FilesystemMemoryStore.
 - `MemoryStore` interface: read, write, append, delete, list, mkdir, exists, search
+
+## Sandbox (#3)
+
+- Sandboxing is **per-provider** — there is no `AgentConfig.sandbox` field. Each store/tool decides whether to route through one.
+- `SandboxApi` contract (Flue spec): readFile, readFileBuffer, writeFile, stat, readdir, exists, mkdir, rm, exec
+- Connectors:
+  - `createHostSandbox(opts?)` — direct host passthrough; **not a security boundary**
+  - `createJustBashSandbox(opts?)` / `wrapJustBashSandbox(instance)` — vercel-labs/just-bash virtual fs + bash interpreter (optional peer dep)
+- How to route through a sandbox:
+  - Memory: `createMemoryTools(new SandboxBackedMemoryStore(sandbox, '/memory'), agentId)`
+  - Workspace: `createWorkspaceTools(dir, { sandbox })`
+  - Shell: `createShellTool(sandbox)`
+- Network policy is per-connector (allowNet), not on the contract
+- A `MemoryStore` only needs to go through the sandbox when its substrate is the host filesystem. In-memory / S3 / Firestore stores have their own substrate and don't need the sandbox.
 
 ## Skills
 
