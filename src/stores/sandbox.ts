@@ -70,7 +70,29 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     this.options = options ?? {};
   }
 
-  private resolve(agentId: string, filePath: string): string {
+  /**
+   * Compute the on-substrate path for `(agentId, filePath)` and verify
+   * it stays inside the agent's directory after symlinks are resolved.
+   *
+   * Two layers of protection:
+   *
+   * 1. **String-level normalisation.** `..` segments are folded out
+   *    and an attempt to outpace the leading segments rejects with
+   *    "Path traversal not allowed". Cheap, runs always.
+   *
+   * 2. **Canonical containment.** If the connector exposes
+   *    {@link SandboxApi.realpath}, we resolve both the agent root and
+   *    the requested path to canonical form (walking up to the deepest
+   *    existing ancestor for not-yet-created paths) and verify the
+   *    canonical path is still inside the canonical agent root. This
+   *    is what keeps a `link → ../other-tenant` symlink from letting
+   *    one agent write into another's directory.
+   *
+   * Connectors that don't expose `realpath` (e.g. just-bash's virtual
+   * fs has no symlinks) skip step 2 — the string check is sufficient
+   * for substrates without symlinks.
+   */
+  private async resolve(agentId: string, filePath: string): Promise<string> {
     validateAgentId(agentId);
     const normalised = normalisePath(filePath || '.');
     if (normalised === null) {
@@ -78,10 +100,19 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     }
     const base = stripTrailingSlash(this.root) || '/';
     const agentSegment = agentId ? `/${agentId}` : '';
-    if (normalised === '' || normalised === '.') {
-      return `${base}${agentSegment}` || '/';
+    const joined = normalised === '' || normalised === '.'
+      ? (`${base}${agentSegment}` || '/')
+      : `${base}${agentSegment}/${normalised}`;
+
+    if (!this.sandbox.realpath) return joined;
+
+    const agentRoot = `${base}${agentSegment}` || '/';
+    const canonicalAgentRoot = await realpathSafe(this.sandbox, agentRoot);
+    const canonical = await realpathSafe(this.sandbox, joined);
+    if (!withinPath(canonical, canonicalAgentRoot)) {
+      throw new Error('Path traversal via symlink not allowed');
     }
-    return `${base}${agentSegment}/${normalised}`;
+    return canonical;
   }
 
   private async checkWrite(
@@ -103,7 +134,7 @@ export class SandboxBackedMemoryStore implements MemoryStore {
   }
 
   async read(agentId: string, filePath: string): Promise<string> {
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     try {
       return await this.sandbox.readFile(full);
     } catch (err) {
@@ -120,7 +151,7 @@ export class SandboxBackedMemoryStore implements MemoryStore {
 
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     const parent = parentDir(full);
     if (parent && parent !== '/' && parent !== full) {
       await this.sandbox.mkdir(parent, { recursive: true });
@@ -143,7 +174,7 @@ export class SandboxBackedMemoryStore implements MemoryStore {
    */
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     let existing = '';
     if (await this.sandbox.exists(full)) {
       existing = await this.sandbox.readFile(full);
@@ -158,16 +189,21 @@ export class SandboxBackedMemoryStore implements MemoryStore {
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
-    const full = this.resolve(agentId, filePath);
+    const full = await this.resolve(agentId, filePath);
     try {
       await this.sandbox.rm(full, { force: true });
-    } catch {
-      // Idempotent — match FilesystemMemoryStore semantics.
+    } catch (err) {
+      // Idempotent only for "missing" errors (matches
+      // FilesystemMemoryStore). Permission / connector failures must
+      // propagate — silently swallowing them tells the caller the
+      // delete succeeded when the file is still on disk.
+      if (isNotFoundError(err)) return;
+      throw err;
     }
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
-    const full = this.resolve(agentId, dirPath ?? '.');
+    const full = await this.resolve(agentId, dirPath ?? '.');
     let names: string[];
     try {
       names = await this.sandbox.readdir(full);
@@ -197,13 +233,13 @@ export class SandboxBackedMemoryStore implements MemoryStore {
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    const full = this.resolve(agentId, dirPath);
+    const full = await this.resolve(agentId, dirPath);
     await this.sandbox.mkdir(full, { recursive: true });
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
     try {
-      const full = this.resolve(agentId, filePath);
+      const full = await this.resolve(agentId, filePath);
       return await this.sandbox.exists(full);
     } catch {
       return false;
@@ -218,8 +254,8 @@ export class SandboxBackedMemoryStore implements MemoryStore {
   ): Promise<Array<{ path: string; line: string }>> {
     const matcher = buildLineMatcher(pattern, { asRegex: options?.regex === true });
     const max = this.options.maxSearchResults ?? 100;
-    const root = this.resolve(agentId, dirPath ?? '.');
-    const agentRoot = this.resolve(agentId, '.');
+    const root = await this.resolve(agentId, dirPath ?? '.');
+    const agentRoot = await this.resolve(agentId, '.');
     const results: Array<{ path: string; line: string }> = [];
     await this.searchRecursive(root, agentRoot, matcher, results, max);
     return results;
@@ -307,6 +343,59 @@ function relativeFrom(base: string, full: string): string {
   if (full === b) return '.';
   if (full.startsWith(`${b}/`)) return full.slice(b.length + 1);
   return full;
+}
+
+/**
+ * `sandbox.realpath()` requires the path to exist (matching Node's
+ * `fs.realpath`). For a fresh write the leaf doesn't exist yet, so
+ * walk up to the deepest existing ancestor, canonicalise that, and
+ * re-append the unresolved suffix. This still detects symlinks
+ * anywhere in the existing portion of the path — which is what
+ * matters for the containment check in
+ * {@link SandboxBackedMemoryStore.resolve}.
+ *
+ * Returns the input unchanged if no ancestor exists or `realpath` is
+ * undefined; the caller's containment check is still authoritative.
+ */
+async function realpathSafe(sandbox: SandboxApi, p: string): Promise<string> {
+  if (!sandbox.realpath) return p;
+  let suffix = '';
+  let current = p;
+  while (true) {
+    try {
+      const canonical = await sandbox.realpath(current);
+      return suffix ? joinPath(canonical, suffix) : canonical;
+    } catch (err) {
+      if (!isNotFoundError(err)) {
+        // Unknown error — let the caller's containment check stay
+        // authoritative; the next real I/O call will raise the
+        // underlying error if it persists.
+        return p;
+      }
+      const parent = parentDir(current);
+      if (parent === current) return p; // hit root without resolving
+      const base = current.slice(stripTrailingSlash(parent).length).replace(/^\/+/, '');
+      suffix = suffix ? `${base}/${suffix}` : base;
+      current = parent;
+    }
+  }
+}
+
+function joinPath(parent: string, child: string): string {
+  if (!child) return parent;
+  if (parent === '/' || parent === '') return `/${child}`;
+  return `${stripTrailingSlash(parent)}/${child}`;
+}
+
+/**
+ * True iff `candidate` is the same as, or strictly inside, `base`.
+ * Both inputs must already be canonical (passed through `realpath`).
+ */
+function withinPath(candidate: string, base: string): boolean {
+  const c = stripTrailingSlash(candidate);
+  const b = stripTrailingSlash(base);
+  if (c === b) return true;
+  return c.startsWith(`${b}/`);
 }
 
 /**

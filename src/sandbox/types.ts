@@ -44,10 +44,30 @@ export interface SandboxApi {
   readFile(path: string): Promise<string>;
   readFileBuffer(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string | Uint8Array): Promise<void>;
+  /**
+   * `stat()` should report metadata for the path itself, **not** the
+   * symlink target — i.e. lstat semantics. This is what makes
+   * `isSymbolicLink` useful for the few callers (notably
+   * {@link SandboxBackedMemoryStore}'s containment check) that need
+   * to know.
+   */
   stat(path: string): Promise<FileStat>;
   readdir(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
   rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   exec(command: string, options?: ExecOptions): Promise<ExecResult>;
+  /**
+   * Optional capability — return the canonical absolute path for
+   * `path`, resolving symlinks. Connectors whose substrate doesn't
+   * have symlinks (e.g. just-bash's virtual fs) MAY omit this; the
+   * generic store treats absence as "no symlinks to resolve" and
+   * skips the canonical containment check.
+   *
+   * Beyond the symlink case, the host connector implements this with
+   * `node:fs/promises.realpath`, which is what allows
+   * {@link SandboxBackedMemoryStore} to enforce per-agent tenant
+   * isolation against escape via symlink.
+   */
+  realpath?(path: string): Promise<string>;
 }

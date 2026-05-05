@@ -107,10 +107,20 @@ export function createWorkspaceTools(
           : undefined,
       });
 
+  // .agent-doignore is read via host `node:fs` inside `createDenyGuard`.
+  // When `options.sandbox` is set, file ops live on the sandbox's
+  // substrate (e.g. just-bash's virtual fs) — reading the host's
+  // .agent-doignore for a workspace at, say, `/work` would either find
+  // an unrelated file or none at all, silently mis-applying ignore
+  // rules. Force-skip the .agent-doignore lookup in that case; the
+  // built-in defaults and `options.exclude` patterns still apply.
+  // Document this limitation in docs/sandbox.md.
+  const skipAgentDoIgnore =
+    options.skipAgentDoIgnore ?? Boolean(options.sandbox);
   const guard = createDenyGuard(workingDir, {
     extra: options.exclude,
     includeSensitive: options.includeSensitive,
-    skipAgentDoIgnore: options.skipAgentDoIgnore,
+    skipAgentDoIgnore,
   });
 
   // Start from the raw file tools (no guard), then wrap the ones whose

@@ -124,6 +124,22 @@ positioned for different patterns:
 Use both together when you want guarded I/O *and* arbitrary command
 execution.
 
+## `.agent-doignore` and sandboxed workspace tools
+
+`createWorkspaceTools(workingDir)` normally reads a project-local
+`.agent-doignore` file from disk to extend the deny-list. When you
+pass `{ sandbox }`, that file lookup is **automatically skipped** —
+the workspace's substrate is now the sandbox, not the host, so a
+host-side `.agent-doignore` would either be missing or describe a
+different directory entirely. Built-in defaults (`.env`, `.ssh/**`,
+`.git/objects/**`, etc.) and any `exclude` patterns you pass still
+apply.
+
+If you need project-specific ignore rules inside the sandbox, supply
+them via the `exclude` option. A future capability extension could
+read `.agent-doignore` through the sandbox; it's not in scope for
+this release.
+
 ## Soft safety vs. strong isolation
 
 `FilesystemMemoryStore`'s `readOnly` / `onBeforeWrite` knobs are

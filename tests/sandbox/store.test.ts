@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { SandboxBackedMemoryStore } from '../../src/stores/sandbox.js';
 import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
+import type { SandboxApi } from '../../src/sandbox/types.js';
 
 /**
  * SandboxBackedMemoryStore round-trip tests. The host sandbox is just a
@@ -106,10 +107,59 @@ describe('SandboxBackedMemoryStore', () => {
           (e as NodeJS.ErrnoException).code = 'EACCES';
           throw e;
         },
-        // unused below
-      } as unknown as Parameters<typeof Object.assign>[0] & import('../../src/sandbox/types.js').SandboxApi,
+      } as unknown as SandboxApi,
       root,
     );
     await expect(failing.read('alice', 'x.txt')).rejects.toThrow(/EACCES/);
+  });
+
+  it('delete propagates non-not-found errors instead of silently succeeding', async () => {
+    // A connector returning a permission error must surface it — the
+    // file is still on disk, and reporting "deleted" would be a lie.
+    const failing = new SandboxBackedMemoryStore(
+      {
+        async rm() {
+          const e = new Error('EACCES: permission denied');
+          (e as NodeJS.ErrnoException).code = 'EACCES';
+          throw e;
+        },
+      } as unknown as SandboxApi,
+      root,
+    );
+    await expect(failing.delete('alice', 'x.txt')).rejects.toThrow(/EACCES/);
+  });
+
+  it('rejects symlink-based escape (Codex P1)', async () => {
+    // alice has a symlink "link" → "../bob". Without the canonical
+    // containment check, writing to `link/secret.txt` would land in
+    // bob's directory.
+    await mkdir(path.join(root, 'alice'), { recursive: true });
+    await mkdir(path.join(root, 'bob'), { recursive: true });
+    await symlink(path.join(root, 'bob'), path.join(root, 'alice', 'link'));
+
+    await expect(
+      store.write('alice', 'link/secret.txt', 'pwned'),
+    ).rejects.toThrow(/Path traversal via symlink/);
+
+    // Confirm the file did NOT land in bob's directory.
+    await expect(store.exists('bob', 'secret.txt')).resolves.toBe(false);
+  });
+
+  it('skips canonical containment check when the connector lacks realpath', async () => {
+    // Connectors without `realpath` (e.g. just-bash's virtual fs) get
+    // string-only path normalisation. Verify that no realpath-shaped
+    // call is required for them.
+    const writes: Array<{ path: string; content: string | Uint8Array }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async writeFile(p: string, content: string | Uint8Array) {
+          writes.push({ path: p, content });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await noRealpath.write('agent1', 'note.txt', 'hi');
+    expect(writes[0]?.path).toBe('/work/agent1/note.txt');
   });
 });

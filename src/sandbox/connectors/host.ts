@@ -60,7 +60,12 @@ export function createHostSandbox(options: HostSandboxOptions = {}): SandboxApi 
       }
     },
     async stat(path): Promise<FileStat> {
-      const s = await fsp.stat(path);
+      // lstat (not stat): follow the SandboxApi contract — describe the
+      // path itself, not its target. fsp.stat() always returns
+      // isSymbolicLink=false because it follows symlinks first, which
+      // makes the bit useless for callers that need to detect them
+      // (most importantly SandboxBackedMemoryStore's containment check).
+      const s = await fsp.lstat(path);
       return {
         isFile: s.isFile(),
         isDirectory: s.isDirectory(),
@@ -90,6 +95,13 @@ export function createHostSandbox(options: HostSandboxOptions = {}): SandboxApi 
         recursive: opts?.recursive ?? false,
         force: opts?.force ?? false,
       });
+    },
+    async realpath(path) {
+      // Used by SandboxBackedMemoryStore to enforce tenant isolation
+      // against symlink escape (an `alice/link → ../bob` symlink would
+      // otherwise let writes to `alice/link/secret.txt` land in Bob's
+      // directory). fsp.realpath follows every symlink in the chain.
+      return await fsp.realpath(path);
     },
     async exec(command, opts: ExecOptions = {}): Promise<ExecResult> {
       try {

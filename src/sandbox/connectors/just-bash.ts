@@ -162,9 +162,14 @@ export function wrapJustBashSandbox(jb: JustBashSandboxLike): SandboxApi {
       ].join('');
       const flagArg = flags ? `-${flags}` : '';
       const r = await runShell(`rm ${flagArg} ${shellQuote(path)}`);
-      if (r.exitCode !== 0 && !opts?.force) {
-        throw new Error(`rm failed: ${r.stderr.trim()}`);
+      if (r.exitCode === 0) return;
+      // `force` should only swallow not-found (POSIX `rm -f` semantics);
+      // real failures (permission, busy, connector error) still need to
+      // surface so callers don't get a misleading success.
+      if (opts?.force && /no such file|not found|ENOENT/i.test(r.stderr)) {
+        return;
       }
+      throw new Error(`rm failed: ${r.stderr.trim() || `exit ${r.exitCode}`}`);
     },
     exec: runShell,
   };

@@ -129,6 +129,34 @@ describe('wrapJustBashSandbox', () => {
     expect(recorded).toEqual(['whatever']);
   });
 
+  it('rm with force still propagates non-not-found failures', async () => {
+    const sandbox: JustBashSandboxLike = {
+      async readFile() { return ''; },
+      async writeFiles() {},
+      async mkDir() {},
+      async exec() {
+        return { stdout: '', stderr: 'permission denied', exitCode: 1 };
+      },
+    };
+    const api = wrapJustBashSandbox(sandbox);
+    await expect(api.rm('/protected', { force: true })).rejects.toThrow(
+      /rm failed/,
+    );
+  });
+
+  it('rm with force swallows not-found errors (POSIX rm -f semantics)', async () => {
+    const sandbox: JustBashSandboxLike = {
+      async readFile() { return ''; },
+      async writeFiles() {},
+      async mkDir() {},
+      async exec() {
+        return { stdout: '', stderr: 'no such file or directory', exitCode: 1 };
+      },
+    };
+    const api = wrapJustBashSandbox(sandbox);
+    await expect(api.rm('/missing', { force: true })).resolves.toBeUndefined();
+  });
+
   it('throws when the instance exposes neither exec nor runCommand', async () => {
     const sandbox = {
       async readFile() { return ''; },
