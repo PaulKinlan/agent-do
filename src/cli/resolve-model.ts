@@ -114,7 +114,7 @@ export async function resolveModel(
  * user-controlled `--provider <pkg>` flag) is rejected at compile time
  * — the dynamic-import surface only accepts these exact spellings.
  */
-type ProviderPackage =
+export type ProviderPackage =
   | '@ai-sdk/anthropic'
   | '@ai-sdk/google'
   | '@ai-sdk/openai';
@@ -148,7 +148,7 @@ type ProviderPackage =
  * dependencies at the project level (see docs/supply-chain.md).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function tryImport(
+export async function tryImport(
   pkg: ProviderPackage,
   provider: string,
   expectedExport: string,

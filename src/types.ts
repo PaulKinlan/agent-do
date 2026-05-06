@@ -1,4 +1,18 @@
-import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import type { JSONValue, LanguageModel, ModelMessage, ToolSet } from 'ai';
+
+/**
+ * Provider-specific options forwarded to the AI SDK's `streamText` /
+ * `generateText` calls. Keyed by provider id (`google`, `anthropic`,
+ * `openai`, …); each provider's value is a free-form object of
+ * provider-specific keys (`useSearchGrounding`, `thinking`,
+ * `reasoningEffort`, …). Structurally identical to the SDK's
+ * `ProviderOptions` (a.k.a. `SharedV3ProviderOptions`) — declared here
+ * to avoid coupling our public API to a private re-export from `ai`.
+ */
+export type ProviderOptions = Record<
+  string,
+  Record<string, JSONValue | undefined>
+>;
 import type { McpServerConfig } from './mcp.js';
 
 // Progress events emitted during agent execution
@@ -515,6 +529,25 @@ export interface AgentConfig {
    * context forever" behaviour.
    */
   historyKeepWindow?: number;
+  /**
+   * Provider-specific options forwarded verbatim to every `streamText`
+   * call the loop makes. Keyed by provider id (`google`, `anthropic`,
+   * `openai`, …) and merged on top of any per-message
+   * `providerOptions` already present (the per-message values for that
+   * same provider win for the keys they set).
+   *
+   * Use this for features that live on the provider call rather than
+   * on a tool, e.g. Google `useSearchGrounding`, Anthropic `thinking`,
+   * OpenAI `reasoningEffort`. Provider-native *tools* (Google
+   * `googleSearch`, Anthropic `webSearch_*`, OpenAI `webSearchPreview`)
+   * still go in {@link AgentConfig.tools} as the SDK's tool factories
+   * produce them.
+   *
+   * Anthropic prompt-cache control is set per-message by the loop and
+   * survives this merge — setting `providerOptions.anthropic` here
+   * does not disable caching.
+   */
+  providerOptions?: ProviderOptions;
   /**
    * Debug / observability hooks (#72). See {@link DebugConfig}.
    *

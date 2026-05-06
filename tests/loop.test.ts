@@ -3,6 +3,10 @@ import { runAgentLoop, streamAgentLoop } from '../src/loop.js';
 import { createMockModel } from '../src/testing/index.js';
 import { tool } from 'ai';
 import { z } from 'zod';
+import {
+  MockLanguageModelV3,
+  convertArrayToReadableStream,
+} from 'ai/test';
 import type { AgentConfig, ProgressEvent } from '../src/types.js';
 
 // Helper to cast mock model as LanguageModel
@@ -126,6 +130,61 @@ describe('streamAgentLoop', () => {
 
     const doneEvent = events.find((e) => e.type === 'done');
     expect(doneEvent?.content).toBe('Streamed.');
+  });
+
+  it('forwards AgentConfig.providerOptions to the model call', async () => {
+    // Capture what the loop hands off to the model. The AI SDK calls
+    // doStream with the full LanguageModelV3CallOptions, which includes
+    // providerOptions verbatim.
+    const captured: Array<Record<string, unknown> | undefined> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const capturingModel: any = new MockLanguageModelV3({
+      provider: 'mock',
+      modelId: 'mock-model',
+      doStream: async (params: { providerOptions?: Record<string, unknown> }) => {
+        captured.push(params.providerOptions);
+        return {
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            {
+              type: 'response-metadata',
+              id: 'r-1',
+              timestamp: new Date(),
+              modelId: 'mock-model',
+            },
+            { type: 'text-start', id: 't-1' },
+            { type: 'text-delta', id: 't-1', delta: 'ok' },
+            { type: 'text-end', id: 't-1' },
+            {
+              type: 'finish',
+              finishReason: 'stop',
+              usage: { inputTokens: 1, outputTokens: 1 },
+            },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ] as any[]),
+        };
+      },
+    });
+
+    const config: AgentConfig = {
+      id: 'test',
+      name: 'test',
+      model: capturingModel,
+      maxIterations: 1,
+      providerOptions: {
+        google: { useSearchGrounding: true },
+      },
+    };
+
+    const events: ProgressEvent[] = [];
+    for await (const event of streamAgentLoop(config, 'hi')) {
+      events.push(event);
+    }
+
+    expect(captured.length).toBeGreaterThanOrEqual(1);
+    expect(captured[0]).toEqual({
+      google: { useSearchGrounding: true },
+    });
   });
 
   it('yields tool-call events', async () => {

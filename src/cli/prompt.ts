@@ -20,6 +20,7 @@ import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
+import { buildProviderTools } from './provider-tools.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -39,7 +40,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
 
   // Workspace tools see the working directory (cwd by default).
   // Memory tools are opt-in via --with-memory and give the agent a
-  // private scratchpad scoped to its ID.
+  // private scratchpad scoped to its ID. Provider-native tools
+  // (--provider-tool) are merged on top — they live in a namespaced
+  // key (`<provider>__<tool>`) so they can't collide with workspace
+  // or memory tools.
   let tools: ToolSet | undefined;
   if (!args.noTools) {
     tools = createWorkspaceTools(args.workingDir, {
@@ -54,6 +58,13 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
       tools = { ...tools, ...createMemoryTools(memStore, 'cli-agent') };
     }
   }
+  if (args.providerTool.length > 0) {
+    const providerTools = await buildProviderTools(
+      args.provider,
+      args.providerTool,
+    );
+    tools = { ...(tools ?? {}), ...providerTools };
+  }
 
   const agent = createAgent({
     id: 'cli-agent',
@@ -67,6 +78,7 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
       allow: args.allow,
     }),
     usage: { enabled: true },
+    providerOptions: args.providerOptions,
     // Only materialise the full ToolResult on `tool-result` events when
     // the user explicitly asked for it (`--show-content`). Defaults to
     // summary + data only so file contents don't leak into CI logs.

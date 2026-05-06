@@ -47,7 +47,8 @@ import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
-import type { Agent } from '../types.js';
+import { buildProviderTools } from './provider-tools.js';
+import type { Agent, ProviderOptions } from '../types.js';
 import type { ToolSet } from 'ai';
 
 /**
@@ -354,6 +355,9 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     });
 
     // Workspace tools on the cwd by default; memory tools opt-in.
+    // Provider-native tools come from `exported.providerTool` (a string
+    // list) or fall back to the CLI flag, with the same merge order as
+    // workspace + memory tools.
     let tools: ToolSet | undefined;
     if (!effectiveNoTools) {
       tools = createWorkspaceTools(args.workingDir, {
@@ -371,6 +375,18 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
         tools = { ...tools, ...createMemoryTools(memStore, agentId) };
       }
     }
+    const exportedProviderTools = Array.isArray(exported.providerTool)
+      ? (exported.providerTool as string[])
+      : undefined;
+    const effectiveProviderTools =
+      exportedProviderTools ?? args.providerTool;
+    if (effectiveProviderTools.length > 0) {
+      const providerTools = await buildProviderTools(
+        (exported.provider as string) ?? args.provider,
+        effectiveProviderTools,
+      );
+      tools = { ...(tools ?? {}), ...providerTools };
+    }
 
     agent = createAgent({
       id: agentId,
@@ -381,6 +397,9 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       maxIterations: (exported.maxIterations as number) ?? args.maxIterations,
       permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
       usage: { enabled: true },
+      providerOptions:
+        (exported.providerOptions as ProviderOptions | undefined) ??
+        args.providerOptions,
       emitFullResult: args.showContent,
       debug: buildDebugConfigFromArgs(args),
     });
@@ -452,6 +471,20 @@ async function runSavedAgent(
       tools = { ...tools, ...createMemoryTools(memStore, agentId) };
     }
   }
+  // Provider-native tools come from the saved agent (preferred) or the
+  // CLI flag passed at invocation. CLI flag wins when both are present
+  // so an operator can extend a saved agent ad-hoc — same precedence
+  // as `--with-memory` extending a saved agent's memory.
+  const savedProviderTools = saved.providerTools ?? [];
+  const effectiveProviderTools =
+    args.providerTool.length > 0 ? args.providerTool : savedProviderTools;
+  if (effectiveProviderTools.length > 0) {
+    const providerTools = await buildProviderTools(
+      saved.provider,
+      effectiveProviderTools,
+    );
+    tools = { ...(tools ?? {}), ...providerTools };
+  }
 
   const agent = createAgent({
     id: agentId,
@@ -462,6 +495,8 @@ async function runSavedAgent(
     maxIterations: saved.maxIterations,
     permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
     usage: { enabled: true },
+    providerOptions:
+      args.providerOptions ?? (saved.providerOptions as ProviderOptions | undefined),
     emitFullResult: args.showContent,
     debug: buildDebugConfigFromArgs(args),
   });

@@ -51,6 +51,7 @@ function baseArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     yes: false,
     acceptAll: false,
     allow: [],
+    providerTool: [],
     logLevel: 'info',
     ...overrides,
   };

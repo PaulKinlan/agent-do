@@ -772,6 +772,7 @@ async function runAgentLoopDirect(
       stopWhen: stepCountIs(innerStepLimit),
       abortSignal: stepAbort.signal,
       onStepFinish,
+      providerOptions: config.providerOptions,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
       }),
@@ -1048,6 +1049,7 @@ async function* streamAgentLoopDirect(
       stopWhen: stepCountIs(innerStepLimit),
       abortSignal: stepAbort.signal,
       onStepFinish,
+      providerOptions: config.providerOptions,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
       }),

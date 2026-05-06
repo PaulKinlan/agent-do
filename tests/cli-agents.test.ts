@@ -101,6 +101,77 @@ describe('saved agents', () => {
     expect(loaded!.provider).toBe('anthropic');
   });
 
+  it('loadSavedAgent round-trips providerTools and providerOptions', async () => {
+    const config = {
+      name: 'researcher',
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      systemPrompt: 'Research topics.',
+      memoryDir: '.data',
+      readOnly: false,
+      maxIterations: 10,
+      noTools: false,
+      providerTools: ['googleSearch', 'urlContext'],
+      providerOptions: { google: { useSearchGrounding: true } },
+      createdAt: '2026-05-06T00:00:00Z',
+    };
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'researcher.json'),
+      JSON.stringify(config),
+    );
+
+    const loaded = await loadSavedAgent('researcher');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.providerTools).toEqual(['googleSearch', 'urlContext']);
+    expect(loaded!.providerOptions).toEqual({
+      google: { useSearchGrounding: true },
+    });
+  });
+
+  it('loadSavedAgent rejects unknown top-level keys (strict schema)', async () => {
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'sneaky.json'),
+      JSON.stringify({
+        name: 'sneaky',
+        provider: 'google',
+        systemPrompt: 'x',
+        memoryDir: '.data',
+        readOnly: false,
+        maxIterations: 10,
+        noTools: false,
+        createdAt: '',
+        rogueKey: 'should be rejected',
+      }),
+    );
+    const loaded = await loadSavedAgent('sneaky');
+    expect(loaded).toBeNull();
+  });
+
+  it('loadSavedAgent rejects providerTools entries with invalid characters', async () => {
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'bad.json'),
+      JSON.stringify({
+        name: 'bad',
+        provider: 'google',
+        systemPrompt: 'x',
+        memoryDir: '.data',
+        readOnly: false,
+        maxIterations: 10,
+        noTools: false,
+        providerTools: ['ok-name', 'has spaces'],
+        createdAt: '',
+      }),
+    );
+    const loaded = await loadSavedAgent('bad');
+    expect(loaded).toBeNull();
+  });
+
   it('loadSavedAgent prefers the closest ancestor when names collide', async () => {
     // Parent defines "shared" one way, child defines it differently.
     const parentAgents = path.join(testDir, '.agent-do', 'agents');
