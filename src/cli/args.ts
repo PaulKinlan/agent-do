@@ -5,6 +5,9 @@
  * and positional arguments.
  */
 
+import { parseProviderOptions } from './provider-tools.js';
+import type { ProviderOptions } from '../types.js';
+
 export interface ParsedArgs {
   command: 'prompt' | 'run' | 'eval' | 'create' | 'list';
   prompt?: string;
@@ -75,6 +78,25 @@ export interface ParsedArgs {
    */
   allow: string[];
   /**
+   * Provider-native tools to enable (e.g. `googleSearch`, `webSearch`,
+   * `codeExecution`). Names are resolved against the installed
+   * provider SDK's `<provider>.tools` surface — see
+   * `src/cli/provider-tools.ts` for the alias table and the supported
+   * provider list.
+   *
+   * Repeatable: `--provider-tool a --provider-tool b`. Provider is
+   * inferred from `--provider`. Empty for the default ("no provider
+   * tools").
+   */
+  providerTool: string[];
+  /**
+   * Provider-specific options forwarded to every model call as
+   * `streamText({ providerOptions })`. Parsed from the
+   * `--provider-options <json>` flag. Object keyed by provider id,
+   * e.g. `{"google":{"useSearchGrounding":true}}`.
+   */
+  providerOptions?: ProviderOptions;
+  /**
    * CLI log level (#72). Graduated observability:
    *
    * - `silent` — no stderr output, only the final answer on stdout
@@ -122,6 +144,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     yes: false,
     acceptAll: false,
     allow: [],
+    providerTool: [],
     logLevel: 'info',
   };
   // Track whether --log-level was explicitly set so backward-compat
@@ -244,6 +267,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (arg === '--allow') {
       const val = requireValue(argv, ++i, '--allow');
       args.allow.push(...val.split(',').map((s) => s.trim()).filter(Boolean));
+    } else if (arg === '--provider-tool') {
+      // Repeatable. Comma-separated values inside one flag are also
+      // accepted so `--provider-tool googleSearch,urlContext` works.
+      const val = requireValue(argv, ++i, '--provider-tool');
+      args.providerTool.push(
+        ...val.split(',').map((s) => s.trim()).filter(Boolean),
+      );
+    } else if (arg === '--provider-options') {
+      const val = requireValue(argv, ++i, '--provider-options');
+      args.providerOptions = parseProviderOptions(val);
     } else if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}. Use --help for usage.`);
     } else {

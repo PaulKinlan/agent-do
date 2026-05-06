@@ -218,6 +218,53 @@ describe('parseArgs', () => {
     expect(args.command).toBe('list');
   });
 
+  // Provider tools and provider options
+  it('--provider-tool is repeatable and accumulates names', () => {
+    const args = parseArgs([
+      '--provider', 'google',
+      '--provider-tool', 'googleSearch',
+      '--provider-tool', 'urlContext',
+      'hello',
+    ]);
+    expect(args.providerTool).toEqual(['googleSearch', 'urlContext']);
+  });
+
+  it('--provider-tool accepts comma-separated values in one flag', () => {
+    const args = parseArgs([
+      '--provider', 'google',
+      '--provider-tool', 'googleSearch,codeExecution',
+      'hello',
+    ]);
+    expect(args.providerTool).toEqual(['googleSearch', 'codeExecution']);
+  });
+
+  it('--provider-tool defaults to an empty array', () => {
+    expect(parseArgs(['hello']).providerTool).toEqual([]);
+  });
+
+  it('parses --provider-options as JSON', () => {
+    const args = parseArgs([
+      '--provider', 'google',
+      '--provider-options', '{"google":{"useSearchGrounding":true}}',
+      'hello',
+    ]);
+    expect(args.providerOptions).toEqual({
+      google: { useSearchGrounding: true },
+    });
+  });
+
+  it('throws on malformed --provider-options JSON', () => {
+    expect(() =>
+      parseArgs(['--provider-options', '{not json', 'hello']),
+    ).toThrow(/must be valid JSON/);
+  });
+
+  it('throws on non-object --provider-options', () => {
+    expect(() =>
+      parseArgs(['--provider-options', '"x"', 'hello']),
+    ).toThrow(/JSON object/);
+  });
+
   it('parses --exclude as comma-separated patterns (repeatable)', () => {
     const args = parseArgs(['--exclude', 'secrets/**,*.cred', '--exclude', 'vendor/**']);
     expect(args.exclude).toEqual(['secrets/**', '*.cred', 'vendor/**']);

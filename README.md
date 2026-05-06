@@ -152,10 +152,86 @@ Options:
   --show-content         With --verbose: also include each tool's full result
   --script               Required for `run <path>` to import local JS/TS files
   -y, --yes              Skip the interactive confirmation for --script
+  --provider-tool <name> Enable a provider-native tool (repeatable). See below.
+  --provider-options <json>
+                         Provider-specific options forwarded to every model
+                         call, e.g. '{"google":{"useSearchGrounding":true}}'.
   --json                 JSON output
   --output <fmt>         console | json | csv (eval only)
   --compare <providers>  Compare providers (eval only, comma-separated)
   --concurrency <n>      Parallel eval cases (default: 1)
+```
+
+### Provider-native tools and options
+
+Provider packages (`@ai-sdk/google`, `@ai-sdk/anthropic`,
+`@ai-sdk/openai`) ship server-side tools — Google
+search-with-grounding, Anthropic web search, OpenAI web search,
+code execution, URL context, etc. — and provider-specific call
+options like Google's `useSearchGrounding`, Anthropic's `thinking`,
+or OpenAI's `reasoningEffort`. Both are exposed on the CLI:
+
+```bash
+# Google search grounding via the provider tool
+npx agent-do "what won the F1 race last weekend?" \
+  --provider google \
+  --provider-tool googleSearch
+
+# Plus provider options on the model call itself
+npx agent-do "summarize https://example.com" \
+  --provider google \
+  --provider-tool urlContext \
+  --provider-options '{"google":{"useSearchGrounding":true}}'
+
+# Anthropic web search (alias `webSearch` resolves to the latest dated tool)
+npx agent-do "find recent papers on diffusion models" \
+  --provider anthropic --provider-tool webSearch
+
+# OpenAI web search
+npx agent-do "latest research on graph neural networks" \
+  --provider openai --provider-tool webSearch
+```
+
+`--provider-tool` is repeatable and can take comma-separated values
+(`--provider-tool googleSearch,urlContext`). A small alias table
+maps short names to the latest dated versions:
+`webSearch → webSearch_20260209`, `bash → bash_20250124`, etc.
+
+The CLI only accepts tools that work with empty config — currently
+`googleSearch`, `urlContext`, `codeExecution`, `webSearch`,
+`webFetch`, `bash`, `textEditor`, `computer`, `memory`,
+`webSearchPreview`, `codeInterpreter`, `imageGeneration`,
+`applyPatch`. Tools that need per-tool args (`fileSearch` →
+`vectorStoreIds`, `mcp` → server URL, `customTool` → name/description,
+…) must be configured from a script export so you can pass real args.
+Trying to enable one from the CLI fails fast with a copy-pasteable
+script-mode snippet.
+
+The same fields are first-class on saved agents and `AgentConfig`:
+
+```bash
+npx agent-do create researcher \
+  --provider google --model gemini-2.5-flash \
+  --system 'Research topics' \
+  --provider-tool googleSearch --provider-tool urlContext \
+  --provider-options '{"google":{"useSearchGrounding":true}}'
+
+npx agent-do researcher "summarize the latest Mars helicopter mission"
+```
+
+In a script (Format 2), set them on the exported `AgentConfig`:
+
+```ts
+import { google } from '@ai-sdk/google';
+export default {
+  id: 'researcher', name: 'researcher',
+  model: google('gemini-2.5-flash'),
+  tools: {
+    google_search: google.tools.googleSearch({}),
+    url_context: google.tools.urlContext({}),
+  },
+  providerOptions: { google: { useSearchGrounding: true } },
+};
 ```
 
 ### Script mode: `run <path> --script`

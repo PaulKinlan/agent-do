@@ -97,6 +97,7 @@ export type {
   HookDecision,
   AgentHooks,
   PricingTable,
+  ProviderOptions,
   AgentConfig,
   Agent,
   RunResult,

@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ParsedArgs } from './args.js';
+import { validateCliProviderToolNames } from './provider-tools.js';
 
 /**
  * Schema for a saved agent JSON file. See issue #22 — earlier
@@ -49,6 +50,25 @@ export const SavedAgentSchema = z.object({
   readOnly: z.boolean(),
   maxIterations: z.number().int().positive().max(1000),
   noTools: z.boolean(),
+  /**
+   * Provider-native tool names (resolved by
+   * `src/cli/provider-tools.ts`) to enable for this agent. Bounded
+   * length and per-name length so a planted file can't blow the parser
+   * up; the registry enforces the actual name allowlist at run time.
+   */
+  providerTools: z
+    .array(z.string().regex(/^[a-zA-Z0-9_-]+$/).max(64))
+    .max(16)
+    .optional(),
+  /**
+   * Provider-specific options forwarded to every model call. Object
+   * keyed by provider id, e.g. `{"google":{"useSearchGrounding":true}}`.
+   * The two-level shape is enforced here so a planted file can't pass
+   * an array or scalar at either level.
+   */
+  providerOptions: z
+    .record(z.string(), z.record(z.string(), z.unknown()))
+    .optional(),
   createdAt: z.string(),
 }).strict();
 
@@ -133,6 +153,8 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
     readOnly: args.readOnly,
     maxIterations: args.maxIterations,
     noTools: args.noTools,
+    providerTools: args.providerTool.length > 0 ? args.providerTool : undefined,
+    providerOptions: args.providerOptions,
     createdAt: new Date().toISOString(),
   };
   const validated = SavedAgentSchema.safeParse(candidate);
@@ -143,6 +165,15 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
     throw new Error(`Invalid agent config:\n${issues}`);
   }
   const config: SavedAgent = validated.data;
+
+  // Reject provider/tool combinations that are guaranteed to fail at
+  // run time (e.g. `--provider ollama --provider-tool foo`, or a
+  // `--provider-tool` name that needs extra config). Surfacing this
+  // at create-time avoids saving an unusable config that fails on
+  // every invocation.
+  if (config.providerTools && config.providerTools.length > 0) {
+    validateCliProviderToolNames(config.provider, config.providerTools);
+  }
 
   await fs.promises.mkdir(AGENTS_DIR, { recursive: true });
   const filePath = agentPath(args.agentName);
@@ -163,6 +194,12 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
   console.log(`  Max iters:    ${config.maxIterations}`);
   console.log(`  Read-only:    ${config.readOnly}`);
   console.log(`  Tools:        ${config.noTools ? 'disabled' : 'workspace (cwd)'}`);
+  if (config.providerTools && config.providerTools.length > 0) {
+    console.log(`  Provider:     ${config.providerTools.join(', ')}`);
+  }
+  if (config.providerOptions) {
+    console.log(`  Options:      ${JSON.stringify(config.providerOptions)}`);
+  }
   console.log();
   console.log(`Run it: npx agent-do run ${args.agentName} "your task"`);
 }

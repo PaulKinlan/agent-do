@@ -145,3 +145,10 @@
 - `--compare <providers>` — eval: compare across providers (comma-separated)
 - `--output <format>` — eval: console | json | csv
 - `--concurrency <n>` — eval: parallel case execution
+- `--provider-tool <name>` — enable a provider-native tool (repeatable). Names resolve against the installed `<provider>.tools` surface; aliases like `webSearch` map to the latest dated export. Examples: `googleSearch`, `urlContext`, `codeExecution`, `webSearch`, `bash`, `fileSearch`.
+- `--provider-options <json>` — provider-specific options forwarded to every model call (e.g. `'{"google":{"useSearchGrounding":true}}'`). Persisted on saved agents created with the same flag.
+
+## AgentConfig provider options
+
+- `AgentConfig.providerOptions?: ProviderOptions` — `Record<string, Record<string, JSONValue>>`. Forwarded verbatim to every `streamText` call. Use for Google `useSearchGrounding`, Anthropic `thinking`, OpenAI `reasoningEffort`, etc. Anthropic prompt-cache control is set per-message and survives this merge.
+- Provider-native *tools* go in `AgentConfig.tools` as the SDK's tool factories produce them — `tools: { google_search: google.tools.googleSearch({}) }`.

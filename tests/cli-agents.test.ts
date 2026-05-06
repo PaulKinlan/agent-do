@@ -2,7 +2,38 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { loadSavedAgent } from '../src/cli/agents.js';
+import { createSavedAgent, loadSavedAgent } from '../src/cli/agents.js';
+import type { ParsedArgs } from '../src/cli/args.js';
+
+function createArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
+  return {
+    command: 'create',
+    provider: 'google',
+    model: undefined,
+    systemPrompt: 'Be helpful.',
+    workingDir: process.cwd(),
+    memoryDir: '.data',
+    withMemory: false,
+    readOnly: false,
+    maxIterations: 10,
+    noTools: false,
+    verbose: false,
+    showContent: false,
+    json: false,
+    help: false,
+    exclude: [],
+    includeSensitive: false,
+    output: 'console',
+    concurrency: 1,
+    script: false,
+    yes: false,
+    acceptAll: false,
+    allow: [],
+    providerTool: [],
+    logLevel: 'info',
+    ...overrides,
+  };
+}
 
 const originalCwd = process.cwd();
 let testDir: string;
@@ -99,6 +130,114 @@ describe('saved agents', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.name).toBe('reviewer');
     expect(loaded!.provider).toBe('anthropic');
+  });
+
+  it('loadSavedAgent round-trips providerTools and providerOptions', async () => {
+    const config = {
+      name: 'researcher',
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      systemPrompt: 'Research topics.',
+      memoryDir: '.data',
+      readOnly: false,
+      maxIterations: 10,
+      noTools: false,
+      providerTools: ['googleSearch', 'urlContext'],
+      providerOptions: { google: { useSearchGrounding: true } },
+      createdAt: '2026-05-06T00:00:00Z',
+    };
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'researcher.json'),
+      JSON.stringify(config),
+    );
+
+    const loaded = await loadSavedAgent('researcher');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.providerTools).toEqual(['googleSearch', 'urlContext']);
+    expect(loaded!.providerOptions).toEqual({
+      google: { useSearchGrounding: true },
+    });
+  });
+
+  it('loadSavedAgent rejects unknown top-level keys (strict schema)', async () => {
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'sneaky.json'),
+      JSON.stringify({
+        name: 'sneaky',
+        provider: 'google',
+        systemPrompt: 'x',
+        memoryDir: '.data',
+        readOnly: false,
+        maxIterations: 10,
+        noTools: false,
+        createdAt: '',
+        rogueKey: 'should be rejected',
+      }),
+    );
+    const loaded = await loadSavedAgent('sneaky');
+    expect(loaded).toBeNull();
+  });
+
+  it('loadSavedAgent rejects providerTools entries with invalid characters', async () => {
+    const agentDir = path.join('.agent-do', 'agents');
+    await fs.promises.mkdir(agentDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(agentDir, 'bad.json'),
+      JSON.stringify({
+        name: 'bad',
+        provider: 'google',
+        systemPrompt: 'x',
+        memoryDir: '.data',
+        readOnly: false,
+        maxIterations: 10,
+        noTools: false,
+        providerTools: ['ok-name', 'has spaces'],
+        createdAt: '',
+      }),
+    );
+    const loaded = await loadSavedAgent('bad');
+    expect(loaded).toBeNull();
+  });
+
+  it('createSavedAgent rejects --provider-tool on an unsupported provider', async () => {
+    await expect(
+      createSavedAgent(
+        createArgs({
+          agentName: 'broken',
+          provider: 'ollama',
+          providerTool: ['webSearch'],
+        }),
+      ),
+    ).rejects.toThrow(/does not support --provider-tool/);
+  });
+
+  it('createSavedAgent rejects provider-tool names that need extra config', async () => {
+    await expect(
+      createSavedAgent(
+        createArgs({
+          agentName: 'cfgneeded',
+          provider: 'openai',
+          providerTool: ['fileSearch'],
+        }),
+      ),
+    ).rejects.toThrow(/not a CLI-safe name/);
+  });
+
+  it('createSavedAgent persists valid providerTools/providerOptions', async () => {
+    await createSavedAgent(
+      createArgs({
+        agentName: 'researcher',
+        provider: 'google',
+        providerTool: ['googleSearch', 'urlContext'],
+      }),
+    );
+    const loaded = await loadSavedAgent('researcher');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.providerTools).toEqual(['googleSearch', 'urlContext']);
   });
 
   it('loadSavedAgent prefers the closest ancestor when names collide', async () => {
