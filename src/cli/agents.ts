@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
 import type { ParsedArgs } from './args.js';
+import { validateCliProviderToolNames } from './provider-tools.js';
 
 /**
  * Schema for a saved agent JSON file. See issue #22 — earlier
@@ -164,6 +165,15 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
     throw new Error(`Invalid agent config:\n${issues}`);
   }
   const config: SavedAgent = validated.data;
+
+  // Reject provider/tool combinations that are guaranteed to fail at
+  // run time (e.g. `--provider ollama --provider-tool foo`, or a
+  // `--provider-tool` name that needs extra config). Surfacing this
+  // at create-time avoids saving an unusable config that fails on
+  // every invocation.
+  if (config.providerTools && config.providerTools.length > 0) {
+    validateCliProviderToolNames(config.provider, config.providerTools);
+  }
 
   await fs.promises.mkdir(AGENTS_DIR, { recursive: true });
   const filePath = agentPath(args.agentName);

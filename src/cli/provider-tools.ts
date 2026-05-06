@@ -65,33 +65,43 @@ const CLI_SAFE: Record<string, ReadonlySet<string>> = {
 };
 
 /**
- * Short ergonomic names → canonical export names. Keep these biased
- * towards the latest dated/versioned tool, with the unversioned/short
- * name as the alias. When the SDK ships a newer dated version, bump
- * the target here so `--provider-tool webSearch` keeps meaning "the
- * current web-search tool".
+ * Short ergonomic names → ordered list of canonical export names.
  *
- * Aliases are matched only if the canonical export exists at runtime;
- * if a user is on an older SDK, the registry falls back to whatever
- * dated names that SDK does export.
+ * The resolver walks the list and picks the first entry that the
+ * installed provider SDK actually exposes. This makes
+ * `--provider-tool webSearch` keep working when a user is on an
+ * older SDK that hasn't shipped the latest dated tool yet — the
+ * alias falls back to the most recent installed variant rather than
+ * being rejected outright.
+ *
+ * Order matters: list the latest dated/versioned export first.
  */
-const ALIASES: Record<string, Record<string, string>> = {
+const ALIASES: Record<string, Record<string, readonly string[]>> = {
   google: {
     // Google's tools aren't dated, so aliases mostly mirror the
     // canonical names; entry exists so the same listing path works
     // for all three providers.
   },
   anthropic: {
-    webSearch: 'webSearch_20260209',
-    webFetch: 'webFetch_20260209',
-    bash: 'bash_20250124',
-    textEditor: 'textEditor_20250728',
-    computer: 'computer_20251124',
-    codeExecution: 'codeExecution_20260120',
-    memory: 'memory_20250818',
+    webSearch: ['webSearch_20260209', 'webSearch_20250305'],
+    webFetch: ['webFetch_20260209', 'webFetch_20250910'],
+    bash: ['bash_20250124', 'bash_20241022'],
+    textEditor: [
+      'textEditor_20250728',
+      'textEditor_20250429',
+      'textEditor_20250124',
+      'textEditor_20241022',
+    ],
+    computer: ['computer_20251124', 'computer_20250124', 'computer_20241022'],
+    codeExecution: [
+      'codeExecution_20260120',
+      'codeExecution_20250825',
+      'codeExecution_20250522',
+    ],
+    memory: ['memory_20250818'],
   },
   openai: {
-    webSearch: 'webSearchPreview',
+    webSearch: ['webSearchPreview'],
   },
 };
 
@@ -115,23 +125,68 @@ export function hasProviderTools(provider: string): boolean {
 }
 
 /**
+ * Sync pre-flight check for `--provider-tool` names. Validates that
+ * the provider supports CLI provider tools at all, and that each
+ * name is either a known alias or a CLI-safe canonical export. Used
+ * by `create` to fail fast on `--provider ollama --provider-tool ...`
+ * (and similar misconfigurations) without dynamically importing the
+ * SDK — that final compatibility check still happens at run time
+ * when `buildProviderTools` actually loads the package.
+ */
+export function validateCliProviderToolNames(
+  provider: string,
+  names: readonly string[],
+): void {
+  if (names.length === 0) return;
+  const safeSet = CLI_SAFE[provider];
+  if (!safeSet || !PROVIDER_PACKAGE[provider]) {
+    const supported = Object.keys(CLI_SAFE).sort().join(', ');
+    throw new Error(
+      `Provider "${provider}" does not support --provider-tool. ` +
+      `Supported providers: ${supported}.`,
+    );
+  }
+  const aliases = ALIASES[provider] ?? {};
+  for (const name of names) {
+    const isAlias = Object.prototype.hasOwnProperty.call(aliases, name);
+    const isSafe = safeSet.has(name);
+    if (!isAlias && !isSafe) {
+      const validNames = [
+        ...new Set([
+          ...Object.keys(aliases).filter((a) =>
+            (aliases[a] ?? []).some((t) => safeSet.has(t)),
+          ),
+          ...safeSet,
+        ]),
+      ].sort();
+      throw new Error(
+        `Provider tool "${name}" is not a CLI-safe name for provider ` +
+        `"${provider}". Valid CLI names: ${validNames.join(', ')}. ` +
+        `For tools that need extra config, define them in a script export.`,
+      );
+    }
+  }
+}
+
+/**
  * Resolve a user-typed tool name to the canonical export name on
- * `provider.tools`. Tries the alias table first, then a direct match
- * against the installed SDK's actual exports. Returns `null` if
- * neither matches.
+ * `provider.tools`. Tries the alias table first (walking each
+ * alternative in order so older SDKs fall back to whatever dated
+ * variant they ship), then a direct match against the installed
+ * SDK's actual exports. Returns `null` if neither matches.
  */
 function resolveToolName(
   provider: string,
   name: string,
   available: readonly string[],
 ): string | null {
-  const alias = ALIASES[provider]?.[name];
-  if (alias && available.includes(alias)) return alias;
+  const aliasTargets = ALIASES[provider]?.[name];
+  if (aliasTargets) {
+    for (const target of aliasTargets) {
+      if (available.includes(target)) return target;
+    }
+  }
   if (available.includes(name)) return name;
-  // If the alias target isn't in the installed SDK but the alias
-  // itself happens to exist (a user might type `webSearch` on a future
-  // SDK that exposes it directly), accept that too.
-  if (alias && available.includes(name)) return name;
   return null;
 }
 
@@ -190,7 +245,13 @@ export async function buildProviderTools(
   const aliases = ALIASES[provider] ?? {};
   const cliValidNames = [
     ...new Set([
-      ...Object.keys(aliases).filter((a) => safeSet.has(aliases[a]!)),
+      // An alias is a valid CLI name as long as *some* of its
+      // ordered targets is in the safe set. Don't require the latest
+      // target specifically — that would shadow the aliases on older
+      // SDKs that only ship earlier dated variants.
+      ...Object.keys(aliases).filter((a) =>
+        (aliases[a] ?? []).some((t) => safeSet.has(t)),
+      ),
       ...[...safeSet].filter((c) => available.includes(c)),
     ]),
   ].sort();

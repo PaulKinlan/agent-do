@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildProviderTools,
   parseProviderOptions,
   hasProviderTools,
+  validateCliProviderToolNames,
 } from '../src/cli/provider-tools.js';
 
 describe('parseProviderOptions', () => {
@@ -145,5 +146,72 @@ describe('buildProviderTools', () => {
       'google__googleSearch',
       'google__urlContext',
     ]);
+  });
+});
+
+describe('validateCliProviderToolNames', () => {
+  it('is a no-op on an empty list', () => {
+    expect(() => validateCliProviderToolNames('ollama', [])).not.toThrow();
+  });
+
+  it('rejects providers without a CLI provider-tool surface', () => {
+    expect(() =>
+      validateCliProviderToolNames('ollama', ['anything']),
+    ).toThrow(/Provider "ollama" does not support --provider-tool/);
+  });
+
+  it('accepts known aliases for the provider', () => {
+    expect(() =>
+      validateCliProviderToolNames('anthropic', ['webSearch', 'bash']),
+    ).not.toThrow();
+  });
+
+  it('accepts CLI-safe canonical names directly', () => {
+    expect(() =>
+      validateCliProviderToolNames('anthropic', ['webSearch_20250305']),
+    ).not.toThrow();
+    expect(() =>
+      validateCliProviderToolNames('google', ['googleSearch']),
+    ).not.toThrow();
+  });
+
+  it('rejects names that need extra config', () => {
+    expect(() =>
+      validateCliProviderToolNames('openai', ['fileSearch']),
+    ).toThrow(/not a CLI-safe name/);
+  });
+
+  it('rejects unknown names with a recoverable list', () => {
+    expect(() =>
+      validateCliProviderToolNames('google', ['totallyMadeUp']),
+    ).toThrow(/googleSearch/);
+  });
+});
+
+describe('alias fallback across SDK versions', () => {
+  // The resolver in `buildProviderTools` walks the alias's ordered
+  // target list and picks the first entry that exists on the
+  // installed SDK. `validateCliProviderToolNames` is sync (no SDK
+  // import), so the assertions here verify the safe-set / alias
+  // contract: every alias target is itself a valid CLI canonical
+  // name, so falling back to an older dated variant is always safe.
+  it('older dated canonical names are CLI-safe', () => {
+    expect(() =>
+      validateCliProviderToolNames('anthropic', [
+        'webSearch_20250305',
+        'codeExecution_20250522',
+        'bash_20241022',
+      ]),
+    ).not.toThrow();
+  });
+
+  it('alias names validate without an SDK pre-check', () => {
+    expect(() =>
+      validateCliProviderToolNames('anthropic', [
+        'webSearch',
+        'bash',
+        'computer',
+      ]),
+    ).not.toThrow();
   });
 });
