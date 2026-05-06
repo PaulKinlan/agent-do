@@ -97,6 +97,21 @@ describe('buildProviderTools', () => {
     expect(Object.keys(tools)).toEqual(['anthropic__webSearch_20260209']);
   });
 
+  it('prefers an exact name over an alias target', async () => {
+    // OpenAI ships both `webSearch` and `webSearchPreview`. The
+    // alias table maps `webSearch -> webSearchPreview`; the
+    // resolver MUST prefer the literal `webSearch` export so the
+    // user's typed name isn't silently rewritten to a different
+    // tool. Regression for #99 P2.
+    const tools = await buildProviderTools('openai', ['webSearch']);
+    expect(Object.keys(tools)).toEqual(['openai__webSearch']);
+  });
+
+  it('still picks `webSearchPreview` when the user asks for it explicitly', async () => {
+    const tools = await buildProviderTools('openai', ['webSearchPreview']);
+    expect(Object.keys(tools)).toEqual(['openai__webSearchPreview']);
+  });
+
   it('accepts the canonical dated name directly', async () => {
     const tools = await buildProviderTools('anthropic', ['webSearch_20260209']);
     expect(Object.keys(tools)).toEqual(['anthropic__webSearch_20260209']);

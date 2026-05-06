@@ -56,8 +56,12 @@ const CLI_SAFE: Record<string, ReadonlySet<string>> = {
     'memory_20250818',
   ]),
   openai: new Set([
-    'webSearchPreview',
+    // OpenAI ships both `webSearch` and `webSearchPreview`. Both are
+    // CLI-safe; the resolver prefers the user's literal name so the
+    // `webSearch` alias only kicks in on older SDKs that don't have
+    // the canonical `webSearch` export yet.
     'webSearch',
+    'webSearchPreview',
     'codeInterpreter',
     'imageGeneration',
     'applyPatch',
@@ -170,23 +174,29 @@ export function validateCliProviderToolNames(
 
 /**
  * Resolve a user-typed tool name to the canonical export name on
- * `provider.tools`. Tries the alias table first (walking each
- * alternative in order so older SDKs fall back to whatever dated
- * variant they ship), then a direct match against the installed
- * SDK's actual exports. Returns `null` if neither matches.
+ * `provider.tools`. Prefers an exact match against the installed
+ * SDK's actual exports, then walks the alias table in order so older
+ * SDKs fall back to whatever dated variant they ship. Returns
+ * `null` if neither matches.
+ *
+ * Order matters here: the user's literal name wins over alias
+ * resolution. Some providers ship both a short export (`webSearch`)
+ * AND a separate dated/preview export the alias points at — picking
+ * the alias target in that case would silently override the user's
+ * choice.
  */
 function resolveToolName(
   provider: string,
   name: string,
   available: readonly string[],
 ): string | null {
+  if (available.includes(name)) return name;
   const aliasTargets = ALIASES[provider]?.[name];
   if (aliasTargets) {
     for (const target of aliasTargets) {
       if (available.includes(target)) return target;
     }
   }
-  if (available.includes(name)) return name;
   return null;
 }
 
