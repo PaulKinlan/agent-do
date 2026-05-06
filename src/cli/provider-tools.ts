@@ -19,6 +19,52 @@ import { tryImport, type ProviderPackage } from './resolve-model.js';
 import type { ProviderOptions } from '../types.js';
 
 /**
+ * Tools that the CLI knows are safe to instantiate with empty args
+ * (`factory({})`) — the model can call them straight away and the
+ * provider SDK is happy without per-tool config.
+ *
+ * Many SDK exports (`fileSearch`, `mcp`, `customTool`, ...) accept
+ * `factory({})` without throwing but then fail at model-call time
+ * because they need vector store IDs, MCP server URLs, etc. The CLI
+ * can't supply that, so we reject those names early with a pointer
+ * to script mode rather than letting the run blow up midway through.
+ *
+ * Anything not on this list (and not aliased to something on this
+ * list) is rejected at `--provider-tool` validation. Adding a tool
+ * here is an explicit promise that it works with empty args; bump
+ * cautiously.
+ */
+const CLI_SAFE: Record<string, ReadonlySet<string>> = {
+  google: new Set(['googleSearch', 'urlContext', 'codeExecution']),
+  anthropic: new Set([
+    'webSearch_20260209',
+    'webSearch_20250305',
+    'webFetch_20260209',
+    'webFetch_20250910',
+    'codeExecution_20260120',
+    'codeExecution_20250825',
+    'codeExecution_20250522',
+    'bash_20250124',
+    'bash_20241022',
+    'textEditor_20250728',
+    'textEditor_20250429',
+    'textEditor_20250124',
+    'textEditor_20241022',
+    'computer_20251124',
+    'computer_20250124',
+    'computer_20241022',
+    'memory_20250818',
+  ]),
+  openai: new Set([
+    'webSearchPreview',
+    'webSearch',
+    'codeInterpreter',
+    'imageGeneration',
+    'applyPatch',
+  ]),
+};
+
+/**
  * Short ergonomic names → canonical export names. Keep these biased
  * towards the latest dated/versioned tool, with the unversioned/short
  * name as the alias. When the SDK ships a newer dated version, bump
@@ -140,15 +186,38 @@ export async function buildProviderTools(
 
   // Validate all names up front so the user sees every typo at once
   // rather than one-at-a-time on successive invocations.
+  const safeSet = CLI_SAFE[provider] ?? new Set<string>();
+  const aliases = ALIASES[provider] ?? {};
+  const cliValidNames = [
+    ...new Set([
+      ...Object.keys(aliases).filter((a) => safeSet.has(aliases[a]!)),
+      ...[...safeSet].filter((c) => available.includes(c)),
+    ]),
+  ].sort();
   const resolved: Array<{ canonical: string }> = [];
   for (const name of names) {
     const canonical = resolveToolName(provider, name, available);
     if (!canonical) {
-      const aliases = Object.keys(ALIASES[provider] ?? {});
-      const valid = [...new Set([...aliases, ...available])].sort().join(', ');
       throw new Error(
         `Unknown provider tool "${name}" for provider "${provider}". ` +
-        `Valid names: ${valid}.`,
+        `Valid CLI names: ${cliValidNames.join(', ')}.`,
+      );
+    }
+    if (!safeSet.has(canonical)) {
+      // The SDK exports this name but it needs per-tool config the
+      // CLI can't supply (vector store IDs, MCP server URL, etc.).
+      // Point users at script mode where they can pass real args.
+      throw new Error(
+        `Provider tool "${name}" requires additional configuration that the ` +
+        `CLI cannot supply. Configure it in a script export instead:\n` +
+        `\n` +
+        `  import { ${namespace} } from '${pkg}';\n` +
+        `  export default {\n` +
+        `    // ...\n` +
+        `    tools: { ${canonical}: ${namespace}.tools.${canonical}({ /* args */ }) },\n` +
+        `  };\n` +
+        `\n` +
+        `CLI-safe names for "${provider}": ${cliValidNames.join(', ')}.`,
       );
     }
     resolved.push({ canonical });
@@ -164,9 +233,29 @@ export async function buildProviderTools(
       );
     }
     const key = `${provider}__${canonical}`;
-    (built as Record<string, unknown>)[key] = (
-      fn as (args: Record<string, unknown>) => unknown
-    )({});
+    // Some provider tools take required config (OpenAI `fileSearch`
+    // needs `vectorStoreIds`, `mcp` needs `serverLabel`+URL, etc.).
+    // The CLI can only pass `{}`, so a missing-arg throw inside the
+    // factory becomes a confusing failure later in the run. Catch it
+    // here and surface a clear "use a script export" message instead.
+    try {
+      (built as Record<string, unknown>)[key] = (
+        fn as (args: Record<string, unknown>) => unknown
+      )({});
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Provider tool "${canonical}" for provider "${provider}" requires ` +
+        `additional configuration that the CLI cannot supply ` +
+        `(${detail}). Configure this tool in a script export instead:\n` +
+        `\n` +
+        `  import { ${namespace} } from '${pkg}';\n` +
+        `  export default {\n` +
+        `    // ...\n` +
+        `    tools: { ${canonical}: ${namespace}.tools.${canonical}({ /* args */ }) },\n` +
+        `  };`,
+      );
+    }
   }
   return built;
 }

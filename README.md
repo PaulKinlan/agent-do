@@ -193,12 +193,19 @@ npx agent-do "latest research on graph neural networks" \
 ```
 
 `--provider-tool` is repeatable and can take comma-separated values
-(`--provider-tool googleSearch,urlContext`). Names are resolved
-against the installed provider SDK's `<provider>.tools` surface — any
-real export works (including newer ones the README hasn't caught up
-to). A small alias table maps short names to the latest dated
-versions: `webSearch → webSearch_20260209`, `bash → bash_20250124`,
-etc.
+(`--provider-tool googleSearch,urlContext`). A small alias table
+maps short names to the latest dated versions:
+`webSearch → webSearch_20260209`, `bash → bash_20250124`, etc.
+
+The CLI only accepts tools that work with empty config — currently
+`googleSearch`, `urlContext`, `codeExecution`, `webSearch`,
+`webFetch`, `bash`, `textEditor`, `computer`, `memory`,
+`webSearchPreview`, `codeInterpreter`, `imageGeneration`,
+`applyPatch`. Tools that need per-tool args (`fileSearch` →
+`vectorStoreIds`, `mcp` → server URL, `customTool` → name/description,
+…) must be configured from a script export so you can pass real args.
+Trying to enable one from the CLI fails fast with a copy-pasteable
+script-mode snippet.
 
 The same fields are first-class on saved agents and `AgentConfig`:
 

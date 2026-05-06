@@ -111,6 +111,29 @@ describe('buildProviderTools', () => {
     ).rejects.toThrow(/googleSearch/);
   });
 
+  it('rejects tools that need extra config and points at script mode', async () => {
+    // OpenAI `fileSearch` is a real export but needs `vectorStoreIds`,
+    // which the CLI can't supply. Reject up front rather than crashing
+    // mid-run.
+    await expect(
+      buildProviderTools('openai', ['fileSearch']),
+    ).rejects.toThrow(/requires additional configuration/);
+    await expect(
+      buildProviderTools('openai', ['fileSearch']),
+    ).rejects.toThrow(/script export/);
+    // The error should still surface the CLI-safe names so the user
+    // can recover without reading the docs.
+    await expect(
+      buildProviderTools('openai', ['fileSearch']),
+    ).rejects.toThrow(/webSearch/);
+  });
+
+  it('rejects Google enterpriseWebSearch (needs project config)', async () => {
+    await expect(
+      buildProviderTools('google', ['enterpriseWebSearch']),
+    ).rejects.toThrow(/requires additional configuration/);
+  });
+
   it('builds multiple tools in one call', async () => {
     const tools = await buildProviderTools('google', [
       'googleSearch',
