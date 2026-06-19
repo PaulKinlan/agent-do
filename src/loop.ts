@@ -80,6 +80,7 @@ import {
 } from './skills.js';
 import { mountMcpServers, type MountedMcpServers } from './mcp.js';
 import { createRoutineTools } from './routines.js';
+import { buildPoliciesPrompt } from './policies.js';
 import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
@@ -248,6 +249,21 @@ async function buildSystemPrompt(
         parts.push(skillsSection);
         parts.push(buildSkillUsageInstruction(mode));
       }
+    }
+  }
+
+  // Policies (#80).
+  //
+  // Operator-authored typed system-prompt modules (priorities,
+  // resolution modes, routing rules). Unlike skills these are a plain
+  // array, not a store, and there's no LLM install tool — a model that
+  // could rewrite its own policy would plant a persistent jailbreak.
+  // Rendered in their own marked section with the same injection-safety
+  // wrapper skills use, so a hostile body can't break out.
+  if (config.policies && config.policies.length > 0) {
+    const policiesSection = buildPoliciesPrompt(config.policies);
+    if (policiesSection) {
+      parts.push(policiesSection);
     }
   }
 

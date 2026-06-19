@@ -42,6 +42,16 @@ export {
 export type { CreateRoutineToolsOptions } from './routines.js';
 export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
+// Policies — typed system-prompt modules (#80)
+export {
+  createPolicy,
+  parsePolicyMd,
+  buildPoliciesPrompt,
+  InMemoryPolicyStore,
+} from './policies.js';
+export type { PolicyInput } from './policies.js';
+export type { Policy, PolicyStore } from './types.js';
+
 // The three consumer-facing tool factories.
 //
 // - createMemoryTools — the agent's private scratchpad (memory_*).
