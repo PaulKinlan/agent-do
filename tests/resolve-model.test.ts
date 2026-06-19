@@ -5,6 +5,7 @@ const ENV_VARS = [
   'ANTHROPIC_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'OPENAI_API_KEY',
+  'ZAI_API_KEY',
 ] as const;
 
 describe('resolveModel — API key preflight', () => {
@@ -37,8 +38,22 @@ describe('resolveModel — API key preflight', () => {
     await expect(resolveModel('openai')).rejects.toThrow(/OPENAI_API_KEY/);
   });
 
+  it('throws when ZAI_API_KEY is missing', async () => {
+    await expect(resolveModel('zai')).rejects.toThrow(/ZAI_API_KEY/);
+    await expect(resolveModel('zai')).rejects.toThrow(/Missing API key/);
+  });
+
   it('does not require an API key for ollama', async () => {
     const model = await resolveModel('ollama');
+    expect(model).toBeDefined();
+  });
+
+  it('proceeds for zai when a plausible key is present (OpenAI-compatible client, no network)', async () => {
+    // zai reuses @ai-sdk/openai against Z.ai's endpoint. Constructing the
+    // provider/model does not hit the network — only generateText would —
+    // so this is safe to assert without a live key.
+    process.env.ZAI_API_KEY = 'zai-stub-key';
+    const model = await resolveModel('zai');
     expect(model).toBeDefined();
   });
 

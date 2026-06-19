@@ -17,6 +17,7 @@ const DEFAULT_MODELS = new Map<string, string>([
   ['google', 'gemini-2.5-flash'],
   ['openai', 'gpt-4.1-mini'],
   ['ollama', 'llama3.2'],
+  ['zai', 'glm-4.6'],
 ]);
 
 /**
@@ -28,12 +29,14 @@ const REQUIRED_ENV = new Map<string, string | null>([
   ['google', 'GOOGLE_GENERATIVE_AI_API_KEY'],
   ['openai', 'OPENAI_API_KEY'],
   ['ollama', null],
+  ['zai', 'ZAI_API_KEY'],
 ]);
 
 const PROVIDER_HINTS = new Map<string, string>([
   ['anthropic', 'https://console.anthropic.com/'],
   ['google', 'https://aistudio.google.com/'],
   ['openai', 'https://platform.openai.com/api-keys'],
+  ['zai', 'https://z.ai/'],
 ]);
 
 function assertApiKey(provider: string): void {
@@ -87,6 +90,19 @@ export async function resolveModel(
       return createOpenAI({
         baseURL: process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434/v1',
         apiKey: 'ollama',
+      })(id) as LanguageModel;
+    }
+    case 'zai': {
+      // Z.ai (Zhipu AI / GLM) exposes an OpenAI-compatible API, so we reuse
+      // the bundled @ai-sdk/openai against Z.ai's endpoint — no extra
+      // dependency required. Override the endpoint with ZAI_BASE_URL (e.g.
+      // for the GLM Coding Plan endpoint at /api/coding/paas/v4).
+      // Docs: https://docs.z.ai
+      const { createOpenAI } = await tryImport('@ai-sdk/openai', 'zai (via @ai-sdk/openai)', 'createOpenAI');
+      return createOpenAI({
+        baseURL: process.env.ZAI_BASE_URL ?? 'https://api.z.ai/api/paas/v4',
+        apiKey: process.env.ZAI_API_KEY,
+        name: 'zai',
       })(id) as LanguageModel;
     }
     default:
