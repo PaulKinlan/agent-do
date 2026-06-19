@@ -1335,9 +1335,12 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
 | 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
 | 13 | [`13-eval-framework.ts`](examples/13-eval-framework.ts) | Eval framework — define cases, assert quality, compare providers |
+| 14 | [`14-mcp.ts`](examples/14-mcp.ts) | Mount external MCP servers and expose their tools to the agent |
+| 15 | [`15-routines.ts`](examples/15-routines.ts) | Saved routines — reusable named procedures with `{{arg}}` interpolation |
 | 16 | [`16-sandbox-bash.ts`](examples/16-sandbox-bash.ts) | Pluggable sandbox + `bash` tool (host connector) |
 | 17 | [`17-sandbox-with-memory.ts`](examples/17-sandbox-with-memory.ts) | Sandbox alongside `InMemoryMemoryStore` (different substrates) |
 | 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
+| 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
