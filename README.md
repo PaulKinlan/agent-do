@@ -523,6 +523,56 @@ const answer = await assistant.run('Hello!');
 const research = await researcher.run('Find info about TypeScript');
 ```
 
+## Slash Commands
+
+Deterministic pre-model dispatch keyed on the first token of the task.
+When a user's input starts with `/<name>`, the loop routes the
+remainder to a configured sub-agent **before any model call on the
+parent** — zero LLM tokens, zero tool round-trips. Contrast with the
+orchestrator's `delegate_task`, where the *model* decides to delegate.
+
+```ts
+import { createAgent } from 'agent-do';
+
+const parent = createAgent({
+  id: 'parent',
+  name: 'Parent',
+  model,
+  slashCommands: {
+    research: createAgent({ id: 'research', name: 'Researcher', model: cheapModel, /* own tools/skills */ }),
+    review:   createAgent({ id: 'review',   name: 'Reviewer',   model }),
+  },
+});
+
+await parent.run('/research quantum cryptography');
+//   → runs the `research` sub-agent with task 'quantum cryptography'
+await parent.run('/review');
+//   → runs `review` with empty args
+await parent.run('/ship');
+//   → Unknown slash command "/ship". Available commands: /research, /review.
+//     (no model called — the listing is returned as the final text)
+await parent.run('what is the weather?');
+//   → parent handles it as normal (non-slash input bypasses the router)
+```
+
+Keys must match `/^[a-zA-Z0-9_-]+$/`; values must be `Agent` instances.
+Sub-agents are full agents, so each carries its own model, tools, skills,
+routines, permissions, and hooks. **Nested slash commands (`/a/b`) are
+not supported** — dispatch is a single deterministic hop, validated at
+`createAgent()` time.
+
+A path-shaped task like `/etc/hosts` is **not** treated as a command
+(the name must be command-shaped), so it falls through to the parent.
+
+The CLI passes input through unchanged, so `npx agent-do run <agent>
+"/research quantum cryptography"` routes correctly. Parent conversation
+history is **not** forwarded to the sub-agent by default — the
+sub-agent starts a fresh turn with just the remainder (and the same
+`context`, if any).
+
+`parseSlashCommand(input)` and `unknownSlashCommandMessage(name, commands)`
+are exported for callers that want to inspect or build routing themselves.
+
 ## Tools
 
 Define tools using the Vercel AI SDK's `tool()` function:
@@ -1366,6 +1416,9 @@ const result = await runEvals(suite, { output: 'silent' });
 | `InMemoryMemoryStore` | class | In-memory store (testing/prototyping) |
 | `FilesystemMemoryStore` | class | Node.js filesystem store (persistent) |
 | `createOrchestrator` | `(config) => Orchestrator` | Create a multi-agent orchestrator |
+| `parseSlashCommand` | `(input) => { name, rest } \| null` | Parse a `/<name>` slash command from a task string |
+| `unknownSlashCommandMessage` | `(name, commands) => string` | Build the "unknown command" listing |
+| `validateSlashCommands` | `(commands) => string \| null` | Validate an `AgentConfig.slashCommands` map |
 | `evaluatePermission` | `(toolName, args, config) => Promise<boolean>` | Evaluate a permission check |
 | `UsageTracker` | class | Track usage and costs within a run |
 | `estimateCost` | `(model, input, output, pricing?) => number` | Estimate cost in USD |
@@ -1464,6 +1517,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
 | 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
 | 20 | [`20-policies.ts`](examples/20-policies.ts) | Typed system-prompt modules — priority-map + auto-resolver policy pair |
+| 21 | [`21-slash-commands.ts`](examples/21-slash-commands.ts) | Slash-command router — deterministic `/<name>` dispatch to sub-agents |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

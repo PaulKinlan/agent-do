@@ -75,6 +75,16 @@
 - Master gets: delegate_task, list_agents, get_agent_status tools
 - `orchestrator.run(task)` / `orchestrator.stream(task)`
 
+## Slash Commands (#76)
+
+- `AgentConfig.slashCommands?: Record<string, Agent>` — deterministic pre-model dispatch keyed on the first token
+- `/<name> <rest>` routes to the sub-agent with `rest`; unknown `/<name>` returns a listing (no model call); non-slash input bypasses the router
+- Sub-agents are full Agent instances (own model/tools/skills); nested `/a/b` is rejected at `createAgent()` time
+- Parent history is NOT forwarded by default
+- `parseSlashCommand(input): { name, rest } | null` — inspect routing yourself
+- `unknownSlashCommandMessage(name, commands): string` — build the listing
+- `validateSlashCommands(commands): string | null` — validate a map
+
 ## Lifecycle Hooks
 
 - `onPreToolUse(event)` — before tool call, return HookDecision to allow/deny/modify

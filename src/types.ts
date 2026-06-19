@@ -619,6 +619,40 @@ export interface AgentConfig {
    * overhead for the default path.
    */
   debug?: DebugConfig;
+  /**
+   * User-facing slash-command router (#76) — deterministic pre-model
+   * dispatch keyed on the *first token* of the task.
+   *
+   * When the task starts with `/<name>`, the loop extracts `name` +
+   * the remainder and runs the configured sub-agent with that
+   * remainder — BEFORE any model call on the parent, before MCP
+   * mount. Routing is structural, so it costs zero LLM tokens and
+   * zero tool round-trips. Contrast with the orchestrator's
+   * `delegate_task`, where the *model* decides to delegate.
+   *
+   * Behaviour:
+   *   - `/research quantum cryptography` → runs the `research`
+   *     sub-agent with task `'quantum cryptography'`.
+   *   - `/<name>` not in the map → returns a listing of available
+   *     commands as the final text, without calling the parent model.
+   *   - Input not starting with `/<valid-name>` → today's behaviour,
+   *     unchanged (the parent agent handles the turn).
+   *
+   * Sub-agents are full {@link Agent} instances, so each can carry its
+   * own model, tools, skills, routines, permissions, and hooks.
+   *
+   * Validated at `createAgent()` time: keys must match
+   * `/^[a-zA-Z0-9_-]+$/`, values must be `Agent` instances, and a
+   * sub-agent may not itself define `slashCommands` — nested slash
+   * commands (`/a/b`) are not supported (dispatch is one hop).
+   *
+   * Parent conversation history is **not** forwarded to the sub-agent
+   * by default — the sub-agent starts a fresh turn with just the
+   * remainder (and the same `context`, if any). This keeps dispatch
+   * predictable; wire history forwarding explicitly in your own
+   * caller if you need it.
+   */
+  slashCommands?: Record<string, Agent>;
 }
 
 // A message in conversation history

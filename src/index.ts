@@ -86,6 +86,13 @@ export {
 // Orchestrator
 export { createOrchestrator } from './orchestrator.js';
 
+// Slash-command router (#76) — deterministic pre-model dispatch.
+export {
+  parseSlashCommand,
+  unknownSlashCommandMessage,
+  validateSlashCommands,
+} from './slash-commands.js';
+
 // Types
 export type {
   ProgressEvent,
