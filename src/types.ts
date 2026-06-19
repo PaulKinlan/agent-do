@@ -279,6 +279,57 @@ export interface RoutineStore {
   recordRun(id: string): Promise<void>;
 }
 
+// ─── Policies (#80) ─────────────────────────────────────────────────────
+
+/**
+ * A policy — a typed system-prompt module that grounds every decision
+ * on every turn (priorities, resolution modes, routing rules).
+ *
+ * Policies differ from skills in *what they carry*: skills are
+ * capability instructions that fire when a task matches their
+ * description; policies are constraints / context that apply
+ * regardless of task. The canonical pair is a `priority-map` plus an
+ * `auto-resolver` (see issue #80).
+ *
+ * Policy bodies are wrapped in `<policy>…</policy>` markers in the
+ * system prompt with the same injection-safety preamble skills use,
+ * so a hostile body cannot break out of its wrapper.
+ */
+export interface Policy {
+  /** Unique id (kebab-case; alphanumerics, dashes, underscores). */
+  id: string;
+  /**
+   * Policy taxonomy entry. Known values: `'prioritisation'`,
+   * `'resolution'`. Kept as a free-form string so authors can define
+   * their own taxonomy (`'security'`, `'compliance'`, …).
+   */
+  type: string;
+  /** The policy body — markdown, applied on every turn. */
+  content: string;
+  /** Optional version stamp (string; coerced from numeric YAML). */
+  version?: string;
+}
+
+/**
+ * Storage interface for policies.
+ *
+ * Implementations are expected to be local (in-memory, filesystem,
+ * SQLite, …). Unlike skills/routines there is **no** LLM-facing
+ * install tool — policies are operator-authored, and a model that
+ * could rewrite its own policy could plant a persistent jailbreak
+ * (same threat model as `allowSkillInstall`, applied upstream).
+ *
+ * Deliberately has no `url` / network field, mirroring
+ * {@link SkillSearchResult}: a network-backed policy registry that
+ * auto-fetches would be an SSRF / supply-chain footgun (#34).
+ */
+export interface PolicyStore {
+  list(): Promise<Policy[]>;
+  get(id: string): Promise<Policy | undefined>;
+  install(policy: Policy): Promise<void>;
+  remove(id: string): Promise<void>;
+}
+
 // Usage record
 export interface UsageRecord {
   timestamp: string;
@@ -415,6 +466,14 @@ export interface AgentConfig {
    * by name. Same threat model as {@link allowSkillInstall}.
    */
   allowRoutineSave?: boolean;
+  /**
+   * Policies — typed system-prompt modules that ground every decision
+   * (#80). Unlike skills/routines these are supplied as a plain array
+   * (operator-authored, no LLM install tool) and inject into a
+   * well-marked `## Policies` section that applies on every turn.
+   * Rendered with the same injection-safety wrapper skills use.
+   */
+  policies?: Policy[];
   /**
    * How installed skills are injected into the system prompt (#74).
    *

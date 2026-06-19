@@ -62,6 +62,13 @@
 - `buildSkillsPrompt(skills: Skill[]): string` — build system prompt section
 - `createSkillTools(store: SkillStore): ToolSet` — search/install/list/remove skills
 
+## Policies
+
+- `createPolicy({ id, type, content } | { id, type, source }): Policy` — build a typed policy (object or POLICY.md source)
+- `parsePolicyMd(content, id?): Policy` — parse a policy doc with YAML frontmatter
+- `buildPoliciesPrompt(policies: Policy[]): string` — build the `## Policies` system-prompt section
+- `InMemoryPolicyStore` — in-memory policy storage (install/list/get/remove)
+
 ## Orchestration
 
 - `createOrchestrator(config: OrchestratorConfig): Orchestrator` — master + workers

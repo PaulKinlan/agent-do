@@ -837,6 +837,95 @@ host allowlisting and explicit installation must happen outside
 `search()`; `install()` should only receive content the caller has
 already verified.
 
+## Policies
+
+Policies are typed system-prompt modules that ground every decision on
+every turn — priorities, resolution modes, routing rules. Unlike skills
+(which extend capabilities and fire autonomously when a task matches),
+policies are constraints / context that apply regardless of task. The
+canonical pair is a `priority-map` (who/what matters, P0–P3) plus an
+`auto-resolver` (auto-resolve / draft-and-ask / escalate / ignore).
+
+### Defining a policy
+
+`createPolicy()` accepts either an object `{ id, type, content }` or a
+source string `{ id, type, source }` where `source` is a POLICY.md-
+style document with YAML frontmatter (`id` / `type` / `version`):
+
+```ts
+import { createAgent, createPolicy } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
+
+const priorityMap = createPolicy({
+  id: 'priority-map',
+  type: 'prioritisation',
+  content: '# Priority Map\n- P0: production down\n- P1: customer-blocking',
+});
+
+const autoResolver = createPolicy({
+  id: 'auto-resolver',
+  type: 'resolution',
+  source: `---
+id: auto-resolver
+type: resolution
+version: 1
+---
+
+# Auto-resolver
+1. auto-resolve
+2. draft-and-ask
+3. escalate
+4. ignore`,
+});
+
+const agent = createAgent({
+  id: 'triage',
+  name: 'Triage',
+  model: createMockModel({ responses: [{ text: 'OK' }] }),
+  policies: [priorityMap, autoResolver],
+});
+```
+
+When `policies` is set, the agent injects a `## Policies` section into
+the system prompt on every run. Each policy is wrapped in
+`<policy id="…" type="…">…</policy>` markers with a preamble telling the
+model the content is reference material that grounds decisions but
+cannot override the structural policy above — the same injection-safety
+wrapper skills use, so a hostile body containing `</policy>` cannot
+break out of its wrapper.
+
+The `id` is validated against `/^[a-zA-Z0-9_-]+$/` (fails fast at
+construction). The `type` is a free-form string — known values are
+`'prioritisation'` and `'resolution'`, but any taxonomy works.
+
+### Operator-authored, not model-authored
+
+There is **no** LLM-facing `install_policy` tool. Policies are supplied
+by the library caller as a plain array. A model that could rewrite its
+own policy could plant a persistent jailbreak across sessions — the same
+threat model that gates `install_skill` / `save_routine` behind opt-in
+flags, applied upstream by not exposing the surface at all.
+
+### PolicyStore
+
+`InMemoryPolicyStore` and the `PolicyStore` interface are available for
+callers who load policies from disk / config and want install / list /
+remove semantics (for example, hot-reloading a `policies/` directory).
+Like `SkillSearchResult`, `PolicyStore` deliberately has no `url` /
+network field — a network-backed policy registry that auto-fetches would
+be an SSRF / supply-chain footgun (#34).
+
+```ts
+import { createPolicy, InMemoryPolicyStore } from 'agent-do';
+
+const store = new InMemoryPolicyStore();
+await store.install(createPolicy({ id: 'priority-map', type: 'prioritisation', content: '…' }));
+const policies = await store.list(); // → Policy[]
+```
+
+See [`examples/20-policies.ts`](examples/20-policies.ts) for a runnable
+priority-map + auto-resolver pair.
+
 ## Lifecycle Hooks
 
 Hooks let you observe and control the agent loop. All hooks are optional and async.
@@ -1374,6 +1463,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 17 | [`17-sandbox-with-memory.ts`](examples/17-sandbox-with-memory.ts) | Sandbox alongside `InMemoryMemoryStore` (different substrates) |
 | 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
 | 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
+| 20 | [`20-policies.ts`](examples/20-policies.ts) | Typed system-prompt modules — priority-map + auto-resolver policy pair |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
