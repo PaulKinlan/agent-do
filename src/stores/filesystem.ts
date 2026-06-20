@@ -35,10 +35,12 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import type { MemoryStore, FileEntry, SearchOptions } from '../stores.js';
 import type { FilesystemMemoryStoreOptions } from '../types.js';
 import { buildLineMatcher } from './search-matcher.js';
 import { validateAgentId } from './agent-id.js';
+import { withFileLock } from './file-lock.js';
 
 export type { FilesystemMemoryStoreOptions } from '../types.js';
 
@@ -159,35 +161,42 @@ export class FilesystemMemoryStore implements MemoryStore {
   async write(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'write');
     const full = await this.resolve(agentId, filePath);
-    await fsp.mkdir(path.dirname(full), { recursive: true });
-    await fsp.writeFile(full, content, 'utf-8');
+    await this.mutateLocked(agentId, full, () => atomicWrite(full, content));
   }
 
   async append(agentId: string, filePath: string, content: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'append');
     const full = await this.resolve(agentId, filePath);
-    await fsp.mkdir(path.dirname(full), { recursive: true });
-    await fsp.appendFile(full, content, 'utf-8');
+    await this.mutateLocked(agentId, full, async () => {
+      await fsp.mkdir(path.dirname(full), { recursive: true });
+      // Append uses a plain appendFile under the lock. (No temp+rename here
+      // because append is inherently additive — a reader might see a partial
+      // last line, which is the pre-existing contract. The lock still
+      // serialises appends so two writers don't interleave.)
+      await fsp.appendFile(full, content, 'utf-8');
+    });
   }
 
   async delete(agentId: string, filePath: string): Promise<void> {
     await this.checkWrite(agentId, filePath, 'delete');
     const full = await this.resolve(agentId, filePath);
-    try {
-      await fsp.unlink(full);
-    } catch (err) {
-      // Match the previous `existsSync` precheck behaviour: delete is
-      // idempotent for any path that doesn't refer to a real file. The
-      // pre-migration code silently returned on ENOENT and also on
-      // paths like `"file.txt/child"` (where `existsSync` returned
-      // false). async `unlink` surfaces the latter as `ENOTDIR` on
-      // POSIX, `ENOTDIR`/`ENOENT` on Windows — treat all three as
-      // "nothing to delete" so hallucinated nested paths from the
-      // model don't surface as tool errors.
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') return;
-      throw err;
-    }
+    await this.mutateLocked(agentId, full, async () => {
+      try {
+        await fsp.unlink(full);
+      } catch (err) {
+        // Match the previous `existsSync` precheck behaviour: delete is
+        // idempotent for any path that doesn't refer to a real file. The
+        // pre-migration code silently returned on ENOENT and also on
+        // paths like `"file.txt/child"` (where `existsSync` returned
+        // false). async `unlink` surfaces the latter as `ENOTDIR` on
+        // POSIX, `ENOTDIR`/`ENOENT` on Windows — treat all three as
+        // "nothing to delete" so hallucinated nested paths from the
+        // model don't surface as tool errors.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return;
+        throw err;
+      }
+    });
   }
 
   async list(agentId: string, dirPath?: string): Promise<FileEntry[]> {
@@ -221,7 +230,40 @@ export class FilesystemMemoryStore implements MemoryStore {
 
   async mkdir(agentId: string, dirPath: string): Promise<void> {
     await this.checkWrite(agentId, dirPath, 'mkdir');
-    await fsp.mkdir(await this.resolve(agentId, dirPath), { recursive: true });
+    const full = await this.resolve(agentId, dirPath);
+    // mkdir has no file body to corrupt, but we still take the lock so a
+    // concurrent writer/deleter on the same path can't race the directory
+    // into existence. read/list remain unlocked.
+    await this.mutateLocked(agentId, full, () => fsp.mkdir(full, { recursive: true }));
+  }
+
+  /**
+   * Run a mutating fs op, optionally under the cross-process file lock.
+   *
+   * `lockDirRoot` derives from baseDir so the `.locks/` tree lives alongside
+   * agent data and is shared by every process pointing at the same baseDir.
+   * When `options.lock` is unset this is a thin `await fn()` wrapper — zero
+   * behaviour change versus the pre-#15 store.
+   */
+  private async mutateLocked<T>(
+    agentId: string,
+    canonicalPath: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const lock = this.options.lock;
+    if (!lock) {
+      await fsp.mkdir(path.dirname(canonicalPath), { recursive: true }).catch(() => {});
+      return fn();
+    }
+    return withFileLock(canonicalPath, agentId, this.lockDirRoot(), lock, async () => {
+      await fsp.mkdir(path.dirname(canonicalPath), { recursive: true }).catch(() => {});
+      return fn();
+    });
+  }
+
+  /** `<baseDir>/.locks` — shared across agents, invisible to per-agent list(). */
+  private lockDirRoot(): string {
+    return path.join(this.baseDir, '.locks');
   }
 
   async exists(agentId: string, filePath: string): Promise<boolean> {
@@ -298,6 +340,28 @@ export class FilesystemMemoryStore implements MemoryStore {
         /* skip binary / unreadable files */
       }
     }
+  }
+}
+
+/**
+ * Atomic write: temp file in the same dir, then rename (#15 Tier 1).
+ *
+ * `rename(2)` is atomic on POSIX (the dir entry flips in one step) and
+ * overwrites-atomically on Windows (REPLACE_EXISTING semantics). Writing
+ * the body to a sibling temp file first means a concurrent **unlocked**
+ * reader (read() takes no lock by design) can never observe a partially
+ * flushed file — it sees either the previous content or the new content,
+ * never a torn write. The temp file is cleaned up on failure.
+ */
+async function atomicWrite(full: string, content: string): Promise<void> {
+  await fsp.mkdir(path.dirname(full), { recursive: true });
+  const tmp = `${full}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fsp.writeFile(tmp, content, 'utf-8');
+    await fsp.rename(tmp, full);
+  } catch (err) {
+    await fsp.unlink(tmp).catch(() => { /* best effort; already gone */ });
+    throw err;
   }
 }
 

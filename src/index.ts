@@ -131,6 +131,10 @@ export type { MemoryStore, FileEntry, SearchOptions } from './stores.js';
 export { InMemoryMemoryStore } from './stores/in-memory.js';
 export { FilesystemMemoryStore } from './stores/filesystem.js';
 export type { FilesystemMemoryStoreOptions } from './types.js';
+// File locking (#15 Tier 1) — opt-in cross-process safety for the filesystem store.
+export { acquireFileLock, withFileLock } from './stores/file-lock.js';
+export type { FileLockOptionsInternal } from './stores/file-lock.js';
+export type { FileLockOptions, LockHandle, LockAdapter } from './types.js';
 export { SandboxBackedMemoryStore } from './stores/sandbox.js';
 export type { SandboxBackedMemoryStoreOptions } from './stores/sandbox.js';
 
