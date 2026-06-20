@@ -80,9 +80,14 @@ import {
 } from './skills.js';
 import { mountMcpServers, type MountedMcpServers } from './mcp.js';
 import { createRoutineTools } from './routines.js';
+import { buildPoliciesPrompt } from './policies.js';
 import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
+import {
+  parseSlashCommand,
+  unknownSlashCommandMessage,
+} from './slash-commands.js';
 
 const DEFAULT_HISTORY_KEEP_WINDOW = 1;
 
@@ -248,6 +253,21 @@ async function buildSystemPrompt(
         parts.push(skillsSection);
         parts.push(buildSkillUsageInstruction(mode));
       }
+    }
+  }
+
+  // Policies (#80).
+  //
+  // Operator-authored typed system-prompt modules (priorities,
+  // resolution modes, routing rules). Unlike skills these are a plain
+  // array, not a store, and there's no LLM install tool — a model that
+  // could rewrite its own policy would plant a persistent jailbreak.
+  // Rendered in their own marked section with the same injection-safety
+  // wrapper skills use, so a hostile body can't break out.
+  if (config.policies && config.policies.length > 0) {
+    const policiesSection = buildPoliciesPrompt(config.policies);
+    if (policiesSection) {
+      parts.push(policiesSection);
     }
   }
 
@@ -618,11 +638,74 @@ async function mountConfigMcp(
 }
 
 /**
+ * Deterministic slash-command dispatch for the non-streaming loop
+ * (#76). Runs before any model call and before MCP mount, so routing
+ * costs zero LLM tokens and never spins up the parent's servers.
+ *
+ * Returns a complete {@link RunResult} when the task is a slash
+ * command (whether the command exists or not), or `null` to let the
+ * normal loop take over.
+ *
+ * Usage accounting across the dispatch boundary is intentionally not
+ * surfaced: the sub-agent tracks its own usage internally and the
+ * parent's {@link UsageTracker} never ran, so the returned usage is
+ * zeroed. Steps is `1` on a successful dispatch (one sub-agent turn)
+ * and `0` on an unknown command (no model ran at all).
+ */
+async function tryRouteSlashCommandRun(
+  config: AgentConfig,
+  task: string,
+  context?: string,
+): Promise<RunResult | null> {
+  if (!config.slashCommands) return null;
+  const parsed = parseSlashCommand(task);
+  if (!parsed) return null;
+
+  const sub = config.slashCommands[parsed.name];
+  if (sub) {
+    // History is deliberately not forwarded (see AgentConfig.slashCommands
+    // docs) — the sub-agent starts a fresh turn with the remainder.
+    const text = await sub.run(parsed.rest, context);
+    return {
+      text,
+      usage: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCost: 0,
+        steps: 1,
+        records: [],
+      },
+      steps: 1,
+      aborted: false,
+    };
+  }
+
+  // Unknown command — surface the listing as the final text. No model
+  // call, so steps is 0.
+  return {
+    text: unknownSlashCommandMessage(parsed.name, config.slashCommands),
+    usage: {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCost: 0,
+      steps: 0,
+      records: [],
+    },
+    steps: 0,
+    aborted: false,
+  };
+}
+
+/**
  * Run the agent loop and return the final result.
  *
  * If `config.mcpServers` is set, the servers are mounted at the start
  * and closed after the run completes (or errors) so the caller doesn't
  * have to manage their lifecycle manually.
+ *
+ * Slash-command dispatch (#76) happens first: when the task starts
+ * with `/<name>`, the configured sub-agent runs instead of the parent
+ * model — deterministically, with zero LLM cost.
  */
 export async function runAgentLoop(
   config: AgentConfig,
@@ -630,6 +713,11 @@ export async function runAgentLoop(
   context?: string,
   history?: ConversationMessage[],
 ): Promise<RunResult> {
+  // Deterministic slash-command dispatch — before any model call,
+  // before MCP mount. Zero LLM cost; routing is structural (#76).
+  const routed = await tryRouteSlashCommandRun(config, task, context);
+  if (routed) return routed;
+
   const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
   try {
     return await runAgentLoopDirect(resolvedConfig, task, context, history);
@@ -883,6 +971,12 @@ async function runAgentLoopDirect(
  * If `config.mcpServers` is set, the servers are mounted at the start
  * and closed after the generator completes (or the caller returns early),
  * so MCP subprocesses don't leak.
+ *
+ * Slash-command dispatch (#76) happens first: when the task starts
+ * with `/<name>`, the configured sub-agent's stream is forwarded
+ * verbatim (after a single `thinking` announcement so consumers can
+ * observe the dispatch). An unknown command yields the listing as the
+ * final `text` + `done`, without calling the parent model.
  */
 export async function* streamAgentLoop(
   config: AgentConfig,
@@ -890,6 +984,36 @@ export async function* streamAgentLoop(
   context?: string,
   history?: ConversationMessage[],
 ): AsyncGenerator<ProgressEvent> {
+  // Deterministic slash-command dispatch — before any model call,
+  // before MCP mount (#76).
+  if (config.slashCommands) {
+    const parsed = parseSlashCommand(task);
+    if (parsed) {
+      const sub = config.slashCommands[parsed.name];
+      if (sub) {
+        // Announce the dispatch via an existing event type so the
+        // ProgressEvent union stays unchanged (zero-surface-change).
+        // `thinking` is the closest existing semantic — a status line
+        // the consumer can render or ignore. Forwarding the sub-agent's
+        // stream verbatim then gives a coherent event flow.
+        yield {
+          type: 'thinking',
+          content: `Dispatching "/${parsed.name}" to ${sub.name}…`,
+          step: 0,
+          totalSteps: 1,
+        };
+        yield* sub.stream(parsed.rest, context);
+        return;
+      }
+
+      // Unknown command — listing as the final text, no model call.
+      const msg = unknownSlashCommandMessage(parsed.name, config.slashCommands);
+      yield { type: 'text', content: msg, step: 0, totalSteps: 0 };
+      yield { type: 'done', content: msg, step: 0, totalSteps: 0 };
+      return;
+    }
+  }
+
   const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
   try {
     yield* streamAgentLoopDirect(resolvedConfig, task, context, history);

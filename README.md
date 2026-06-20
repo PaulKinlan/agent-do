@@ -523,6 +523,56 @@ const answer = await assistant.run('Hello!');
 const research = await researcher.run('Find info about TypeScript');
 ```
 
+## Slash Commands
+
+Deterministic pre-model dispatch keyed on the first token of the task.
+When a user's input starts with `/<name>`, the loop routes the
+remainder to a configured sub-agent **before any model call on the
+parent** — zero LLM tokens, zero tool round-trips. Contrast with the
+orchestrator's `delegate_task`, where the *model* decides to delegate.
+
+```ts
+import { createAgent } from 'agent-do';
+
+const parent = createAgent({
+  id: 'parent',
+  name: 'Parent',
+  model,
+  slashCommands: {
+    research: createAgent({ id: 'research', name: 'Researcher', model: cheapModel, /* own tools/skills */ }),
+    review:   createAgent({ id: 'review',   name: 'Reviewer',   model }),
+  },
+});
+
+await parent.run('/research quantum cryptography');
+//   → runs the `research` sub-agent with task 'quantum cryptography'
+await parent.run('/review');
+//   → runs `review` with empty args
+await parent.run('/ship');
+//   → Unknown slash command "/ship". Available commands: /research, /review.
+//     (no model called — the listing is returned as the final text)
+await parent.run('what is the weather?');
+//   → parent handles it as normal (non-slash input bypasses the router)
+```
+
+Keys must match `/^[a-zA-Z0-9_-]+$/`; values must be `Agent` instances.
+Sub-agents are full agents, so each carries its own model, tools, skills,
+routines, permissions, and hooks. **Nested slash commands (`/a/b`) are
+not supported** — dispatch is a single deterministic hop, validated at
+`createAgent()` time.
+
+A path-shaped task like `/etc/hosts` is **not** treated as a command
+(the name must be command-shaped), so it falls through to the parent.
+
+The CLI passes input through unchanged, so `npx agent-do run <agent>
+"/research quantum cryptography"` routes correctly. Parent conversation
+history is **not** forwarded to the sub-agent by default — the
+sub-agent starts a fresh turn with just the remainder (and the same
+`context`, if any).
+
+`parseSlashCommand(input)` and `unknownSlashCommandMessage(name, commands)`
+are exported for callers that want to inspect or build routing themselves.
+
 ## Tools
 
 Define tools using the Vercel AI SDK's `tool()` function:
@@ -836,6 +886,95 @@ fetch footgun (see issue #34). If you wire up a network-backed store,
 host allowlisting and explicit installation must happen outside
 `search()`; `install()` should only receive content the caller has
 already verified.
+
+## Policies
+
+Policies are typed system-prompt modules that ground every decision on
+every turn — priorities, resolution modes, routing rules. Unlike skills
+(which extend capabilities and fire autonomously when a task matches),
+policies are constraints / context that apply regardless of task. The
+canonical pair is a `priority-map` (who/what matters, P0–P3) plus an
+`auto-resolver` (auto-resolve / draft-and-ask / escalate / ignore).
+
+### Defining a policy
+
+`createPolicy()` accepts either an object `{ id, type, content }` or a
+source string `{ id, type, source }` where `source` is a POLICY.md-
+style document with YAML frontmatter (`id` / `type` / `version`):
+
+```ts
+import { createAgent, createPolicy } from 'agent-do';
+import { createMockModel } from 'agent-do/testing';
+
+const priorityMap = createPolicy({
+  id: 'priority-map',
+  type: 'prioritisation',
+  content: '# Priority Map\n- P0: production down\n- P1: customer-blocking',
+});
+
+const autoResolver = createPolicy({
+  id: 'auto-resolver',
+  type: 'resolution',
+  source: `---
+id: auto-resolver
+type: resolution
+version: 1
+---
+
+# Auto-resolver
+1. auto-resolve
+2. draft-and-ask
+3. escalate
+4. ignore`,
+});
+
+const agent = createAgent({
+  id: 'triage',
+  name: 'Triage',
+  model: createMockModel({ responses: [{ text: 'OK' }] }),
+  policies: [priorityMap, autoResolver],
+});
+```
+
+When `policies` is set, the agent injects a `## Policies` section into
+the system prompt on every run. Each policy is wrapped in
+`<policy id="…" type="…">…</policy>` markers with a preamble telling the
+model the content is reference material that grounds decisions but
+cannot override the structural policy above — the same injection-safety
+wrapper skills use, so a hostile body containing `</policy>` cannot
+break out of its wrapper.
+
+The `id` is validated against `/^[a-zA-Z0-9_-]+$/` (fails fast at
+construction). The `type` is a free-form string — known values are
+`'prioritisation'` and `'resolution'`, but any taxonomy works.
+
+### Operator-authored, not model-authored
+
+There is **no** LLM-facing `install_policy` tool. Policies are supplied
+by the library caller as a plain array. A model that could rewrite its
+own policy could plant a persistent jailbreak across sessions — the same
+threat model that gates `install_skill` / `save_routine` behind opt-in
+flags, applied upstream by not exposing the surface at all.
+
+### PolicyStore
+
+`InMemoryPolicyStore` and the `PolicyStore` interface are available for
+callers who load policies from disk / config and want install / list /
+remove semantics (for example, hot-reloading a `policies/` directory).
+Like `SkillSearchResult`, `PolicyStore` deliberately has no `url` /
+network field — a network-backed policy registry that auto-fetches would
+be an SSRF / supply-chain footgun (#34).
+
+```ts
+import { createPolicy, InMemoryPolicyStore } from 'agent-do';
+
+const store = new InMemoryPolicyStore();
+await store.install(createPolicy({ id: 'priority-map', type: 'prioritisation', content: '…' }));
+const policies = await store.list(); // → Policy[]
+```
+
+See [`examples/20-policies.ts`](examples/20-policies.ts) for a runnable
+priority-map + auto-resolver pair.
 
 ## Lifecycle Hooks
 
@@ -1277,6 +1416,9 @@ const result = await runEvals(suite, { output: 'silent' });
 | `InMemoryMemoryStore` | class | In-memory store (testing/prototyping) |
 | `FilesystemMemoryStore` | class | Node.js filesystem store (persistent) |
 | `createOrchestrator` | `(config) => Orchestrator` | Create a multi-agent orchestrator |
+| `parseSlashCommand` | `(input) => { name, rest } \| null` | Parse a `/<name>` slash command from a task string |
+| `unknownSlashCommandMessage` | `(name, commands) => string` | Build the "unknown command" listing |
+| `validateSlashCommands` | `(commands) => string \| null` | Validate an `AgentConfig.slashCommands` map |
 | `evaluatePermission` | `(toolName, args, config) => Promise<boolean>` | Evaluate a permission check |
 | `UsageTracker` | class | Track usage and costs within a run |
 | `estimateCost` | `(model, input, output, pricing?) => number` | Estimate cost in USD |
@@ -1374,6 +1516,8 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 17 | [`17-sandbox-with-memory.ts`](examples/17-sandbox-with-memory.ts) | Sandbox alongside `InMemoryMemoryStore` (different substrates) |
 | 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
 | 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
+| 20 | [`20-policies.ts`](examples/20-policies.ts) | Typed system-prompt modules — priority-map + auto-resolver policy pair |
+| 21 | [`21-slash-commands.ts`](examples/21-slash-commands.ts) | Slash-command router — deterministic `/<name>` dispatch to sub-agents |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

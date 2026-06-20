@@ -42,6 +42,16 @@ export {
 export type { CreateRoutineToolsOptions } from './routines.js';
 export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
+// Policies — typed system-prompt modules (#80)
+export {
+  createPolicy,
+  parsePolicyMd,
+  buildPoliciesPrompt,
+  InMemoryPolicyStore,
+} from './policies.js';
+export type { PolicyInput } from './policies.js';
+export type { Policy, PolicyStore } from './types.js';
+
 // The three consumer-facing tool factories.
 //
 // - createMemoryTools — the agent's private scratchpad (memory_*).
@@ -75,6 +85,13 @@ export {
 
 // Orchestrator
 export { createOrchestrator } from './orchestrator.js';
+
+// Slash-command router (#76) — deterministic pre-model dispatch.
+export {
+  parseSlashCommand,
+  unknownSlashCommandMessage,
+  validateSlashCommands,
+} from './slash-commands.js';
 
 // Types
 export type {

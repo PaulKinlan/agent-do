@@ -1,16 +1,27 @@
 import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './types.js';
 import { runAgentLoop, streamAgentLoop } from './loop.js';
+import { validateSlashCommands, markHasSlashCommands } from './slash-commands.js';
 
 /**
  * Create an Agent instance from configuration.
  *
  * Returns an agent with run() and stream() methods that drive the
  * autonomous agent loop. Supports conversation history for multi-turn.
+ *
+ * When `config.slashCommands` is present it is validated immediately:
+ * keys must match `/^[a-zA-Z0-9_-]+$/`, values must be `Agent`
+ * instances, and no sub-agent may itself define `slashCommands`
+ * (nested `/a/b` dispatch is disallowed — #76).
  */
 export function createAgent(config: AgentConfig): Agent {
+  const slashError = validateSlashCommands(config.slashCommands);
+  if (slashError) {
+    throw new Error(`Invalid agent config: ${slashError}`);
+  }
+
   let abortController: AbortController | null = null;
 
-  return {
+  const agent: Agent = {
     get id() {
       return config.id;
     },
@@ -45,4 +56,14 @@ export function createAgent(config: AgentConfig): Agent {
       abortController = null;
     },
   };
+
+  // Stamp the marker AFTER construction so the returned agent is the
+  // value a parent might place in its own `slashCommands`. A parent's
+  // `createAgent` then rejects this agent as a nested slash-command
+  // agent (#76). Non-enumerable via markHasSlashCommands.
+  if (config.slashCommands) {
+    markHasSlashCommands(agent);
+  }
+
+  return agent;
 }
