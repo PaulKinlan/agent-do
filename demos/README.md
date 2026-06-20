@@ -16,6 +16,8 @@ Then install each demo's dependencies (using subshells so your working directory
 (cd demos/assistant && npm install)
 (cd demos/research-team && npm install)
 (cd demos/code-reviewer && npm install)
+(cd demos/chief-of-staff && npm install)
+(cd demos/engineering-team && npm install)
 ```
 
 ### Choose a model provider
@@ -84,4 +86,30 @@ An agent that reads source files from a directory and produces a structured code
 
 ```bash
 (cd demos/code-reviewer && npm start /path/to/project)
+```
+
+### 4. Chief of Staff (`demos/chief-of-staff/`)
+
+Founder's chief-of-staff pattern built on the orchestrator. A master agent coordinates three specialists — Executive Assistant, Business Development, Task Manager — against a shared workspace of markdown files.
+
+- **Policy-as-markdown**: `priority-map.md` + `auto-resolver.md` are re-read at the start of every run and ground every decision
+- **Source-of-truth rule**: specialists always check the current state of `inbox.md` / `tracker.md` / `tasks.md` before acting
+- **Silence contract**: if there's nothing to do, the master returns `OK` and calls no tools — cheap to run on a cron
+- **Role-handoff pattern**: each specialist has a narrow brief and defers to the others
+
+```bash
+(cd demos/chief-of-staff && npm start "Triage the inbox and add follow-ups to tasks.md")
+```
+
+### 5. Engineering Team (`demos/engineering-team/`)
+
+Sprint-ordered planning pipeline. A master runs five phases in order — Think → Plan → Review → Test → Ship — each handed off to a specialist that produces a written artifact the next phase consumes.
+
+- **Sprint-ordered pipeline**: each phase strictly follows the previous
+- **Specialist role prompts**: opinionated stances baked into each system prompt
+- **Forcing questions as scaffolding**: office-hours interrogates rather than designs
+- **Shared workspace**: every artifact lives in `./sprint/` so phases can reference each other
+
+```bash
+(cd demos/engineering-team && npm start "Add an audit log for write operations")
 ```

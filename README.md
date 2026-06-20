@@ -67,7 +67,7 @@ about the others being missing, but the CLI covers them all.
 
 ### Using a different provider
 
-The CLI only knows about `anthropic`, `google`, `openai`, and `ollama`. For
+The CLI knows about `anthropic`, `google`, `openai`, `ollama`, and `zai`. For
 any other provider (Mistral, Groq, Cohere, OpenRouter, Bedrock, xAI, etc.),
 install the SDK and use agent-do as a library:
 
@@ -87,6 +87,39 @@ await agent.run('your task');
 
 Any Vercel AI SDK `LanguageModel` works — see
 [sdk.vercel.ai/providers](https://sdk.vercel.ai/providers) for the full list.
+
+### Z.ai (GLM)
+
+The CLI supports Z.ai (Zhipu AI's GLM models) out of the box via its
+OpenAI-compatible endpoint — no extra install:
+
+```bash
+export ZAI_API_KEY=...           # get one at https://z.ai/
+npx agent-do --provider zai --model glm-4.6 "Explain CRDTs"
+```
+
+`zai` reuses the bundled `@ai-sdk/openai` against
+`https://api.z.ai/api/paas/v4`, so it adds no dependency. To target the
+GLM Coding Plan endpoint instead, set
+`ZAI_BASE_URL=https://api.z.ai/api/coding/paas/v4`.
+
+As a library, the same thing with any OpenAI-compatible client:
+
+```ts
+import { createAgent } from 'agent-do';
+import { createOpenAI } from '@ai-sdk/openai';
+
+const zai = createOpenAI({
+  baseURL: 'https://api.z.ai/api/paas/v4',
+  apiKey: process.env.ZAI_API_KEY!,
+  name: 'zai',
+});
+
+const agent = createAgent({ model: zai('glm-4.6') });
+await agent.run('your task');
+```
+
+See [`examples/19-zai.ts`](examples/19-zai.ts) for a runnable example.
 
 ## CLI
 
@@ -137,7 +170,7 @@ npx agent-do run <name|file> [task]      Run a saved agent OR a script file
 npx agent-do eval <file|dir> [options]   Run evals
 
 Options:
-  --provider <name>      anthropic | google | openai | ollama (default: anthropic)
+  --provider <name>      anthropic | google | openai | ollama | zai (default: anthropic)
   --model <id>           Model ID (default: provider-specific)
   --system <prompt>      System prompt
   --cwd <dir>            Working directory for workspace tools (default: cwd)
@@ -1335,9 +1368,12 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 11 | [`11-filesystem-store.ts`](examples/11-filesystem-store.ts) | Persistent filesystem storage — explore the created files |
 | 12 | [`12-prompt-builder.ts`](examples/12-prompt-builder.ts) | Composable system prompts from templates + sections + variables |
 | 13 | [`13-eval-framework.ts`](examples/13-eval-framework.ts) | Eval framework — define cases, assert quality, compare providers |
+| 14 | [`14-mcp.ts`](examples/14-mcp.ts) | Mount external MCP servers and expose their tools to the agent |
+| 15 | [`15-routines.ts`](examples/15-routines.ts) | Saved routines — reusable named procedures with `{{arg}}` interpolation |
 | 16 | [`16-sandbox-bash.ts`](examples/16-sandbox-bash.ts) | Pluggable sandbox + `bash` tool (host connector) |
 | 17 | [`17-sandbox-with-memory.ts`](examples/17-sandbox-with-memory.ts) | Sandbox alongside `InMemoryMemoryStore` (different substrates) |
 | 18 | [`18-sandbox-with-filesystem.ts`](examples/18-sandbox-with-filesystem.ts) | Sandbox alongside `FilesystemMemoryStore` (soft policy + sandboxed bash, plus a strong-isolation pattern) |
+| 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

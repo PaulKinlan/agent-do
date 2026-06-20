@@ -14,7 +14,7 @@ sensitive, this is the file to read.
 | `ai` | `^6.0.0` | Vercel AI SDK core. We use a wide range because the SDK itself is the source of truth for the provider versions above; pinning would just delay upgrades. |
 | `ignore` | `^7.0.5` | gitignore-style matcher for the workspace deny list (#23). Tiny, no transitive deps. |
 | `yaml` | `^2.8.3` | Skill frontmatter parser (#37). Maintained by `eemeli`; well-audited. |
-| `zod` | `^3.23.0` | Schema validation. Peer-of-peer with the AI SDK. |
+| `zod` | `^4.4.3` | Schema validation. Bumped from `^3.23.0` (the `^3.23.0` range in this table was stale through 0.6.0). Peer-of-peer with the AI SDK. |
 
 The provider SDKs are pinned exactly in `dependencies` (so the CLI is
 reproducible) but kept at `^3.0.0` in `peerDependencies` so library

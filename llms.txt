@@ -135,7 +135,7 @@
 - `npx agent-do list` — list saved agents
 - `npx agent-do run <name|file>` — run a saved agent by name, or a script file
 - `npx agent-do eval <file|dir>` — run eval cases from file or directory
-- `--provider <name>` — anthropic | google | openai | ollama (default: anthropic)
+- `--provider <name>` — anthropic | google | openai | ollama | zai (default: anthropic)
 - `--model <id>` — model ID (default: provider-specific)
 - `--system <prompt>` — system prompt
 - `--memory <dir>` — memory directory (default: .agent-do/)

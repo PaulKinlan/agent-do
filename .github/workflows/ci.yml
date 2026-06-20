@@ -20,9 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Active LTS + Current. agent-do targets Node 18+ in practice via the
-        # ai SDK; pin to LTS lines so we catch regressions on the versions
-        # users are most likely to be on.
+        # Active LTS + Current. package.json declares engines >=20.
         node: ['20', '22', '24']
 
     steps:
@@ -44,3 +42,94 @@ jobs:
 
       - name: Test
         run: npm test
+
+  evals:
+    # Mock-tier evals are deterministic and free (no provider calls), so they
+    # gate every PR. The live tier is opt-in locally via `npm run eval:live`.
+    name: Evals (mock tier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Run mock-tier evals
+        run: npm run eval
+
+  docs:
+    # Catches typedoc regressions without paying for the 3-node matrix.
+    name: API docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build API docs (typedoc)
+        run: npm run docs
+
+  require-changeset:
+    # Enforces the documented release discipline (README / AGENTS.md):
+    # a PR that changes the *shipping surface* must add a changeset.
+    #
+    # Shipping surface = src/ (runtime/types) OR a shipping-relevant key in
+    # package.json (exports/bin/files/engines/main/types/module/dependencies/
+    # peerDependencies/peerDependenciesMeta). Pure dev-tooling changes —
+    # scripts, devDependencies bumps — are intentionally NOT gated, matching
+    # AGENTS.md ("devDependencies bumps — consumers don't see these").
+    name: Changeset present when shipping surface changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a changeset
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          CHANGED="$(git diff --name-only "${BASE_SHA}..${HEAD_SHA}")"
+          echo "Files changed in this PR:"
+          echo "${CHANGED}"
+
+          SHIPPING_CHANGED=0
+
+          # src/ is always shipping surface.
+          if echo "${CHANGED}" | grep -Eq '^src/'; then
+            SHIPPING_CHANGED=1
+          fi
+
+          # For package.json, only count it as shipping if a shipping-relevant
+          # key actually changed (not just scripts / devDependencies).
+          if echo "${CHANGED}" | grep -q '^package\.json$'; then
+            PKG_DIFF="$(git diff "${BASE_SHA}..${HEAD_SHA}" -- package.json)"
+            if echo "${PKG_DIFF}" | grep -Eq '^[+-][[:space:]]*"(exports|bin|files|engines|main|types|module|dependencies|peerDependencies|peerDependenciesMeta)"'; then
+              SHIPPING_CHANGED=1
+            fi
+          fi
+
+          if [ "${SHIPPING_CHANGED}" -eq 1 ]; then
+            if echo "${CHANGED}" | grep -Eq '^\.changeset/.*\.md$'; then
+              echo "OK — shipping surface changed and a changeset is present."
+            else
+              echo "::error::This PR changes the shipping surface (src/ or a package.json shipping key) but adds no changeset. Run \`npm run changeset\` and commit the generated .changeset/*.md alongside your code."
+              exit 1
+            fi
+          else
+            echo "OK — no shipping-surface changes detected; changeset not required."
+          fi
