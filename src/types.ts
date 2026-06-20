@@ -14,6 +14,7 @@ export type ProviderOptions = Record<
   Record<string, JSONValue | undefined>
 >;
 import type { McpServerConfig } from './mcp.js';
+import type { ScheduledTask } from './scheduled-tasks.js';
 
 // Progress events emitted during agent execution
 export interface ProgressEvent {
@@ -474,6 +475,15 @@ export interface AgentConfig {
    * Rendered with the same injection-safety wrapper skills use.
    */
   policies?: Policy[];
+  /**
+   * Declarative cron-driven runs (#79). Each task fires on its `cron`
+   * schedule and runs its `payload` against the agent under an exclusive
+   * lock (so overlapping firings skip, and a crashed run is reclaimed).
+   * Execute one via `agent-do scheduled-tasks run <id>`; generate the
+   * crontab wiring via `agent-do scheduled-tasks install`. Validated at
+   * `createAgent()` time (unique ids, valid cron, non-empty payload).
+   */
+  scheduledTasks?: ScheduledTask[];
   /**
    * How installed skills are injected into the system prompt (#74).
    *

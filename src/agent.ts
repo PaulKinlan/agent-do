@@ -1,6 +1,7 @@
 import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './types.js';
 import { runAgentLoop, streamAgentLoop } from './loop.js';
 import { validateSlashCommands, markHasSlashCommands } from './slash-commands.js';
+import { validateScheduledTasks } from './scheduled-tasks.js';
 
 /**
  * Create an Agent instance from configuration.
@@ -17,6 +18,11 @@ export function createAgent(config: AgentConfig): Agent {
   const slashError = validateSlashCommands(config.slashCommands);
   if (slashError) {
     throw new Error(`Invalid agent config: ${slashError}`);
+  }
+  // Scheduled tasks are validated up front so a typo in a cron expression
+  // surfaces at construction, not on the first firing (#79).
+  if (config.scheduledTasks) {
+    validateScheduledTasks(config.scheduledTasks);
   }
 
   let abortController: AbortController | null = null;

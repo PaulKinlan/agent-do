@@ -18,6 +18,7 @@ import { parseArgs, type ParsedArgs } from './cli/args.js';
 import { runPromptMode } from './cli/prompt.js';
 import { runScriptMode } from './cli/script.js';
 import { runEvalMode } from './cli/eval-cmd.js';
+import { runScheduledTasksMode } from './cli/scheduled-tasks-cmd.js';
 import { createSavedAgent, listSavedAgents } from './cli/agents.js';
 
 async function main(): Promise<void> {
@@ -51,6 +52,9 @@ async function main(): Promise<void> {
       case 'list':
         await listSavedAgents();
         break;
+      case 'scheduled-tasks':
+        await runScheduledTasksMode(args);
+        break;
     }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -72,6 +76,7 @@ Usage:
   npx agent-do list                        List saved agents
   npx agent-do run <name|file> [task]      Run a saved agent or script file
   npx agent-do eval <file|dir> [options]   Run eval cases
+  npx agent-do scheduled-tasks <verb>      Cron-driven runs (run|list|status|install|start)
 
 Piping:
   echo "context" | npx agent-do "prompt"   Merge piped input with prompt
@@ -153,6 +158,8 @@ Examples:
   npx agent-do list
   cat README.md | npx agent-do "Summarize this"
   npx agent-do eval evals/basic.ts --compare anthropic,google --output json
+  npx agent-do scheduled-tasks install   # emit crontab lines for your tasks
+  npx agent-do scheduled-tasks run sweep  # run one task under a lock
 `);
 }
 

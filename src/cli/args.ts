@@ -9,7 +9,7 @@ import { parseProviderOptions } from './provider-tools.js';
 import type { ProviderOptions } from '../types.js';
 
 export interface ParsedArgs {
-  command: 'prompt' | 'run' | 'eval' | 'create' | 'list';
+  command: 'prompt' | 'run' | 'eval' | 'create' | 'list' | 'scheduled-tasks';
   prompt?: string;
   file?: string;
   agentName?: string;
@@ -45,6 +45,13 @@ export interface ParsedArgs {
   output: 'console' | 'json' | 'csv';
   compare?: string[];
   concurrency: number;
+  // Scheduled-tasks-specific (#79)
+  /** Which scheduled-tasks verb: list|status|install|start|run. */
+  scheduledTasksSubcommand?: 'list' | 'status' | 'install' | 'start' | 'run';
+  /** Task id for `scheduled-tasks run <id>`. */
+  scheduledTaskId?: string;
+  /** Tasks registry file. Default <memoryDir>/scheduled-tasks.json. */
+  tasksFile?: string;
   /**
    * Opt-in for script-file import (#19, C-03). Without this flag, `run
    * <path>` refuses to `await import()` a local file. Only saved-agent
@@ -175,6 +182,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if (first === 'list') {
       args.command = 'list';
       i = 1;
+    } else if (first === 'scheduled-tasks') {
+      args.command = 'scheduled-tasks';
+      i = 1;
+      // Sub-verb is the next positional.
+      const next = argv[1];
+      if (next === 'list' || next === 'status' || next === 'install' || next === 'start' || next === 'run') {
+        args.scheduledTasksSubcommand = next;
+        i = 2;
+      } else {
+        throw new Error('Usage: agent-do scheduled-tasks <list|status|install|start|run <id>>');
+      }
     }
   }
 
@@ -193,6 +211,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       args.workingDir = requireValue(argv, ++i, arg);
     } else if (arg === '--memory') {
       args.memoryDir = requireValue(argv, ++i, '--memory');
+    } else if (arg === '--tasks') {
+      args.tasksFile = requireValue(argv, ++i, '--tasks');
     } else if (arg === '--with-memory') {
       args.withMemory = true;
     } else if (arg === '--read-only') {
@@ -305,11 +325,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
     args.agentName = positional[0];
   } else if (args.command === 'list') {
     // no positional args needed
+  } else if (args.command === 'scheduled-tasks') {
+    // `run` takes a task id as its first positional; the other verbs take none.
+    if (positional.length > 0) {
+      args.scheduledTaskId = positional[0];
+    }
   } else {
     // prompt mode — all positional args become the prompt
     if (positional.length > 0) {
       args.prompt = positional.join(' ');
     }
+  }
+
+  // Default the tasks file to <memoryDir>/scheduled-tasks.json unless overridden.
+  if (args.command === 'scheduled-tasks' && !args.tasksFile) {
+    args.tasksFile = `${args.memoryDir}/scheduled-tasks.json`;
   }
 
   // Derive `verbose` and `showContent` from the final `logLevel`.

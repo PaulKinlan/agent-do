@@ -653,6 +653,103 @@ shell scripts. `--read-only` and `--no-tools` narrow the blast radius.
 See [`examples/22-shellm.shellm`](examples/22-shellm.shellm) for a
 runnable sample with frontmatter.
 
+## Scheduled Tasks
+
+Many useful agents don't run on-demand — they run on a schedule. Inbox
+sweep every 15 min, daily brief at 8am, weekly digest on Sunday.
+`agent-do scheduled-tasks` turns a cron entry into a safe, overlap-proof
+agent run. The production wiring is **system cron**: `install` emits the
+crontab lines, and the system cron invokes `run <id>` on schedule.
+
+### Define tasks
+
+Tasks live in a JSON file (`<memoryDir>/scheduled-tasks.json` by default,
+overridable with `--tasks <path>`):
+
+```json
+[
+  {
+    "id": "inbox-triage",
+    "cron": "*/15 8-21 * * *",
+    "payload": "Read inbox.md and move anything actionable into tasks.md. If there's nothing new, reply with just OK.",
+    "description": "inbox sweep every 15 min during work hours"
+  },
+  {
+    "id": "daily-brief",
+    "cron": "0 8 * * 1-5",
+    "payload": "Summarise this week's tracker.md into a three-line daily brief.",
+    "description": "weekday 8am brief"
+  }
+]
+```
+
+`cron` is standard 5-field (minute hour dom month dow; 0 and 7 both Sunday).
+The portable numeric subset is supported — `*/n`, ranges, comma lists, and
+Vixie dom/dow OR-semantics. Month/weekday names and `L`/`W`/`#` are not
+(support varies by platform cron).
+
+### CLI
+
+```bash
+npx agent-do scheduled-tasks list                          # show configured tasks
+npx agent-do scheduled-tasks status                        # last-run times + outcomes
+npx agent-do scheduled-tasks install                       # emit crontab lines to stdout
+npx agent-do scheduled-tasks run inbox-triage              # run one task now (lock-protected)
+npx agent-do scheduled-tasks start                         # foreground loop (dev/test)
+```
+
+`install` prints one crontab line per task that calls
+`agent-do scheduled-tasks run <id>`. Append the output to your crontab
+(`crontab -e`) or a systemd timer — the system cron does the timing,
+agent-do does the safe execution:
+
+```
+*/15 8-21 * * * /usr/bin/env agent-do scheduled-tasks run inbox-triage --tasks "/abs/tasks.json" --memory "/abs/.data"
+```
+
+### Overlap safety
+
+Every `run` acquires the [#15 file lock](#concurrent-access-locking-15)
+before executing, so **overlapping firings skip** (cron fired before the
+previous run finished, or two hosts share the same `--memory` dir). A
+run killed mid-execution leaves a lock that the next firing reclaims after
+`staleMs` (default 15 min) — exactly the cross-process guarantee a scheduler
+needs and an in-process mutex can't provide. Last-run times, outcomes, and
+run counts are recorded in `<memoryDir>/scheduler-status.json`.
+
+### Library API
+
+```ts
+import { createAgent } from 'agent-do';
+import { matchesCron, runScheduledTask } from 'agent-do';
+
+const agent = createAgent({
+  /* ... */
+  scheduledTasks: [
+    { id: 'sweep', cron: '*/15 * * * *', payload: 'triage inbox' },
+  ],
+});
+
+// Drive a run yourself (the lock + status recording are reusable):
+await runScheduledTask('sweep', {
+  memoryDir: './.data',
+  statusFile: './.data/scheduler-status.json',
+  payload: 'triage inbox',
+  run: (text) => agent.run(text),
+});
+
+matchesCron('*/15 * * * *', new Date()); // → boolean, for your own scheduler
+```
+
+`sessionTarget: 'main'` (persistent conversation) and
+`wakeMode: 'systemEvent'` (structured wake event) are accepted in the schema
+but **reserved in v1** — every run is isolated, and the payload is treated as
+the task text. They're noted follow-ups once agent-do ships a history store
+and an event channel.
+
+See [`examples/scheduled-tasks/tasks.json`](examples/scheduled-tasks/tasks.json)
+for a runnable task file.
+
 ## Tools
 
 Define tools using the Vercel AI SDK's `tool()` function:
@@ -1653,6 +1750,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 21 | [`21-slash-commands.ts`](examples/21-slash-commands.ts) | Slash-command router — deterministic `/<name>` dispatch to sub-agents |
 | 22 | [`22-shellm.shellm`](examples/22-shellm.shellm) | Shellm — a prompt file you `chmod +x` and run directly (shebang + frontmatter) |
 | 23 | [`23-concurrent-store.ts`](examples/23-concurrent-store.ts) | Concurrent MemoryStore access — opt-in cross-process file locking (#15) |
+| 24 | [`scheduled-tasks/tasks.json`](examples/scheduled-tasks/tasks.json) | Scheduled tasks — cron-driven agent runs with lock-file concurrency (#79) |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
