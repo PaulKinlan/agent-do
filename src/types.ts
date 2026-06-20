@@ -672,6 +672,72 @@ export interface FilesystemMemoryStoreOptions {
    * Supports both sync and async callbacks.
    */
   onBeforeWrite?: (agentId: string, filePath: string, operation: 'write' | 'append' | 'delete' | 'mkdir') => boolean | Promise<boolean>;
+  /**
+   * Opt-in cross-process safety for read-modify-write on shared files (#15).
+   *
+   * When set, every mutating method (write/append/delete/mkdir) acquires an
+   * exclusive sidecar file lock scoped to the file's canonical path before
+   * touching it, retrying on contention and auto-reclaiming locks left by a
+   * crashed process. The lock is visible to every process sharing the same
+   * `baseDir`, so it protects against orchestrator workers, overlapping
+   * `run()` calls, and cron-spawned processes (#79) — not just within one
+   * Node process.
+   *
+   * Writes also become atomic (temp-file + rename), so unlocked readers
+   * never see a half-flushed file.
+   *
+   * `undefined` preserves today's naive-overwrite behaviour byte-for-byte.
+   * POSIX locks are advisory: a process that writes without this option set
+   * can still clobber a locked file. See `src/stores/file-lock.ts`.
+   */
+  lock?: FileLockOptions;
+}
+
+// ── File locking (#15 Tier 1) ──────────────────────────────────────────
+
+/**
+ * Handle returned by a successful lock acquisition. Releasing drops the
+ * lock file; release is best-effort and never throws on ENOENT (the lock
+ * may already have been reclaimed by a stale-lock sweeper).
+ */
+export interface LockHandle {
+  release(): Promise<void>;
+}
+
+/**
+ * Swappable lock primitive. The default implementation in
+ * `src/stores/file-lock.ts` is zero-dependency; pass an adapter to plug in
+ * `proper-lockfile`, `fs-ext`, or a test double without agent-do taking a
+ * hard dependency on it.
+ */
+export interface LockAdapter {
+  /**
+   * @param lockFile the derived sidecar lock path (deterministic per data file).
+   * @param opts resolved stale/retry thresholds (defaults already applied).
+   */
+  acquire(lockFile: string, opts: { staleMs: number; retry: { count: number; minDelayMs: number; maxDelayMs: number } }): Promise<LockHandle>;
+}
+
+export interface FileLockOptions {
+  /** Reserved discriminator. Defaults to `'file'`; future adapters
+   *  (`'fcntl'`, `'sqlite'`) keep the option shape forward-compatible. */
+  type?: 'file';
+  /**
+   * Reclaim a lock whose mtime is older than this. Essential for cron-driven
+   * runs (#79): a job killed mid-write leaves a lock that the next scheduled
+   * invocation must be able to take over. Default 60_000ms.
+   */
+  staleMs?: number;
+  /** Contention backoff. Defaults to { count: 20, minDelayMs: 25, maxDelayMs: 1000 }.
+   *  `count` is the number of retries before giving up. */
+  retry?: { count?: number; minDelayMs?: number; maxDelayMs?: number };
+  /**
+   * Plug in a battle-tested lock (e.g. `proper-lockfile` for NFS-perfect
+   * atomicity, or a mock for tests). Defaults to the built-in zero-dep
+   * sidecar lock. Lets advanced users get stronger guarantees without
+   * agent-do depending on the library.
+   */
+  adapter?: LockAdapter;
 }
 
 // Agent instance

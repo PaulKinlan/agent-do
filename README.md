@@ -808,6 +808,59 @@ const guardedStore = new FilesystemMemoryStore('./data', {
 });
 ```
 
+### Concurrent access (locking, #15)
+
+By default `write()` is a naive overwrite — fine for single-process use, but
+**concurrent runs lose data**: two processes that read-modify-write the same
+file clobber each other. Set the opt-in `lock` option to serialise mutating
+ops across processes:
+
+```ts
+// Orchestrator workers, overlapping run() calls, or cron-driven runs (#79)
+// — all safely serialised on a per-file basis.
+const store = new FilesystemMemoryStore('./data', {
+  lock: {
+    staleMs: 60_000,                              // reclaim locks older than 1 min
+    retry: { count: 20, minDelayMs: 25, maxDelayMs: 1000 },
+  },
+});
+```
+
+The lock is a **zero-dependency sidecar file** (`O_CREAT|O_EXCL` + mtime
+stale reclaim + retry/backoff), visible to every process sharing the same
+`baseDir` — so it protects across orchestrator workers and fresh cron-spawned
+processes, not just within one Node process. Lock files live in
+`<baseDir>/.locks/<agentId>/` and are invisible to the agent's own `list()` /
+`search()` / `read()`. Writes also become **atomic** (temp-file + `rename`),
+so unlocked readers never see a half-flushed file.
+
+POSIX locks are **advisory**: a process that writes without the `lock` option
+(say, an editor, or a store instance created without it) can still clobber a
+locked file. `undefined` preserves today's behaviour byte-for-byte.
+
+Need stronger guarantees on a network filesystem? Plug in a battle-tested
+lock without agent-do taking a dependency:
+
+```ts
+import properLockfile from 'proper-lockfile'; // your dep, not agent-do's
+
+const store = new FilesystemMemoryStore('./data', {
+  lock: {
+    adapter: {
+      async acquire(lockFile, opts) {
+        // wrap proper-lockfile here; return { async release() {…} }
+      },
+    },
+  },
+});
+```
+
+`acquireFileLock`, `withFileLock`, and the `FileLockOptions` / `LockAdapter` /
+`LockHandle` types are exported for direct use. For genuinely-concurrent
+**merge** semantics (multiple writers whose edits should combine rather than
+serialise), a lazily-imported CRDT-backed store (`agent-do/stores/crdt`, Yjs)
+is planned as a Tier-2 follow-up.
+
 For other backends, implement the interface:
 
 ```ts
@@ -1599,6 +1652,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 20 | [`20-policies.ts`](examples/20-policies.ts) | Typed system-prompt modules — priority-map + auto-resolver policy pair |
 | 21 | [`21-slash-commands.ts`](examples/21-slash-commands.ts) | Slash-command router — deterministic `/<name>` dispatch to sub-agents |
 | 22 | [`22-shellm.shellm`](examples/22-shellm.shellm) | Shellm — a prompt file you `chmod +x` and run directly (shebang + frontmatter) |
+| 23 | [`23-concurrent-store.ts`](examples/23-concurrent-store.ts) | Concurrent MemoryStore access — opt-in cross-process file locking (#15) |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 
