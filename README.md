@@ -573,6 +573,86 @@ sub-agent starts a fresh turn with just the remainder (and the same
 `parseSlashCommand(input)` and `unknownSlashCommandMessage(name, commands)`
 are exported for callers that want to inspect or build routing themselves.
 
+## Shellm Scripts
+
+A **shellm** file is a plain-text prompt you run like a shell script —
+"shell" + "LLM". Drop a prompt (optionally with a shebang and YAML
+frontmatter) into a file, make it executable, and run it directly:
+
+```bash
+$ cat > weekly-summary.shellm <<'EOF'
+#!/usr/bin/env agent-do
+Summarize the git log from the last week and list any breaking changes.
+EOF
+
+$ chmod +x weekly-summary.shellm
+$ ./weekly-summary.shellm
+```
+
+The kernel turns the shebang into `agent-do /abs/path/weekly-summary.shellm`,
+so the file path arrives as the CLI's first positional. Prompt mode
+detects it and uses the file body as the prompt — zero boilerplate, no
+imports, no config objects.
+
+### Opt-in detection
+
+A positional is treated as a shellm file only when it **opts in** via one
+of:
+
+- a **`.shellm` extension** (`agent-do ./analyze.shellm`), **or**
+- an **`agent-do` shebang** on the file's first line
+  (`#!/usr/bin/env agent-do`).
+
+This dual gate keeps `agent-do readme.md` meaning "the literal prompt
+`readme.md`" (today's behaviour) instead of silently reading the file.
+Both signals work alone — a `.shellm` file needs no shebang, and a shebanged
+file with any extension works too.
+
+### Frontmatter config
+
+Optional YAML frontmatter sets the run config:
+
+```bash
+$ cat > review.shellm <<'EOF'
+#!/usr/bin/env agent-do
+---
+provider: google
+model: gemini-2.5-flash
+system: You are a code reviewer. Be terse.
+---
+Review the staged git diff for bugs.
+EOF
+
+$ ./review.shellm
+```
+
+Frontmatter values override the CLI defaults for `provider`, `model`, and
+`system`. Flags like `--read-only`, `--verbose`, and `--no-tools` still
+apply (they have no frontmatter twin).
+
+### Piping
+
+Stdin is merged with the file prompt exactly as in
+`echo ctx | agent-do "prompt"` — the file is the instruction, piped data
+is the context:
+
+```bash
+$ cat data.csv | ./analyze.shellm          # analyze the piped CSV
+$ git diff --staged | ./review.shellm > review.md   # in a pipeline
+```
+
+### Trust model
+
+A shellm file is **data** (a prompt), not **code** — parsing it never
+`import()`s anything, so it's strictly safer than
+`agent-do run x.ts --script`. But its contents reach the model, and with
+the default workspace tools the agent can read/write/edit files in `--cwd`.
+**Don't run shellm files from sources you don't trust** — the same rule as
+shell scripts. `--read-only` and `--no-tools` narrow the blast radius.
+
+See [`examples/22-shellm.shellm`](examples/22-shellm.shellm) for a
+runnable sample with frontmatter.
+
 ## Tools
 
 Define tools using the Vercel AI SDK's `tool()` function:
@@ -1518,6 +1598,7 @@ The [`examples/`](examples/) directory contains runnable examples:
 | 19 | [`19-zai.ts`](examples/19-zai.ts) | Z.ai (GLM) via the bundled OpenAI-compatible provider — no extra install |
 | 20 | [`20-policies.ts`](examples/20-policies.ts) | Typed system-prompt modules — priority-map + auto-resolver policy pair |
 | 21 | [`21-slash-commands.ts`](examples/21-slash-commands.ts) | Slash-command router — deterministic `/<name>` dispatch to sub-agents |
+| 22 | [`22-shellm.shellm`](examples/22-shellm.shellm) | Shellm — a prompt file you `chmod +x` and run directly (shebang + frontmatter) |
 
 Run any example: `npx tsx examples/01-basic-agent.ts`
 

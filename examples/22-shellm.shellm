@@ -1,0 +1,17 @@
+#!/usr/bin/env agent-do
+---
+# Shellm sample (issue #16). A prompt file you can chmod +x and run.
+#
+#   ./examples/22-shellm.shellm                 # uses frontmatter provider
+#   ANTHROPIC_API_KEY=sk-... ./examples/22-shellm.shellm
+#   cat README.md | ./examples/22-shellm.shellm # pipe data as context
+#
+# Frontmatter overrides the CLI defaults for provider/model/system.
+provider: anthropic
+model: claude-haiku-4-5
+system: You are a concise senior engineer. Prefer bullet points.
+---
+
+Summarize the most important thing this repository does in three
+bullet points or fewer. If input was piped on stdin, summarise that
+instead and ignore the rest of this prompt.

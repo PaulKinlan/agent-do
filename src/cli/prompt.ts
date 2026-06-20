@@ -21,6 +21,7 @@ import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
 import { buildProviderTools } from './provider-tools.js';
+import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 
@@ -35,6 +36,28 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     readOnly: args.readOnly,
     json: args.json,
   });
+
+  // Shellm (#16): if the positional prompt is a readable file that opts
+  // in via `.shellm` extension OR an `agent-do` shebang, parse it and let
+  // the file's frontmatter override provider/model/system. The file body
+  // becomes the prompt (merged with piped stdin below, same as today).
+  // A non-shellm positional is left untouched — `agent-do readme.md` still
+  // passes the literal string "readme.md" to the model.
+  if (args.prompt) {
+    const shellm = await tryParseShellm(args.prompt);
+    if (shellm) {
+      args.prompt = shellm.prompt;
+      // Frontmatter is authoritative — the script is a self-contained
+      // program, so running ./foo.shellm behaves the same regardless of
+      // shell aliases or env. CLI flags for --read-only / --verbose /
+      // --no-tools still apply because they don't have frontmatter twins.
+      if (shellm.config.provider) args.provider = shellm.config.provider;
+      if (shellm.config.model) args.model = shellm.config.model;
+      if (shellm.config.system) args.systemPrompt = shellm.config.system;
+      // `agent:` is parsed but not yet wired (saved-agent loading is a
+      // follow-up); a future version will load the named agent here.
+    }
+  }
 
   const model = await resolveModel(args.provider, args.model);
 
