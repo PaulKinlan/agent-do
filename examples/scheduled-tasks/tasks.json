@@ -1,0 +1,14 @@
+[
+  {
+    "id": "inbox-triage",
+    "cron": "*/15 8-21 * * *",
+    "payload": "Read inbox.md and move anything actionable into tasks.md. If there's nothing new, reply with just OK.",
+    "description": "Chief-of-staff inbox sweep, every 15 min during work hours"
+  },
+  {
+    "id": "daily-brief",
+    "cron": "0 8 * * 1-5",
+    "payload": "Summarise this week's tracker.md into a three-line daily brief for today.",
+    "description": "Weekday 8am brief"
+  }
+]

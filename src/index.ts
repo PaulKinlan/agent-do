@@ -135,6 +135,16 @@ export type { FilesystemMemoryStoreOptions } from './types.js';
 export { acquireFileLock, withFileLock } from './stores/file-lock.js';
 export type { FileLockOptionsInternal } from './stores/file-lock.js';
 export type { FileLockOptions, LockHandle, LockAdapter } from './types.js';
+// Scheduled tasks (#79) — declarative cron-driven agent runs with lock-file concurrency.
+export {
+  matchesCron,
+  validateScheduledTasks,
+  readStatus,
+  writeStatus,
+  recordRun,
+  runScheduledTask,
+} from './scheduled-tasks.js';
+export type { ScheduledTask, ScheduledTasksConfig, TaskStatus, StatusRecord } from './scheduled-tasks.js';
 export { SandboxBackedMemoryStore } from './stores/sandbox.js';
 export type { SandboxBackedMemoryStoreOptions } from './stores/sandbox.js';
 
