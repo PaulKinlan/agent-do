@@ -109,9 +109,9 @@ function extractPolicyMeta(raw: unknown): PolicyMeta {
  * explicitly accepts arbitrary strings).
  */
 export function parsePolicyMd(content: string, id?: string): Policy {
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  const split = splitFrontmatter(content);
 
-  if (!match) {
+  if (!split) {
     // No frontmatter — treat entire content as the policy body.
     const generatedId = id || 'unknown-policy';
     return {
@@ -121,8 +121,8 @@ export function parsePolicyMd(content: string, id?: string): Policy {
     };
   }
 
-  const frontmatter = match[1];
-  const body = clampContent(match[2].trim());
+  const frontmatter = split.frontmatter;
+  const body = clampContent(split.body.trim());
 
   let rawMeta: unknown = {};
   try {
@@ -306,7 +306,74 @@ export class InMemoryPolicyStore implements PolicyStore {
   }
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────
+
+/**
+ * Split a markdown document into YAML frontmatter + body WITHOUT the
+ * catastrophic-backtracking risk of `/^---\n([\s\S]*?)\n---\n/`
+ * (CodeQL `js/polynomial-redos`). Returns `null` when there is no valid
+ * frontmatter fence, mirroring the old regex's no-match behaviour.
+ *
+ * Semantics preserved from the previous regex:
+ *  - opening fence: a first line whose content is exactly `---`
+ *    (optional trailing horizontal whitespace).
+ *  - closing fence: a later line whose content is exactly `---`, followed
+ *    by a line ending (a bare trailing `---` at EOF is NOT a fence — this
+ *    matches the old `\n---\s*\n` requirement).
+ *  - frontmatter = text between the fences (exclusive of both fence lines
+ *    and their terminating newlines).
+ *  - body = everything after the closing fence line.
+ *  - an opening `---` with no later closing `---` → `null` (no match).
+ *
+ * The scan is line-by-line via `indexOf`, so there is no regex engine to
+ * abuse: a hostile document (e.g. many `\n ` repetitions after `---\n`)
+ * parses in O(n) rather than blowing up. (skills.ts / routines.ts still
+ * carry the flagged regex; fixing them is a separate security cleanup.)
+ */
+function splitFrontmatter(content: string): { frontmatter: string; body: string } | null {
+  // Opening fence: first line must be `---` (+ optional horizontal ws).
+  const openEnd = fenceLineEnd(content, 0);
+  if (openEnd === -1) return null;
+  // openEnd points at the newline ending the opening fence line (or EOF).
+  if (openEnd >= content.length || content[openEnd] !== '\n') return null;
+  const afterOpen = openEnd + 1;
+
+  // Closing fence: the next `---`-only line. Linear scan, no backtracking.
+  let lineStart = afterOpen;
+  let searchFrom = afterOpen;
+  while (searchFrom <= content.length) {
+    const nextNl = content.indexOf('\n', searchFrom);
+    const lineEnd = nextNl === -1 ? content.length : nextNl;
+    const fenceEnd = fenceLineEnd(content, lineStart);
+    if (fenceEnd === lineEnd) {
+      // `---` line at [lineStart, lineEnd). It's a valid closing fence only
+      // if followed by a line ending (preserves the old `\n---\s*\n` rule).
+      if (lineEnd >= content.length) break; // bare trailing `---` → keep scanning → no match
+      const frontEnd = Math.max(afterOpen, lineStart - 1);
+      return {
+        frontmatter: content.slice(afterOpen, frontEnd),
+        body: content.slice(lineEnd + 1),
+      };
+    }
+    if (nextNl === -1) break;
+    lineStart = nextNl + 1;
+    searchFrom = nextNl + 1;
+  }
+  return null;
+}
+
+/**
+ * If the line starting at `start` is exactly `---` optionally followed by
+ * trailing horizontal whitespace (` ` / `\t` / `\r`), return the index just
+ * past the line's content (the position of the terminating `\n` or EOF).
+ * Otherwise return -1.
+ */
+function fenceLineEnd(s: string, start: number): number {
+  if (s[start] !== '-' || s[start + 1] !== '-' || s[start + 2] !== '-') return -1;
+  let i = start + 3;
+  while (s[i] === ' ' || s[i] === '\t' || s[i] === '\r') i++;
+  return i;
+}
 
 function clampContent(content: string): string {
   return content.length > POLICY_CONTENT_MAX

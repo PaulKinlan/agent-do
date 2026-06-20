@@ -103,6 +103,24 @@ Body.`,
     );
     expect(policy.type).toBe('compliance');
   });
+
+  it('parses adversarial frontmatter without catastrophic backtracking (no ReDoS)', () => {
+    // Regression guard for CodeQL js/polynomial-redos: the previous
+    // `/^---\n([\s\S]*?)\n---\n/` regex could exhibit polynomial
+    // backtracking on a body of many `\n ` repetitions with no closing
+    // fence. The line-based parser must resolve in O(n). We assert both
+    // correctness (body-only fallback, no fence matched) and that it
+    // completes well under the budget a catastrophic regex would blow.
+    const hostile = '---\n' + '\n '.repeat(50_000) + 'no closing fence here';
+    const start = Date.now();
+    const policy = parsePolicyMd(hostile, 'safe');
+    const elapsed = Date.now() - start;
+    expect(policy.id).toBe('safe');
+    expect(policy.type).toBe('unspecified'); // no valid fence → body-only fallback
+    // A catastrophic regex takes seconds-to-minutes on this input;
+    // the safe parser finishes in a few ms. 500ms is a generous ceiling.
+    expect(elapsed).toBeLessThan(500);
+  });
 });
 
 // ── createPolicy ───────────────────────────────────────────────────────
