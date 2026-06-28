@@ -85,7 +85,7 @@
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
     "@changesets/cli": "^2.31.0",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "agent-do-changelog-formatter": "file:./scripts/changelog-formatter",
     "tsx": "^4.0.0",
     "typedoc": "^0.28.0",
