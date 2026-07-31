@@ -166,12 +166,17 @@ npx agent-do eval evals/ --compare anthropic,google,openai --output json
 
 ```
 npx agent-do [options] [prompt]          One-shot or interactive
+npx agent-do create <name> [options]     Create a reusable agent config
+npx agent-do list                        List saved agents
 npx agent-do run <name|file> [task]      Run a saved agent OR a script file
 npx agent-do eval <file|dir> [options]   Run evals
+npx agent-do scheduled-tasks <verb>      Cron-driven runs (run|list|status|install|start)
 
 Options:
   --provider <name>      anthropic | google | openai | ollama | zai (default: anthropic)
-  --model <id>           Model ID (default: provider-specific)
+  --model <id>           Model ID. Defaults: anthropic claude-sonnet-5,
+                         google gemini-2.5-flash, openai gpt-4.1-mini,
+                         ollama llama3.2, zai glm-4.6
   --system <prompt>      System prompt
   --cwd <dir>            Working directory for workspace tools (default: cwd)
   --memory <dir>         Memory directory for --with-memory (default: .agent-do/)
@@ -183,6 +188,9 @@ Options:
   --no-tools             Disable all file tools
   --verbose              Show per-step thinking + tool summaries (stderr)
   --show-content         With --verbose: also include each tool's full result
+  --log-level <level>    silent | info | verbose | debug | trace (default: info).
+                         Overrides --verbose / --show-content. See
+                         "Debugging & Observability" below.
   --script               Required for `run <path>` to import local JS/TS files
   -y, --yes              Skip the interactive confirmation for --script
   --provider-tool <name> Enable a provider-native tool (repeatable). See below.
@@ -507,7 +515,7 @@ const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const assistant = createAgent({
   id: 'assistant',
   name: 'Assistant',
-  model: anthropic('claude-sonnet-4-6'),
+  model: anthropic('claude-sonnet-5'),
   systemPrompt: 'You are a helpful assistant.',
 });
 
@@ -1351,7 +1359,7 @@ const tracker = new UsageTracker({
 });
 
 // Record a step
-const record = tracker.record(0, 'claude-sonnet-4-6', 1000, 500);
+const record = tracker.record(0, 'claude-sonnet-5', 1000, 500);
 console.log(record.estimatedCost); // cost based on built-in pricing
 
 // Get summary
@@ -1363,6 +1371,23 @@ const ok = await tracker.checkLimits(); // false if limit exceeded
 
 // Standalone cost estimation
 const cost = estimateCost('gpt-4o', 10000, 5000);
+```
+
+### How model IDs resolve to prices
+
+`DEFAULT_PRICING` is keyed by model ID. A lookup tries an exact match
+first, then falls back to the **longest** key that the model ID starts
+with — so `gpt-4.1-mini-2025-04-14` prices as `gpt-4.1-mini`, not as
+`gpt-4.1`. OpenRouter-style IDs (`anthropic/claude-sonnet-5`) are
+normalised by stripping the provider prefix.
+
+A model with no matching entry estimates **$0** and logs a one-time
+warning to stderr. That is not a free run — it means cost tracking and
+both spending limits are disabled for that model. If you use a model
+agent-do doesn't know, pass your own rates:
+
+```ts
+usage: { enabled: true, pricing: { 'my-model': { input: 1.0, output: 3.0 } } }
 ```
 
 ## Debugging & Observability
@@ -1394,7 +1419,7 @@ npx agent-do --log-level trace "hello"
 At `debug` the CLI emits compact, labelled lines to stderr:
 
 ```
-[debug:request] step=0 model=claude-sonnet-4-6 tools=[read_file,write_file,grep_file]
+[debug:request] step=0 model=claude-sonnet-5 tools=[read_file,write_file,grep_file]
 [debug:messages] step=0 count=2 bytes=1247
 [debug:cache] step=0 read=0 write=1198 no-cache=49 out=112 hit=0%
 …second iteration benefits from the cache write on the first:
@@ -1463,7 +1488,7 @@ for await (const event of agent.stream('task')) {
   as a string, the AI SDK resolves the provider lazily and the
   middleware can't attach. The other channels (`system-prompt`,
   `cache`) still fire — they don't depend on middleware. Pass a
-  structured model (`createAnthropic()('claude-sonnet-4-6')`) for
+  structured model (`createAnthropic()('claude-sonnet-5')`) for
   full coverage.
 - **Sink errors are swallowed**. A broken sink can't wedge the run.
   Sync and async throws are both caught.
@@ -1585,7 +1610,7 @@ const result = await runEvals(suite);
 ```ts
 const result = await runEvals(suite, {
   providers: [
-    { name: 'anthropic', model: anthropic('claude-sonnet-4-6') },
+    { name: 'anthropic', model: anthropic('claude-sonnet-5') },
     { name: 'google', model: google('gemini-2.5-flash') },
     { name: 'openai', model: openai('gpt-4.1-mini') },
   ],

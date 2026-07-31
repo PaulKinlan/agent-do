@@ -6,21 +6,36 @@ sensitive, this is the file to read.
 
 ## Direct dependencies
 
-| Package | Pinning | Why |
-|---|---|---|
-| `@ai-sdk/anthropic` | exact (`3.0.71`) | Bundled provider — pinned exact in `dependencies` so `npx agent-do` users get a deterministic install. The wider `^3.0.0` range stays in `peerDependencies` for library consumers. |
-| `@ai-sdk/google` | exact (`3.0.64`) | Same as above. |
-| `@ai-sdk/openai` | exact (`3.0.53`) | Same as above. |
-| `ai` | `^6.0.0` | Vercel AI SDK core. We use a wide range because the SDK itself is the source of truth for the provider versions above; pinning would just delay upgrades. |
-| `ignore` | `^7.0.5` | gitignore-style matcher for the workspace deny list (#23). Tiny, no transitive deps. |
-| `yaml` | `^2.8.3` | Skill frontmatter parser (#37). Maintained by `eemeli`; well-audited. |
-| `zod` | `^4.4.3` | Schema validation. Bumped from `^3.23.0` (the `^3.23.0` range in this table was stale through 0.6.0). Peer-of-peer with the AI SDK. |
+Ranges below mirror `package.json`. **If you change a range, change this
+table in the same commit** — it drifted through 0.6.0 (it described the
+provider SDKs as exact pins long after they had moved to caret ranges).
 
-The provider SDKs are pinned exactly in `dependencies` (so the CLI is
-reproducible) but kept at `^3.0.0` in `peerDependencies` so library
-consumers who want a newer minor can pass it in without conflict.
-Each release bumps the pinned versions deliberately after manual
-verification.
+| Package | Range | Why |
+|---|---|---|
+| `@ai-sdk/anthropic` | `^3.0.85` | Bundled provider so `npx agent-do` works without a separate install. Also declared as an optional `peerDependency` (`^3.0.85`) for library consumers who supply their own. |
+| `@ai-sdk/google` | `^3.0.67` | Same as above. |
+| `@ai-sdk/openai` | `^3.0.0` | Same as above. Also backs the `ollama` and `zai` providers via their OpenAI-compatible endpoints, so it is the least removable of the three. |
+| `@modelcontextprotocol/sdk` | `^1.30.0` | MCP client for `mountMcpServers()`. Floor raised from `^1.29.0` for the transitive `hono` / `@hono/node-server` / `fast-uri` advisories that 1.30.0 clears. |
+| `ai` | `^6.0.208` | Vercel AI SDK core. Wide range because the SDK is the source of truth for the provider versions above; pinning would just delay upgrades. |
+| `ignore` | `^7.0.5` | gitignore-style matcher for the workspace deny list (#23). Tiny, no transitive deps. |
+| `yaml` | `^2.9.0` | Skill frontmatter parser (#37). Maintained by `eemeli`; well-audited. |
+| `zod` | `^4.4.3` | Schema validation. Peer-of-peer with the AI SDK. |
+
+The provider SDKs sit in both `dependencies` (so the CLI is
+self-contained) and optional `peerDependencies` (so a library consumer
+can supply a newer minor without a duplicate install). `tryImport`
+loads them dynamically, so a consumer who never touches a given
+provider never pays for it.
+
+### Pending major upgrades
+
+`ai@7` and `@ai-sdk/*@4` are released and we are deliberately still on
+`ai@6` / `@ai-sdk/*@3`. The `LanguageModel` type from `ai` is part of
+agent-do's **public** surface (`AgentConfig.model`), so the upgrade
+changes the contract for every consumer that constructs its own model —
+it needs its own branch, its own changeset, and a compatibility pass
+over `src/loop.ts`, `src/cli/provider-tools.ts`, and the demos. Do not
+fold it into an unrelated change.
 
 ## Notable transitive dependencies
 
@@ -42,6 +57,40 @@ sensitive deployment-identity material.
 - **Removal:** not feasible — it's deep in the AI SDK's transitive
   graph and removing it would break the gateway code path. We can't
   use npm `overrides` to stub it without risking that path.
+
+### `undici` (5.29.0) — known-vulnerable, deliberately not overridden
+
+Comes in via `ai`/`@ai-sdk/*` → `@ai-sdk/provider-utils`, which declares
+`undici: ^5.29.0` as a hard dependency. `npm audit` reports several
+advisories against `undici < 6.24.0` (one high: unbounded memory in
+WebSocket `permessage-deflate` decompression; plus request smuggling,
+CRLF injection via the `upgrade` option, and an unbounded decompression
+chain on fetch responses).
+
+- **Why it's there:** `@ai-sdk/provider-utils` lazily `require()`s
+  `undici` to build a "safe" Node fetch — an `Agent` with a
+  DNS-lookup hook that blocks SSRF to private address ranges. It is
+  loaded only when `globalThis.fetch` is Node's built-in fetch, which
+  means it **is** on the live path for provider HTTP calls.
+- **Exposure:** the reachable advisory for agent-do's usage is the
+  fetch-response decompression chain. Exploiting it requires the model
+  provider's own endpoint — or a MITM on a TLS connection to it — to
+  return a hostile `Content-Encoding` chain. The WebSocket advisories
+  are not reachable; agent-do opens no WebSockets through undici.
+- **Why we don't `overrides` it:** forcing `undici@^6` violates the
+  `^5.29.0` range `@ai-sdk/provider-utils` was built and tested
+  against, on every consumer of agent-do, to close an advisory we
+  cannot reach without a compromised provider endpoint. The fix
+  belongs upstream in `@ai-sdk/provider-utils`.
+- **If your threat model needs it anyway**, add to *your* app's
+  `package.json` (not agent-do's) and test provider calls end to end:
+
+  ```json
+  { "overrides": { "undici": "^6.24.0" } }
+  ```
+
+Re-check on every `@ai-sdk/*` bump; drop this section once upstream
+moves off undici 5.
 
 ### Provider-validated dynamic import (#40)
 
@@ -79,8 +128,12 @@ Before you publish a new version, run:
 npm ci                # install from lockfile
 npm audit             # CVE check
 npm ls @vercel/oidc   # confirm ancestry hasn't changed
+npm ls undici         # still pinned by @ai-sdk/provider-utils?
 npm run typecheck && npm run build && npm test
 ```
 
 If `npm ls @vercel/oidc` shows a new ancestry path or the package
-disappears, update the table above accordingly.
+disappears, update the table above accordingly. `npm audit` is not
+expected to come back clean while the `undici` section above stands —
+compare the output against the accepted advisories listed there and
+investigate anything new.

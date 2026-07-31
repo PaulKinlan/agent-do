@@ -85,6 +85,52 @@
 - `unknownSlashCommandMessage(name, commands): string` — build the listing
 - `validateSlashCommands(commands): string | null` — validate a map
 
+## Routines (#77)
+
+- `AgentConfig.routines?: Routine[] | RoutineStore` — named prompt-as-macro procedures the model can invoke
+- `parseRoutineMd(content, id?): Routine` — parse a ROUTINE.md with YAML frontmatter
+- `interpolateRoutine(routine, inputs): string` — fill `{{input}}` placeholders
+- `createRoutineTools(store): ToolSet` — list/run routine tools
+- `InMemoryRoutineStore` / `FilesystemRoutineStore(dir)` — storage backends
+- Types: `Routine`, `RoutineStore`, `RoutineInput`, `CreateRoutineToolsOptions`
+
+## MCP (Model Context Protocol)
+
+- `mountMcpServers(servers: McpServerConfig[]): Promise<MountedMcpServers>` — connect external MCP tool servers and return their tools plus a `close()`
+- `namespacedToolName(server, tool): string` / `MCP_TOOL_PREFIX` — tools are namespaced so they can't collide with workspace or memory tools
+- `McpTransportConfig` — stdio or HTTP/SSE transport
+- Always `close()` mounted servers when the run ends; they own child processes or sockets
+
+## Scheduled Tasks (#79)
+
+- Declarative cron-driven agent runs with lock-file concurrency control
+- `matchesCron(expr, date): boolean` — 5-field cron matcher
+- `validateScheduledTasks(config): string | null` — validate a config before running
+- `runScheduledTask(task, options): Promise<...>` — execute one task under a lock
+- `readStatus(dir)` / `writeStatus(dir, status)` / `recordRun(...)` — durable run status
+- Types: `ScheduledTask`, `ScheduledTasksConfig`, `TaskStatus`, `StatusRecord`
+- CLI: `npx agent-do scheduled-tasks <run|list|status|install|start>`
+
+## Structured Tool Results (#48)
+
+- `ToolResult` — `{ summary, data?, ... }`; tools may return one instead of a bare string
+- `normaliseToolResult(value): ToolResult` — coerce any tool return into the structured shape
+- `isToolResult(value): boolean` — type guard
+- `tool-result` ProgressEvents carry `summary` and `data` when the tool returned a ToolResult
+
+## File Locking (#15 Tier 1)
+
+- Opt-in cross-process safety for `FilesystemMemoryStore`; off by default
+- `acquireFileLock(path, options?): Promise<LockHandle>` — acquire, caller releases
+- `withFileLock(path, fn, options?)` — acquire / run / release
+- Types: `FileLockOptions`, `LockHandle`, `LockAdapter` (bring your own backend)
+- Enable per-store via `FilesystemMemoryStoreOptions.lock`
+
+## Debugging & Observability (#72)
+
+- `AgentConfig.debug?: DebugConfig` — structured `DebugEvent`s for requests, messages, cache metrics, and raw stream parts
+- CLI equivalent: `--log-level silent|info|verbose|debug|trace` (`--verbose` implies `verbose`)
+
 ## Lifecycle Hooks
 
 - `onPreToolUse(event)` — before tool call, return HookDecision to allow/deny/modify
@@ -103,8 +149,11 @@
 ## Usage Tracking
 
 - `UsageTracker` — tracks tokens and cost per run
-- `estimateCost(model, inputTokens, outputTokens): number`
-- `DEFAULT_PRICING` — built-in pricing for 50+ models
+- `estimateCost(model, inputTokens, outputTokens, pricing?): number`
+- `DEFAULT_PRICING: PricingTable` — built-in per-1M-token rates for Anthropic, OpenAI, Google, Mistral, Groq, Perplexity, Z.ai/GLM, and local models
+- Model IDs are matched exactly first, then by **longest** matching prefix, so dated variants (`gpt-4.1-mini-2025-04-14`) resolve to the most specific entry
+- An unpriced model estimates `0` and logs a one-time stderr warning — cost tracking and spending limits are disabled for it. Override with `AgentConfig.usage.pricing`.
+- `resetPricingWarnings()` — clear the warned-model set (tests / long-lived servers)
 - Per-run and per-day spending limits
 
 ## Testing
@@ -152,8 +201,10 @@
 - `npx agent-do list` — list saved agents
 - `npx agent-do run <name|file>` — run a saved agent by name, or a script file
 - `npx agent-do eval <file|dir>` — run eval cases from file or directory
+- `npx agent-do scheduled-tasks <run|list|status|install|start>` — cron-driven runs (#79)
+- `npx agent-do <file.shellm>` — prompt files as executable scripts (#16)
 - `--provider <name>` — anthropic | google | openai | ollama | zai (default: anthropic)
-- `--model <id>` — model ID (default: provider-specific)
+- `--model <id>` — model ID. Per-provider defaults: anthropic `claude-sonnet-5`, google `gemini-2.5-flash`, openai `gpt-4.1-mini`, ollama `llama3.2`, zai `glm-4.6`.
 - `--system <prompt>` — system prompt
 - `--memory <dir>` — memory directory (default: .agent-do/)
 - `--read-only` — no filesystem writes
