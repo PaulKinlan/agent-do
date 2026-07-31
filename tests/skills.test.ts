@@ -626,6 +626,7 @@ describe('createSkillTools', () => {
     const result = await tools.list_skills.execute!({} as never, {
       toolCallId: 'test-call',
       messages: [],
+      context: undefined,
     });
     expect(result).toContain('Test');
     expect(result).toContain('test');
@@ -648,7 +649,7 @@ describe('createSkillTools', () => {
     const tools = createSkillTools(store);
     const result = (await tools.load_skill.execute!(
       { skillId: 'research' } as never,
-      { toolCallId: 'l1', messages: [] },
+      { toolCallId: 'l1', messages: [], context: undefined },
     )) as string;
     expect(result).toContain('<skill name="Research" id="research">');
     expect(result).toContain('</skill>');
@@ -661,7 +662,7 @@ describe('createSkillTools', () => {
     const tools = createSkillTools(store);
     const result = (await tools.load_skill.execute!(
       { skillId: 'nope' } as never,
-      { toolCallId: 'l2', messages: [] },
+      { toolCallId: 'l2', messages: [], context: undefined },
     )) as string;
     expect(result).toMatch(/not found/);
     expect(result).toMatch(/list_skills/);
@@ -682,7 +683,7 @@ describe('createSkillTools', () => {
     const tools = createSkillTools(store);
     const result = (await tools.load_skill.execute!(
       { skillId: longId } as never,
-      { toolCallId: 'long', messages: [] },
+      { toolCallId: 'long', messages: [], context: undefined },
     )) as string;
     expect(result).toContain('body text');
     expect(result).toContain(`id="${longId}"`);
@@ -704,7 +705,7 @@ describe('createSkillTools', () => {
     const tools = createSkillTools(store);
     const result = (await tools.load_skill.execute!(
       { id: 'research' } as never,
-      { toolCallId: 'l-alias', messages: [] },
+      { toolCallId: 'l-alias', messages: [], context: undefined },
     )) as string;
     expect(result).toContain('<skill name="Research" id="research">');
     expect(result).toContain('body');
@@ -720,7 +721,7 @@ describe('createSkillTools', () => {
     // is the agent-do convention, not throwing.
     const result = (await tools.load_skill.execute!(
       {} as never,
-      { toolCallId: 'l-empty', messages: [] },
+      { toolCallId: 'l-empty', messages: [], context: undefined },
     )) as string;
     expect(result).toMatch(/requires/);
   });
@@ -736,7 +737,7 @@ describe('createSkillTools', () => {
     const tools = createSkillTools(store);
     const result = (await tools.load_skill.execute!(
       { skillId: 'evil' } as never,
-      { toolCallId: 'l3', messages: [] },
+      { toolCallId: 'l3', messages: [], context: undefined },
     )) as string;
     // Exactly one real opening + closing marker around the whole block,
     // despite the body's attempts to inject more.
@@ -754,7 +755,7 @@ describe('createSkillTools', () => {
     const huge = 'x'.repeat(8193);
     const r1 = (await exec(
       { id: 'ok', name: 'OK', description: 'd', content: huge } as never,
-      { toolCallId: 't1', messages: [] },
+      { toolCallId: 't1', messages: [], context: undefined },
     )) as string;
     expect(r1).toMatch(/rejected/);
     expect(await store.list()).toHaveLength(0);
@@ -762,7 +763,7 @@ describe('createSkillTools', () => {
     // Invalid id (contains `/`) is rejected.
     const r2 = (await exec(
       { id: '../escape', name: 'x', description: '', content: 'c' } as never,
-      { toolCallId: 't2', messages: [] },
+      { toolCallId: 't2', messages: [], context: undefined },
     )) as string;
     expect(r2).toMatch(/rejected/);
     expect(await store.list()).toHaveLength(0);
@@ -770,7 +771,7 @@ describe('createSkillTools', () => {
     // Well-formed install succeeds.
     const r3 = (await exec(
       { id: 'good', name: 'Good', description: 'd', content: 'c' } as never,
-      { toolCallId: 't3', messages: [] },
+      { toolCallId: 't3', messages: [], context: undefined },
     )) as string;
     expect(r3).toMatch(/installed successfully/);
     expect(await store.list()).toHaveLength(1);

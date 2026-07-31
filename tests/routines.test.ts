@@ -185,6 +185,7 @@ describe('createRoutineTools', () => {
     const out = (await tools.list_routines.execute!({} as never, {
       toolCallId: 't',
       messages: [],
+      context: undefined,
     })) as string;
     expect(out).toContain('Weekly Report');
     expect(out).toContain('weekly');
@@ -195,7 +196,7 @@ describe('createRoutineTools', () => {
     const tools = createRoutineTools(store);
     const out = (await tools.run_routine.execute!(
       { routineId: 'weekly', args: { week: '17' } } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(out).toContain('<routine name="Weekly Report" id="weekly">');
     expect(out).toContain('</routine>');
@@ -206,7 +207,7 @@ describe('createRoutineTools', () => {
     const tools = createRoutineTools(store);
     await tools.run_routine.execute!(
       { routineId: 'weekly' } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     );
     const after = await store.get('weekly');
     expect(after?.runCount).toBe(1);
@@ -216,7 +217,7 @@ describe('createRoutineTools', () => {
     const tools = createRoutineTools(store);
     const out = (await tools.run_routine.execute!(
       { routineId: 'nope' } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(out).toMatch(/not found/);
     expect(out).toMatch(/list_routines/);
@@ -243,20 +244,20 @@ describe('createRoutineTools', () => {
         description: '',
         body: 'x',
       } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(badId).toMatch(/rejected/);
 
     const huge = 'x'.repeat(17 * 1024);
     const tooBig = (await exec(
       { id: 'big', name: 'Big', description: '', body: huge } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(tooBig).toMatch(/rejected/);
 
     const ok = (await exec(
       { id: 'new', name: 'New', description: 'd', body: 'body' } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(ok).toMatch(/saved successfully/);
     const saved = await store.get('new');
@@ -270,7 +271,7 @@ describe('createRoutineTools', () => {
     for (const badId of ['__proto__', 'constructor', 'prototype']) {
       const result = (await exec(
         { id: badId, name: 'x', description: '', body: 'b' } as never,
-        { toolCallId: 't', messages: [] },
+        { toolCallId: 't', messages: [], context: undefined },
       )) as string;
       expect(result).toMatch(/rejected/);
       expect(await store.get(badId)).toBeUndefined();
@@ -298,7 +299,7 @@ describe('createRoutineTools', () => {
     const tools = createRoutineTools(flakyStore);
     const out = (await tools.run_routine.execute!(
       { routineId: 'flaky' } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
 
     expect(out).toContain('<routine name="Flaky" id="flaky">');
@@ -316,7 +317,7 @@ describe('createRoutineTools', () => {
     const tools = createRoutineTools(store);
     const out = (await tools.run_routine.execute!(
       { routineId: 'evil' } as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     // Exactly one real opener + closer around the whole thing.
     expect((out.match(/<routine\s/g) ?? []).length).toBe(1);

@@ -162,7 +162,7 @@ function setupDebug(
   // can't install middleware — the string wraps a lazy resolution
   // we don't control. Fall back to the unwrapped model in that
   // case; the other debug channels that don't depend on middleware
-  // (system-prompt, cache via onStepFinish) still fire.
+  // (system-prompt, cache via onStepEnd) still fire.
   if (typeof config.model === 'string') {
     return { model: config.model, emit, stepRef };
   }
@@ -193,7 +193,7 @@ function emitSystemPromptDebug(
 
 /**
  * Emit a per-step cache debug event. Called from the existing
- * `buildOnStepFinish` hook so cache metrics land adjacent to usage
+ * `buildOnStepEnd` hook so cache metrics land adjacent to usage
  * recording and can be correlated with cost.
  */
 function emitCacheDebug(
@@ -523,7 +523,7 @@ function buildTools(
 }
 
 /**
- * Build an `onStepFinish` hook that records usage per inner step and
+ * Build an `onStepEnd` hook that records usage per inner step and
  * aborts the stream when the hard spending cap would be crossed (#31,
  * plus PR #65 review follow-ups).
  *
@@ -531,14 +531,14 @@ function buildTools(
  *
  * `tracker.checkLimits()` only ran *between* outer iterations, and
  * `tracker.record()` was called once per outer iteration with the
- * total usage from `result.totalUsage`. That meant:
+ * total usage from the SDK result’s aggregate usage. That meant:
  *
  * - The hard-cap projection inside the hook only saw the tracker's
  *   **cross-iteration** total, so N small inner steps in the same
  *   iteration could cumulatively exceed the hard cap without any
  *   individual step tripping the check (Codex #65 P1).
  * - When the hard cap did abort, the loop broke before
- *   `result.totalUsage` was awaited, so the step(s) that caused the
+ *   that aggregate was awaited, so the step(s) that caused the
  *   abort never made it into the tracker — `RunResult.usage`
  *   undercounted the actual spend (Codex #65 P2 / Copilot).
  *
@@ -554,21 +554,21 @@ function buildTools(
  * aborted iteration's last step is already in the ledger by the time
  * the outer loop breaks. The outer loop no longer calls
  * `tracker.record(...)` itself — that would double-count when the
- * hook is active. It still awaits `result.totalUsage` at the end of
+ * hook is active. It still awaits `result.usage` at the end of
  * a clean iteration (so the recorded per-step totals reconcile with
  * the SDK's view) but only to surface mismatches, not to ledger.
  *
  * Returns `undefined` when the caller disables usage tracking entirely
  * (so hook dispatch is free when callers opt out).
  */
-export function buildOnStepFinish(
+export function buildOnStepEnd(
   config: AgentConfig,
   tracker: UsageTracker,
   abortController: AbortController,
   outerStep: number,
   emitDebug?: (event: DebugEvent) => void,
 ): ((step: unknown) => void) | undefined {
-  // Debug-only configs still need onStepFinish so cache events fire.
+  // Debug-only configs still need onStepEnd so cache events fire.
   const wantCache = config.debug && (config.debug.all || config.debug.cache);
   if (config.usage?.enabled === false && !wantCache) return undefined;
   const softLimit = config.usage?.limits?.perRun;
@@ -843,7 +843,7 @@ async function runAgentLoopDirect(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(
+    const onStepEnd = buildOnStepEnd(
       config,
       tracker,
       stepAbort,
@@ -854,12 +854,12 @@ async function runAgentLoopDirect(
     // Call streamText
     const result = streamText({
       model,
-      system: systemPrompt,
+      instructions: systemPrompt,
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: stepCountIs(innerStepLimit),
       abortSignal: stepAbort.signal,
-      onStepFinish,
+      onStepEnd,
       providerOptions: config.providerOptions,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
@@ -872,7 +872,7 @@ async function runAgentLoopDirect(
     const recordsBefore = tracker.getSummary().records.length;
 
     try {
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         if (signal?.aborted || stepAbort.signal.aborted) {
           aborted = true;
           break;
@@ -1156,7 +1156,7 @@ async function* streamAgentLoopDirect(
       if (parentSignal.aborted) stepAbort.abort(parentSignal.reason);
       else parentSignal.addEventListener('abort', onParentAbort, { once: true });
     }
-    const onStepFinish = buildOnStepFinish(
+    const onStepEnd = buildOnStepEnd(
       config,
       tracker,
       stepAbort,
@@ -1167,12 +1167,12 @@ async function* streamAgentLoopDirect(
     // Call streamText (with the debug-wrapped model if debug is set).
     const result = streamText({
       model,
-      system: systemPrompt,
+      instructions: systemPrompt,
       messages,
       tools: Object.keys(tools).length > 0 ? tools : undefined,
       stopWhen: stepCountIs(innerStepLimit),
       abortSignal: stepAbort.signal,
-      onStepFinish,
+      onStepEnd,
       providerOptions: config.providerOptions,
       prepareStep: ({ messages: stepMsgs }) => ({
         messages: addCacheControl(stepMsgs, config.model as LanguageModel),
@@ -1186,7 +1186,7 @@ async function* streamAgentLoopDirect(
     const recordsBefore = tracker.getSummary().records.length;
 
     try {
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         if (signal?.aborted || stepAbort.signal.aborted) {
           aborted = true;
           if (stepAbort.signal.aborted && !signal?.aborted) hardCapTripped = true;
@@ -1284,8 +1284,8 @@ async function* streamAgentLoopDirect(
         }
       }
       // Drain any trailing debug events emitted during the final
-      // stream parts (cache breakdown fires from onStepFinish which
-      // runs after the last fullStream part).
+      // stream parts (cache breakdown fires from onStepEnd which
+      // runs after the last stream part).
       for (const ev of drainDebug()) yield ev;
     } catch (err) {
       if (stepAbort.signal.aborted) {

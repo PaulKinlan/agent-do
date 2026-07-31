@@ -531,7 +531,7 @@ export interface AgentConfig {
      *   soft check runs.
      *
      * - **Hard cap (`perRun × hardLimitMultiplier`)**: the per-step
-     *   `onStepFinish` hook records each model step's usage and
+     *   `onStepEnd` hook records each model step's usage and
      *   aborts the in-progress `streamText` call via AbortSignal as
      *   soon as cumulative cost crosses the hard cap. This bounds
      *   mid-iteration overshoot even in worst-case step chains.

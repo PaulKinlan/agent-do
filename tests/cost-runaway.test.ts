@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { runAgentLoop, streamAgentLoop, buildOnStepFinish } from '../src/loop.js';
+import { runAgentLoop, streamAgentLoop, buildOnStepEnd } from '../src/loop.js';
 import { createMockModel } from '../src/testing/index.js';
 import { UsageTracker } from '../src/usage.js';
 import type { AgentConfig, ProgressEvent, PricingTable } from '../src/types.js';
@@ -152,7 +152,7 @@ describe('M-03: tool-call rate limiting', () => {
 
 // ─── #31 M-07: per-step hard spending cap (unit test the hook) ──────────
 
-describe('M-07: buildOnStepFinish', () => {
+describe('M-07: buildOnStepEnd', () => {
   const pricing: PricingTable = {
     'cap-test': { input: 1000, output: 1000 }, // $1000/M tokens
   };
@@ -167,7 +167,7 @@ describe('M-07: buildOnStepFinish', () => {
     const config = baseConfig({
       usage: { enabled: false, pricing, limits: { perRun: 1 } },
     });
-    expect(buildOnStepFinish(config, tracker, ctrl, 0)).toBeUndefined();
+    expect(buildOnStepEnd(config, tracker, ctrl, 0)).toBeUndefined();
   });
 
   it('records step usage even without a perRun limit (PR #65 review)', () => {
@@ -178,7 +178,7 @@ describe('M-07: buildOnStepFinish', () => {
     const tracker = new UsageTracker({ pricing });
     const ctrl = new AbortController();
     const config = baseConfig({ usage: { pricing } });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     expect(hook).toBeDefined();
     hook!(stepWithUsage(10, 20));
     expect(tracker.getSummary().records).toHaveLength(1);
@@ -196,7 +196,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1, // hard cap == soft cap
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     expect(hook).toBeDefined();
 
     // Step cost: 10/1M × 1000 + 20/1M × 1000 = $0.03.
@@ -218,7 +218,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1.25, // hard = 1.25
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     hook!(stepWithUsage(10, 20)); // $0.03 projected, well under 1.25
     expect(ctrl.signal.aborted).toBe(false);
   });
@@ -236,7 +236,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1, // hard = 0.03
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     // Next step adds $0.03, so projected = 0.02 + 0.03 = 0.05 >= 0.03.
     hook!(stepWithUsage(10, 20));
     expect(ctrl.signal.aborted).toBe(true);
@@ -252,7 +252,7 @@ describe('M-07: buildOnStepFinish', () => {
         limits: { perRun: 0.03 }, // cost equals limit → soft trip, not hard
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     // Projected 0.03 < 0.03 × 1.25 = 0.0375 → no abort.
     hook!(stepWithUsage(10, 20));
     expect(ctrl.signal.aborted).toBe(false);
@@ -265,7 +265,7 @@ describe('M-07: buildOnStepFinish', () => {
       model: mockModel({ responses: [{ text: 'x' }], modelId: 'cap-test' }),
       usage: { pricing, limits: { perRun: 0.0001 }, hardLimitMultiplier: 1 },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     hook!({}); // no usage
     expect(ctrl.signal.aborted).toBe(false);
   });
@@ -286,7 +286,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1,
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     hook!(stepWithUsage(10, 20)); // running total $0.03 < cap 0.04
     expect(ctrl.signal.aborted).toBe(false);
     hook!(stepWithUsage(10, 20)); // running total $0.06 >= cap 0.04
@@ -306,7 +306,7 @@ describe('M-07: buildOnStepFinish', () => {
         hardLimitMultiplier: 1,
       },
     });
-    const hook = buildOnStepFinish(config, tracker, ctrl, 0);
+    const hook = buildOnStepEnd(config, tracker, ctrl, 0);
     hook!(stepWithUsage(10, 20));
     expect(ctrl.signal.aborted).toBe(true);
     expect(tracker.getSummary().records).toHaveLength(1);
