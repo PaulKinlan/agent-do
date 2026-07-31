@@ -23,8 +23,8 @@
  */
 
 import type {
-  LanguageModelV3Middleware,
-  LanguageModelV3StreamPart,
+  LanguageModelV4Middleware,
+  LanguageModelV4StreamPart,
 } from '@ai-sdk/provider';
 import type { ModelMessage } from 'ai';
 import type { DebugConfig, DebugEvent } from './types.js';
@@ -80,7 +80,7 @@ export function createDebugMiddleware(
   debug: DebugConfig,
   emit: (event: DebugEvent) => void,
   stepRef: StepRef,
-): LanguageModelV3Middleware {
+): LanguageModelV4Middleware {
   const wantMessages = debug.all || debug.messages;
   const wantRequest = debug.all || debug.request;
   // `response` follows `all: true` — library users who ask for
@@ -94,7 +94,7 @@ export function createDebugMiddleware(
   const maxBodyBytes = debug.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   return {
-    specificationVersion: 'v3',
+    specificationVersion: 'v4',
     transformParams: async ({ params, model }) => {
       if (wantMessages) {
         const { messages, bytes, truncated } = clampMessages(
@@ -131,7 +131,7 @@ export function createDebugMiddleware(
       return {
         ...result,
         stream: result.stream.pipeThrough(
-          new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
+          new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
             transform(part, controller) {
               emit({
                 channel: 'response-part',
@@ -217,7 +217,7 @@ function clampMessages(
 
 /**
  * Split a step's raw usage into the channels the `cache` debug event
- * surfaces. Exported separately so `buildOnStepFinish` can use it
+ * surfaces. Exported separately so `buildOnStepEnd` can use it
  * without needing to import the middleware.
  *
  * Anthropic's cache metrics surface via

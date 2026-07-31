@@ -172,6 +172,7 @@ describe('mountMcpServers (#75)', () => {
     const result = await tool.execute!({ path: '/tmp/foo' } as never, {
       toolCallId: 't1',
       messages: [],
+      context: undefined,
     });
 
     expect(stubClient.callTool).toHaveBeenCalledWith({
@@ -230,7 +231,7 @@ describe('mountMcpServers (#75)', () => {
     ]);
     const result = (await mounted.tools.mcp__srv__echo.execute!(
       {} as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
 
     expect(result).toContain('line one\nline two\n[image: image/png]');
@@ -253,7 +254,7 @@ describe('mountMcpServers (#75)', () => {
     ]);
     const result = (await mounted.tools.mcp__srv__fail.execute!(
       {} as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
 
     // "Tool error:" sits inside the <tool_output> wrapper, not at the
@@ -275,7 +276,7 @@ describe('mountMcpServers (#75)', () => {
     ]);
     const result = (await mounted.tools.mcp__srv__flaky.execute!(
       {} as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
 
     // The error path returns the raw error string (no <tool_output>
@@ -371,7 +372,7 @@ describe('mountMcpServers (#75)', () => {
 
     const result = (await mounted.tools.mcp__srv__x.execute!(
       {} as never,
-      { toolCallId: 't', messages: [] },
+      { toolCallId: 't', messages: [], context: undefined },
     )) as string;
     expect(result).toMatch(/closed/);
   });

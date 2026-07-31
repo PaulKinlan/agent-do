@@ -58,7 +58,9 @@ There is no undo. Proceed with caution.
 npm install agent-do
 ```
 
-Peer dependency: `ai` (Vercel AI SDK v6+).
+Requires **Node.js 22 or newer** — the floor set by AI SDK 7.
+
+Peer dependency: `ai` (Vercel AI SDK v7+).
 
 The CLI ships with `@ai-sdk/anthropic`, `@ai-sdk/google`, and `@ai-sdk/openai`
 bundled so `npx agent-do` works out of the box. These are declared as optional

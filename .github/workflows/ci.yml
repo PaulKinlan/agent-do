@@ -20,8 +20,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Active LTS + Current. package.json declares engines >=20.
-        node: ['20', '22', '24']
+        # Active LTS + Current. package.json declares engines >=22, which
+        # is the floor AI SDK 7 requires — Node 20 can no longer be tested.
+        node: ['22', '24']
 
     steps:
       - uses: actions/checkout@v4
