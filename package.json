@@ -89,7 +89,7 @@
     "agent-do-changelog-formatter": "file:./scripts/changelog-formatter",
     "tsx": "^4.0.0",
     "typedoc": "^0.28.0",
-    "typedoc-plugin-markdown": "^4.4.0",
+    "typedoc-plugin-markdown": "^4.12.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }
