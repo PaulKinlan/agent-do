@@ -29,9 +29,8 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   createOrchestrator,
-  createFileTools,
+  createWorkspaceTools,
 } from 'agent-do';
-import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
 import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
@@ -135,16 +134,15 @@ seed('tasks.md', TASKS);
 // ═══════════════════════════════════════════════
 
 // FilesystemMemoryStore scopes paths to `{baseDir}/{agentId}/`. Using
-// `agentId: ''` puts all roles at the workspace root — which is what we
-// want here because every specialist reads/writes the same shared
-// files (priority-map.md, inbox.md, tracker.md, tasks.md) seeded above.
-// Binding to 'master' would send reads/writes to `sandbox/master/*`,
-// missing the seeded source-of-truth files entirely.
-const store = new FilesystemMemoryStore(SANDBOX_DIR);
-const masterFileTools = createFileTools(store, '');
-const eaFileTools = createFileTools(store, '');
-const bdFileTools = createFileTools(store, '');
-const taskFileTools = createFileTools(store, '');
+// createWorkspaceTools puts all roles at the workspace root — which is what
+// we want here because every specialist reads/writes the same shared files
+// (priority-map.md, inbox.md, tracker.md, tasks.md) seeded above. A
+// per-agent memory store would instead send reads/writes to
+// `sandbox/master/*`, missing the seeded source-of-truth files entirely.
+const masterFileTools = createWorkspaceTools(SANDBOX_DIR);
+const eaFileTools = createWorkspaceTools(SANDBOX_DIR);
+const bdFileTools = createWorkspaceTools(SANDBOX_DIR);
+const taskFileTools = createWorkspaceTools(SANDBOX_DIR);
 
 // ═══════════════════════════════════════════════
 //  Build the orchestrator

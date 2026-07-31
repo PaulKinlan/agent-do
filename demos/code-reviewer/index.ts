@@ -16,10 +16,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   createAgent,
-  createFileTools,
+  createWorkspaceTools,
   type AgentHooks,
 } from 'agent-do';
-import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
 import { resolveProvider } from './provider.js';
 
 // ═══════════════════════════════════════════════
@@ -64,23 +63,17 @@ console.log('');
 //  Read-only filesystem store for the source code
 // ═══════════════════════════════════════════════
 
-// The review target is mounted read-only -- the agent cannot modify the code.
-// FilesystemMemoryStore scopes to {baseDir}/{agentId}/, so we use the parent
-// Use targetDir as baseDir with '.' as agentId — read_file("src/index.ts")
-// resolves to targetDir/src/index.ts. Path traversal (../) is blocked by
-// FilesystemMemoryStore's containment check against baseDir.
-const sourceStore = new FilesystemMemoryStore(targetDir, { readOnly: true });
-const SOURCE_AGENT_ID = '.';
+// The review target is mounted read-only — the agent cannot modify the code.
+// `readOnly: true` blocks every write op at the store layer, so it holds even
+// if a write tool leaks into the toolset below. Tools are rooted at
+// targetDir, so read_file("src/index.ts") resolves to
+// targetDir/src/index.ts; path traversal (../) is blocked by the store's
+// containment check against the root.
+const sourceTools = createWorkspaceTools(targetDir, { readOnly: true });
 
-// A writable store for saving the review output
-const outputStore = new FilesystemMemoryStore(OUTPUT_DIR);
+// A writable workspace for saving the review output.
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-
-// Combine both into tools:
-//   - Source code tools are read-only
-//   - Output tools can write (for saving the review)
-const sourceTools = createFileTools(sourceStore, SOURCE_AGENT_ID);
-const outputTools = createFileTools(outputStore, AGENT_ID);
+const outputTools = createWorkspaceTools(OUTPUT_DIR);
 
 // Build a combined toolset with clear naming
 const tools: Record<string, any> = {};
@@ -262,7 +255,9 @@ console.log('');
 console.log(finalText);
 console.log('');
 
-const reviewPath = path.join(OUTPUT_DIR, AGENT_ID, reviewFilename);
+// createWorkspaceTools roots writes at OUTPUT_DIR itself — there is no
+// per-agent subdirectory, so save_review("<name>.md") lands here.
+const reviewPath = path.join(OUTPUT_DIR, reviewFilename);
 if (fs.existsSync(reviewPath)) {
   console.log(`  Full review saved to: ${reviewPath}`);
 } else {

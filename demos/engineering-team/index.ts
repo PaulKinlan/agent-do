@@ -25,8 +25,7 @@
 import * as readline from 'node:readline';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createOrchestrator, createFileTools } from 'agent-do';
-import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
+import { createOrchestrator, createWorkspaceTools } from 'agent-do';
 import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
@@ -41,14 +40,13 @@ const resolved = await resolveProvider();
 
 mkdirSync(SPRINT_DIR, { recursive: true });
 
-// `agentId: ''` mounts both master and workers at the workspace root
+// createWorkspaceTools mounts both master and workers at the workspace root
 // (SPRINT_DIR) so every phase's artifact lands in `sprint/01-…` through
-// `sprint/05-…` as documented. Binding to 'master' would send writes
-// to `sprint/master/*` — the README and final console output would
+// `sprint/05-…` as documented. A per-agent memory store would instead send
+// writes to `sprint/master/*` — the README and final console output would
 // then point at the wrong place.
-const store = new FilesystemMemoryStore(SPRINT_DIR);
-const masterFileTools = createFileTools(store, '');
-const workerFileTools = createFileTools(store, '');
+const masterFileTools = createWorkspaceTools(SPRINT_DIR);
+const workerFileTools = createWorkspaceTools(SPRINT_DIR);
 
 // ═══════════════════════════════════════════════
 //  Build the orchestrator

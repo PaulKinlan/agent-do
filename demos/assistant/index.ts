@@ -18,12 +18,11 @@
 import * as readline from 'node:readline';
 import {
   createAgent,
-  createFileTools,
+  createWorkspaceTools,
   type ConversationMessage,
   type AgentHooks,
   type RunUsage,
 } from 'agent-do';
-import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
 import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
@@ -54,11 +53,10 @@ const resolved = await resolveProvider();
 announce(resolved);
 const model = resolved.model(resolved.defaults.master);
 
-// Persistent filesystem store
-const store = new FilesystemMemoryStore(DATA_DIR);
-
-// File tools for the agent
-const fileTools = createFileTools(store, AGENT_ID);
+// File tools for the agent, rooted at DATA_DIR. createWorkspaceTools builds
+// its own FilesystemMemoryStore and layers the sensitive-file deny list on
+// top, so the demo doesn't construct a store directly.
+const fileTools = createWorkspaceTools(DATA_DIR);
 
 // Lifecycle hooks
 const hooks: AgentHooks = {

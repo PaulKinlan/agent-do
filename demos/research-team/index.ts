@@ -14,9 +14,8 @@
 import * as readline from 'node:readline';
 import {
   createOrchestrator,
-  createFileTools,
+  createWorkspaceTools,
 } from 'agent-do';
-import { FilesystemMemoryStore } from 'agent-do/stores/filesystem';
 import { resolveProvider, announce } from './provider.js';
 
 // ═══════════════════════════════════════════════
@@ -33,9 +32,8 @@ const DATA_DIR = '.data';
 // ./provider.ts for DEMO_PROVIDER + per-provider key vars.
 const resolved = await resolveProvider();
 
-// Persistent filesystem store for the master (to save reports)
-const store = new FilesystemMemoryStore(DATA_DIR);
-const masterFileTools = createFileTools(store, 'master');
+// Persistent file tools for the master (to save reports), rooted at DATA_DIR.
+const masterFileTools = createWorkspaceTools(DATA_DIR);
 
 // ═══════════════════════════════════════════════
 //  Build the orchestrator
