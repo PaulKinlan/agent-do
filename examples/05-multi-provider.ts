@@ -18,8 +18,8 @@ console.log('This example asks each provider the same question: "What is 2+2?"\n
 
 console.log('Available providers:');
 console.log('  anthropic  — Claude (claude-sonnet-5)');
-console.log('  google     — Gemini (gemini-2.5-flash)');
-console.log('  openai     — GPT (gpt-4.1-mini)');
+console.log('  google     — Gemini (gemini-3.6-flash)');
+console.log('  openai     — GPT (gpt-5.6-terra)');
 console.log('  ollama     — Llama (llama3.2, local)\n');
 
 // ── Anthropic (Claude) ──
@@ -39,7 +39,7 @@ async function withAnthropic() {
 // ── Google (Gemini) ──
 async function withGoogle() {
   const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
-  const model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY! })('gemini-2.5-flash');
+  const model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY! })('gemini-3.6-flash');
 
   const agent = createAgent({
     id: 'gemini-agent',
@@ -53,7 +53,7 @@ async function withGoogle() {
 // ── OpenAI (GPT) ──
 async function withOpenAI() {
   const { createOpenAI } = await import('@ai-sdk/openai');
-  const model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY! })('gpt-4.1-mini');
+  const model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY! })('gpt-5.6-terra');
 
   const agent = createAgent({
     id: 'gpt-agent',

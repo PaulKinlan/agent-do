@@ -8,7 +8,7 @@ A multi-agent orchestrator where a Master agent coordinates a Researcher and Wri
 - **Researcher agent** -- Gathers information and key facts about the topic.
 - **Writer agent** -- Takes research output and drafts a polished, structured report.
 - **Real-time progress** -- Logs which agent is active and what tools they are calling.
-- **File output** -- Saves the final report to `.data/master/reports/` as a markdown file (scoped under the master agent's ID by `FilesystemMemoryStore`).
+- **File output** -- Saves the final report to `.data/reports/` as a markdown file.
 
 ## How to run
 
@@ -39,7 +39,7 @@ This demo auto-detects the provider from whichever API key is set. To force a sp
 3. The researcher returns findings to the master.
 4. The master delegates writing to the writer agent.
 5. The writer drafts a structured report.
-6. The master saves the report to `.data/master/reports/`.
+6. The master saves the report to `.data/reports/`.
 7. The final report is printed to the console.
 
 ## Architecture
@@ -48,7 +48,7 @@ This demo auto-detects the provider from whichever API key is set. To force a sp
 User (topic)
   |
   v
-Master Agent (master model — e.g. claude-opus-5 / gemini-3.1-pro-preview / gpt-5.4)
+Master Agent (master model — e.g. claude-opus-5 / gemini-3.6-flash / gpt-5.6-terra)
   |--- delegate_task("researcher", "Research X...")
   |      |
   |      v
@@ -62,5 +62,5 @@ Master Agent (master model — e.g. claude-opus-5 / gemini-3.1-pro-preview / gpt
   |      returns polished report
   |
   v
-Final report saved to .data/master/reports/
+Final report saved to .data/reports/
 ```

@@ -85,11 +85,17 @@ describe('resolveModel — API key preflight', () => {
 // ─── Default model IDs ─────────────────────────────────────────────────
 
 describe('DEFAULT_MODELS', () => {
-  it('defaults Anthropic to the current Sonnet generation', () => {
-    // Pinned deliberately: bumping the default changes what every user who
-    // omits --model is billed for, so it should be a visible diff with a
-    // changeset rather than an incidental edit.
-    expect(DEFAULT_MODELS.get('anthropic')).toBe('claude-sonnet-5');
+  // Pinned deliberately: bumping a default changes what every user who omits
+  // --model is billed for, so it should be a visible diff with a changeset
+  // rather than an incidental edit.
+  it.each([
+    ['anthropic', 'claude-sonnet-5'],
+    ['google', 'gemini-3.6-flash'],
+    ['openai', 'gpt-5.6-terra'],
+    ['ollama', 'llama3.2'],
+    ['zai', 'glm-4.6'],
+  ])('defaults %s to %s', (provider, model) => {
+    expect(DEFAULT_MODELS.get(provider)).toBe(model);
   });
 
   it('has a default for every provider resolveModel can construct', () => {

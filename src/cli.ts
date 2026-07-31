@@ -85,7 +85,7 @@ Piping:
 Options:
   --provider <name>      anthropic | google | openai | ollama | zai (default: anthropic)
   --model <id>           Model ID. Defaults: anthropic claude-sonnet-5,
-                         google gemini-2.5-flash, openai gpt-4.1-mini,
+                         google gemini-3.6-flash, openai gpt-5.6-terra,
                          ollama llama3.2, zai glm-4.6
   --system <prompt>      System prompt (default: "You are a helpful assistant.")
   --cwd <dir>            Working directory for workspace tools (default: current dir)

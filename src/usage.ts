@@ -32,7 +32,13 @@ export const DEFAULT_PRICING: PricingTable = {
   'claude-3-sonnet': { input: 3.0, output: 15.0 },
   'claude-3-haiku': { input: 0.25, output: 1.25 },
 
-  // OpenAI
+  // OpenAI — https://developers.openai.com/api/docs/models
+  // GPT-5.6 ships as three named tiers. The bare `gpt-5.6` alias routes to
+  // Sol, so it carries Sol's rates.
+  'gpt-5.6-sol': { input: 5.0, output: 30.0 },
+  'gpt-5.6-terra': { input: 2.0, output: 12.0 },
+  'gpt-5.6-luna': { input: 0.2, output: 1.2 },
+  'gpt-5.6': { input: 5.0, output: 30.0 },
   'gpt-5': { input: 1.25, output: 10.0 },
   'gpt-5.4': { input: 2.5, output: 15.0 },
   'gpt-5.3': { input: 2.5, output: 15.0 },
@@ -47,7 +53,13 @@ export const DEFAULT_PRICING: PricingTable = {
   'o3-mini': { input: 1.1, output: 4.4 },
   'o4-mini': { input: 1.1, output: 4.4 },
 
-  // Google Gemini
+  // Google Gemini — https://ai.google.dev/gemini-api/docs/pricing
+  'gemini-3.6-flash': { input: 1.5, output: 7.5 },
+  'gemini-3.5-flash-lite': { input: 0.3, output: 2.5 },
+  'gemini-3.5-flash': { input: 1.5, output: 9.0 },
+  // Gemini charges more for prompts over 200k tokens (3.1 Pro: $4/$18).
+  // This table has no long-context tier, so it carries the <=200k rate and
+  // will under-report on very large prompts.
   'gemini-3.1-pro': { input: 2.0, output: 12.0 },
   'gemini-3-flash': { input: 0.5, output: 3.0 },
   'gemini-3.1-flash-lite': { input: 0.25, output: 1.5 },

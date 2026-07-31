@@ -204,7 +204,7 @@
 - `npx agent-do scheduled-tasks <run|list|status|install|start>` — cron-driven runs (#79)
 - `npx agent-do <file.shellm>` — prompt files as executable scripts (#16)
 - `--provider <name>` — anthropic | google | openai | ollama | zai (default: anthropic)
-- `--model <id>` — model ID. Per-provider defaults: anthropic `claude-sonnet-5`, google `gemini-2.5-flash`, openai `gpt-4.1-mini`, ollama `llama3.2`, zai `glm-4.6`.
+- `--model <id>` — model ID. Per-provider defaults: anthropic `claude-sonnet-5`, google `gemini-3.6-flash`, openai `gpt-5.6-terra`, ollama `llama3.2`, zai `glm-4.6`.
 - `--system <prompt>` — system prompt
 - `--memory <dir>` — memory directory (default: .agent-do/)
 - `--read-only` — no filesystem writes

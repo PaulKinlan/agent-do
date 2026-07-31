@@ -38,8 +38,8 @@ export interface ResolvedProvider {
 
 const DEFAULTS: Record<Provider, { master: string; worker: string }> = {
   anthropic: { master: 'claude-opus-5', worker: 'claude-haiku-4-5' },
-  google: { master: 'gemini-3.1-pro-preview', worker: 'gemini-3.1-flash-lite-preview' },
-  openai: { master: 'gpt-5.4', worker: 'gpt-5.4-mini' },
+  google: { master: 'gemini-3.6-flash', worker: 'gemini-3.5-flash-lite' },
+  openai: { master: 'gpt-5.6-terra', worker: 'gpt-5.6-luna' },
 };
 
 /**

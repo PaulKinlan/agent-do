@@ -139,7 +139,7 @@ echo "function add(a, b) { return a + b }" | npx agent-do "Review this code"
 npx agent-do
 
 # Choose provider and model
-npx agent-do --provider google --model gemini-2.5-flash "Hello"
+npx agent-do --provider google --model gemini-3.6-flash "Hello"
 
 # Create a reusable agent
 npx agent-do create code-reviewer --provider anthropic --system "Review code for bugs"
@@ -175,7 +175,7 @@ npx agent-do scheduled-tasks <verb>      Cron-driven runs (run|list|status|insta
 Options:
   --provider <name>      anthropic | google | openai | ollama | zai (default: anthropic)
   --model <id>           Model ID. Defaults: anthropic claude-sonnet-5,
-                         google gemini-2.5-flash, openai gpt-4.1-mini,
+                         google gemini-3.6-flash, openai gpt-5.6-terra,
                          ollama llama3.2, zai glm-4.6
   --system <prompt>      System prompt
   --cwd <dir>            Working directory for workspace tools (default: cwd)
@@ -252,7 +252,7 @@ The same fields are first-class on saved agents and `AgentConfig`:
 
 ```bash
 npx agent-do create researcher \
-  --provider google --model gemini-2.5-flash \
+  --provider google --model gemini-3.6-flash \
   --system 'Research topics' \
   --provider-tool googleSearch --provider-tool urlContext \
   --provider-options '{"google":{"useSearchGrounding":true}}'
@@ -266,7 +266,7 @@ In a script (Format 2), set them on the exported `AgentConfig`:
 import { google } from '@ai-sdk/google';
 export default {
   id: 'researcher', name: 'researcher',
-  model: google('gemini-2.5-flash'),
+  model: google('gemini-3.6-flash'),
   tools: {
     google_search: google.tools.googleSearch({}),
     url_context: google.tools.urlContext({}),
@@ -625,7 +625,7 @@ $ cat > review.shellm <<'EOF'
 #!/usr/bin/env agent-do
 ---
 provider: google
-model: gemini-2.5-flash
+model: gemini-3.6-flash
 system: You are a code reviewer. Be terse.
 ---
 Review the staged git diff for bugs.
@@ -1611,8 +1611,8 @@ const result = await runEvals(suite);
 const result = await runEvals(suite, {
   providers: [
     { name: 'anthropic', model: anthropic('claude-sonnet-5') },
-    { name: 'google', model: google('gemini-2.5-flash') },
-    { name: 'openai', model: openai('gpt-4.1-mini') },
+    { name: 'google', model: google('gemini-3.6-flash') },
+    { name: 'openai', model: openai('gpt-5.6-terra') },
   ],
 });
 // Prints a comparison table with pass rate, cost, and latency per provider

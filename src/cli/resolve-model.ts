@@ -25,9 +25,13 @@ import type { LanguageModel } from 'ai';
  * entry points (`package.json#exports` does not expose `./cli/*`).
  */
 export const DEFAULT_MODELS = new Map<string, string>([
+  // Each provider's default is its current balanced tier, not its cheapest
+  // or its flagship — the same reasoning that puts Anthropic on Sonnet
+  // rather than Haiku or Opus. Reach for a different tier with --model
+  // (e.g. `--provider openai --model gpt-5.6-sol` or `--model gpt-5.6-luna`).
   ['anthropic', 'claude-sonnet-5'],
-  ['google', 'gemini-2.5-flash'],
-  ['openai', 'gpt-4.1-mini'],
+  ['google', 'gemini-3.6-flash'],
+  ['openai', 'gpt-5.6-terra'],
   ['ollama', 'llama3.2'],
   ['zai', 'glm-4.6'],
 ]);

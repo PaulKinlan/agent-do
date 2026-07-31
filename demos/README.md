@@ -26,9 +26,9 @@ Each demo auto-detects which AI SDK provider to use from the environment. Set an
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...              # picks Anthropic (claude-opus-5           / claude-haiku-4-5)
-export GOOGLE_GENERATIVE_AI_API_KEY=...          # picks Google    (gemini-3.1-pro-preview  / gemini-3.1-flash-lite-preview)
+export GOOGLE_GENERATIVE_AI_API_KEY=...          # picks Google    (gemini-3.6-flash        / gemini-3.5-flash-lite)
 #   …or GOOGLE_API_KEY / GEMINI_API_KEY, both accepted as aliases
-export OPENAI_API_KEY=sk-...                     # picks OpenAI    (gpt-5.4                 / gpt-5.4-mini)
+export OPENAI_API_KEY=sk-...                     # picks OpenAI    (gpt-5.6-terra           / gpt-5.6-luna)
 ```
 
 If more than one is set, the demos pick **anthropic → google → openai** in that order. To force a specific provider (useful when you have multiple keys set), set `DEMO_PROVIDER`:
@@ -68,7 +68,7 @@ A multi-agent orchestrator with a Master, Researcher, and Writer agent that coll
 - Researcher gathers information
 - Writer drafts a polished report
 - Real-time progress logging shows which agent is active
-- Final report saved to `.data/master/reports/` (scoped under the master agent's ID)
+- Final report saved to `.data/reports/`
 
 ```bash
 (cd demos/research-team && npm start "Rust programming language")
@@ -79,9 +79,9 @@ A multi-agent orchestrator with a Master, Researcher, and Writer agent that coll
 An agent that reads source files from a directory and produces a structured code review report.
 
 - Takes a directory path as argument (defaults to current directory)
-- Uses `FilesystemMemoryStore` in read-only mode
+- Mounts the review target read-only via `createWorkspaceTools(dir, { readOnly: true })`
 - Structured review covering security, bugs, and readability
-- Saves review report to `.data/reviews/reviewer/` (scoped under the reviewer agent's ID)
+- Saves review report to `.data/reviews/`
 - Progress output as files are read and analyzed
 
 ```bash
