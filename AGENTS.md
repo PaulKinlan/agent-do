@@ -104,7 +104,27 @@ touching the repo, and a stale map costs more than it saves.
    published pricing page and cite it in a comment — never from memory.
 9. **`AGENTS.md` and `CLAUDE.md` are byte-identical mirrors.** Edit one,
    copy it over the other. CI fails the build if they diverge.
-10. **Changesets** — see below.
+10. **Changing a dependency? Regenerate the lockfile from scratch.**
+
+    ```bash
+    rm -rf node_modules package-lock.json && npm install
+    ```
+
+    Never commit a lockfile produced by an incremental command
+    (`npm install <pkg>`, `npm update`, `npm install --package-lock-only`).
+    Those prune nested optional platform bindings that npm doesn't need
+    on *your* machine but does need when resolving the full tree — for
+    this repo, `@rolldown/binding-wasm32-wasi`'s pinned
+    `@emnapi/core`/`@emnapi/runtime`. A full regeneration writes 11
+    `@emnapi` entries; an incremental one writes 6.
+
+    **A passing local `npm ci` does not catch this** — it succeeds on the
+    pruned lockfile because your platform doesn't need those bindings. CI
+    does need them, so every job dies at `Install` with
+    `npm error Missing: @emnapi/core@… from lock file`. This has broken
+    `main` twice. Also re-run `npm install` in each `demos/*` afterwards
+    so the demo lockfiles stay in sync for the demo CI job.
+11. **Changesets** — see below.
 
 ## Changesets (release discipline)
 

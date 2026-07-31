@@ -27,6 +27,23 @@ can supply a newer minor without a duplicate install). `tryImport`
 loads them dynamically, so a consumer who never touches a given
 provider never pays for it.
 
+### Lockfile regeneration
+
+Any dependency change must be followed by a **full** regeneration:
+
+```bash
+rm -rf node_modules package-lock.json && npm install
+```
+
+Incremental commands (`npm install <pkg>`, `npm update`,
+`npm install --package-lock-only`) silently prune nested optional
+platform bindings — here, the `@emnapi/core` / `@emnapi/runtime` copies
+pinned by `@rolldown/binding-wasm32-wasi`. A full regeneration writes 11
+`@emnapi` entries; an incremental one writes 6, and `npm ci` then fails
+in CI with `Missing: @emnapi/core@… from lock file` even though it
+succeeds locally (your platform doesn't need those bindings; the CI
+resolver still validates them).
+
 ### Runtime floor
 
 `engines.node` is `>=22`, inherited from AI SDK 7. Node 20 is no longer
