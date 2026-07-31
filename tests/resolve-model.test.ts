@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { resolveModel } from '../src/cli/resolve-model.js';
+import { resolveModel, DEFAULT_MODELS } from '../src/cli/resolve-model.js';
 
 const ENV_VARS = [
   'ANTHROPIC_API_KEY',
@@ -79,6 +79,23 @@ describe('resolveModel — API key preflight', () => {
 
   it('treats an unknown provider as unknown without touching env', async () => {
     await expect(resolveModel('unknown-xyz')).rejects.toThrow(/Unknown provider "unknown-xyz"/);
+  });
+});
+
+// ─── Default model IDs ─────────────────────────────────────────────────
+
+describe('DEFAULT_MODELS', () => {
+  it('defaults Anthropic to the current Sonnet generation', () => {
+    // Pinned deliberately: bumping the default changes what every user who
+    // omits --model is billed for, so it should be a visible diff with a
+    // changeset rather than an incidental edit.
+    expect(DEFAULT_MODELS.get('anthropic')).toBe('claude-sonnet-5');
+  });
+
+  it('has a default for every provider resolveModel can construct', () => {
+    for (const provider of ['anthropic', 'google', 'openai', 'ollama', 'zai']) {
+      expect(DEFAULT_MODELS.get(provider)).toBeTruthy();
+    }
   });
 });
 

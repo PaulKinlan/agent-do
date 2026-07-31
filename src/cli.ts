@@ -83,8 +83,10 @@ Piping:
   cat file.txt | npx agent-do "Summarize"  Pipe file contents as context
 
 Options:
-  --provider <name>      anthropic | google | openai | ollama (default: anthropic)
-  --model <id>           Model ID (default: provider-specific)
+  --provider <name>      anthropic | google | openai | ollama | zai (default: anthropic)
+  --model <id>           Model ID. Defaults: anthropic claude-sonnet-5,
+                         google gemini-2.5-flash, openai gpt-4.1-mini,
+                         ollama llama3.2, zai glm-4.6
   --system <prompt>      System prompt (default: "You are a helpful assistant.")
   --cwd <dir>            Working directory for workspace tools (default: current dir)
   --memory <dir>         Memory directory for --with-memory (default: .agent-do/)

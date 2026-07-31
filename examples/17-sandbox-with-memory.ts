@@ -32,7 +32,7 @@ console.log('  Example 17: Shell + in-memory store');
 console.log('═══════════════════════════════════════\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
-  'claude-sonnet-4-6',
+  'claude-sonnet-5',
 );
 
 const store = new InMemoryMemoryStore();

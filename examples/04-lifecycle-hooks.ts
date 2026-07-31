@@ -24,7 +24,7 @@ console.log('  - onComplete:     when the agent finishes (final stats)\n');
 console.log('The hooks are configured to BLOCK memory_delete calls.');
 console.log('We will ask the agent to save a note, then try to delete it.\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 const memory = new InMemoryMemoryStore();
 
 const agent = createAgent({

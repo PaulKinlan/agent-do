@@ -24,7 +24,7 @@ console.log('══════════════════════�
 const provider = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
 console.log('Setting up orchestrator:');
-console.log('  Master:     claude-sonnet-4-6 (coordinates work)');
+console.log('  Master:     claude-sonnet-5   (coordinates work)');
 console.log('  Researcher: claude-haiku-4-5  (finds information)');
 console.log('  Writer:     claude-haiku-4-5  (drafts content)\n');
 
@@ -32,7 +32,7 @@ const orchestrator = createOrchestrator({
   master: {
     id: 'master',
     name: 'Master',
-    model: provider('claude-sonnet-4-6') as any,
+    model: provider('claude-sonnet-5') as any,
     systemPrompt: `You are a master agent. You coordinate specialist workers.
 Available workers:
 - researcher: finds and summarizes information

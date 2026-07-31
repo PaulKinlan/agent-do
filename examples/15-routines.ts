@@ -73,7 +73,7 @@ For a weekly report covering week {{week}}:
 console.log('Pre-saved 2 routines: triage-inbox, weekly-report\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
-  'claude-sonnet-4-6',
+  'claude-sonnet-5',
 );
 
 const agent = createAgent({

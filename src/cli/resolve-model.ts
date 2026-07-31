@@ -12,8 +12,20 @@ import type { LanguageModel } from 'ai';
 // values for keys like `constructor`, `toString`, or `__proto__`, which leaks
 // into assertApiKey / resolveModel and produces misleading errors.
 
-const DEFAULT_MODELS = new Map<string, string>([
-  ['anthropic', 'claude-sonnet-4-6'],
+/**
+ * Per-provider default model when `--model` is omitted.
+ *
+ * Every entry must also be present in `DEFAULT_PRICING` (src/usage.ts) —
+ * an unpriced default ships with cost tracking and the `perRunLimit` /
+ * `perDayLimit` guards silently disabled. `tests/usage.test.ts` asserts
+ * that invariant against this map directly, so keep them together.
+ *
+ * Exported for that test and for callers that want to show the default
+ * without invoking the resolver. It is not part of the package's public
+ * entry points (`package.json#exports` does not expose `./cli/*`).
+ */
+export const DEFAULT_MODELS = new Map<string, string>([
+  ['anthropic', 'claude-sonnet-5'],
   ['google', 'gemini-2.5-flash'],
   ['openai', 'gpt-4.1-mini'],
   ['ollama', 'llama3.2'],

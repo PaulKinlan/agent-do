@@ -52,7 +52,7 @@ console.log('The agent gets memory tools backed by the filesystem store.');
 console.log('Available tools: memory_read, memory_write, memory_list,');
 console.log('  memory_delete, memory_search\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 const agent = createAgent({
   id: 'my-agent',

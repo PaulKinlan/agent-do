@@ -37,7 +37,7 @@ export interface ResolvedProvider {
 }
 
 const DEFAULTS: Record<Provider, { master: string; worker: string }> = {
-  anthropic: { master: 'claude-opus-4-7', worker: 'claude-haiku-4-5' },
+  anthropic: { master: 'claude-opus-5', worker: 'claude-haiku-4-5' },
   google: { master: 'gemini-3.1-pro-preview', worker: 'gemini-3.1-flash-lite-preview' },
   openai: { master: 'gpt-5.4', worker: 'gpt-5.4-mini' },
 };

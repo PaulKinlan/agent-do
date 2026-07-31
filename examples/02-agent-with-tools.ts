@@ -22,7 +22,7 @@ console.log('══════════════════════�
 console.log('  Example 2: Agent with Custom Tools');
 console.log('═══════════════════════════════════════\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 console.log('Setting up agent with 2 tools:');
 console.log('  - get_weather(city) → returns mock weather data');

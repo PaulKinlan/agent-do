@@ -23,7 +23,7 @@ console.log('  1. "My name is Alice and I live in Tokyo."');
 console.log('  2. "What is my name?"   (should recall Alice)');
 console.log('  3. "Where do I live?"   (should recall Tokyo)\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 const agent = createAgent({
   id: 'chat-agent',

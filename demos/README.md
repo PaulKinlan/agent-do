@@ -25,7 +25,7 @@ Then install each demo's dependencies (using subshells so your working directory
 Each demo auto-detects which AI SDK provider to use from the environment. Set an API key for Anthropic, Google, or OpenAI:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...              # picks Anthropic (claude-opus-4-7         / claude-haiku-4-5)
+export ANTHROPIC_API_KEY=sk-ant-...              # picks Anthropic (claude-opus-5           / claude-haiku-4-5)
 export GOOGLE_GENERATIVE_AI_API_KEY=...          # picks Google    (gemini-3.1-pro-preview  / gemini-3.1-flash-lite-preview)
 #   …or GOOGLE_API_KEY / GEMINI_API_KEY, both accepted as aliases
 export OPENAI_API_KEY=sk-...                     # picks OpenAI    (gpt-5.4                 / gpt-5.4-mini)
@@ -40,7 +40,7 @@ DEMO_PROVIDER=google npm start
 You can also override the default model IDs for a run:
 
 ```bash
-DEMO_MASTER_MODEL=claude-opus-4-7 DEMO_WORKER_MODEL=claude-sonnet-4-6 npm start
+DEMO_MASTER_MODEL=claude-opus-5 DEMO_WORKER_MODEL=claude-sonnet-5 npm start
 ```
 
 ## Demos

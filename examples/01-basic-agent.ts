@@ -14,7 +14,7 @@ console.log('══════════════════════�
 console.log('  Example 1: Basic Agent');
 console.log('═══════════════════════════════════════\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 const agent = createAgent({
   id: 'assistant',

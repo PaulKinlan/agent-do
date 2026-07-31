@@ -40,7 +40,7 @@ export function isAnthropicModel(model: LanguageModel): boolean {
   const provider = typeof model.provider === 'string' ? model.provider : undefined;
   if (provider !== undefined) return provider.startsWith('anthropic');
   const modelId = typeof model.modelId === 'string' ? model.modelId : undefined;
-  // Share the string-branch rules so OpenRouter-style ids like `anthropic/claude-sonnet-4-6`
+  // Share the string-branch rules so OpenRouter-style ids like `anthropic/claude-sonnet-5`
   // still match when an object model exposes them via `modelId` without a provider. Dropping
   // this would silently skip cache headers for valid Anthropic models.
   return modelId !== undefined && isAnthropicIdString(modelId);

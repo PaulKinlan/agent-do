@@ -16,7 +16,7 @@ console.log('══════════════════════�
 console.log('  Example 3: Agent with Memory');
 console.log('═══════════════════════════════════════\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 // ── Setup: In-memory store with pre-populated data ──
 console.log('── Setup ──');

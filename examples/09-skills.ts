@@ -32,7 +32,7 @@ console.log('     - Common bugs (off-by-one, null checks, race conditions)');
 console.log('     - Readability and naming conventions');
 console.log('     - Constructive suggestions\n');
 
-const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
 const skills = new InMemorySkillStore();
 

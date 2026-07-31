@@ -17,7 +17,7 @@ console.log('The agent loop works with any Vercel AI SDK provider.');
 console.log('This example asks each provider the same question: "What is 2+2?"\n');
 
 console.log('Available providers:');
-console.log('  anthropic  — Claude (claude-sonnet-4-6)');
+console.log('  anthropic  — Claude (claude-sonnet-5)');
 console.log('  google     — Gemini (gemini-2.5-flash)');
 console.log('  openai     — GPT (gpt-4.1-mini)');
 console.log('  ollama     — Llama (llama3.2, local)\n');
@@ -25,7 +25,7 @@ console.log('  ollama     — Llama (llama3.2, local)\n');
 // ── Anthropic (Claude) ──
 async function withAnthropic() {
   const { createAnthropic } = await import('@ai-sdk/anthropic');
-  const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-4-6');
+  const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })('claude-sonnet-5');
 
   const agent = createAgent({
     id: 'claude-agent',

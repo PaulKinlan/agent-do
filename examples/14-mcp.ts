@@ -41,7 +41,7 @@ writeFileSync(
 console.log(`Sandbox directory: ${sandbox}\n`);
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
-  'claude-sonnet-4-6',
+  'claude-sonnet-5',
 );
 
 // Mount the filesystem MCP server, scoped to our sandbox directory.

@@ -38,7 +38,7 @@ console.log('  Example 18: Workspace tools + shell');
 console.log('═══════════════════════════════════════\n');
 
 const model = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })(
-  'claude-sonnet-4-6',
+  'claude-sonnet-5',
 );
 
 const baseDir = await mkdtemp(path.join(tmpdir(), 'agent-do-ex18-'));
