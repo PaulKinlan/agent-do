@@ -1,9 +1,22 @@
 import type { PricingTable, RunUsage, UsageRecord } from './types.js';
 
-// Built-in pricing table — prices per 1M tokens in USD
-// Copied from packages/extension/src/agents/pricing.ts
+// Built-in pricing table — prices per 1M tokens in USD.
+//
+// Keys are matched exactly first, then by longest prefix (see
+// `longestPrefixMatch`), so a dated or suffixed variant of a listed model
+// resolves to the most specific entry. Models absent from the table cost
+// `0` and disable spending limits — add an entry (or pass a custom
+// `AgentConfig.usage.pricing`) rather than relying on the fallback.
 export const DEFAULT_PRICING: PricingTable = {
-  // Anthropic
+  // Anthropic — newest first.
+  'claude-fable-5': { input: 10.0, output: 50.0 },
+  // Same capabilities and rates as Fable 5; available via Project Glasswing.
+  'claude-mythos-5': { input: 10.0, output: 50.0 },
+  'claude-opus-5': { input: 5.0, output: 25.0 },
+  'claude-opus-4-8': { input: 5.0, output: 25.0 },
+  // List price. An introductory $2/$10 rate applies through 2026-08-31;
+  // we bill at list so cost estimates never under-report after it lapses.
+  'claude-sonnet-5': { input: 3.0, output: 15.0 },
   'claude-opus-4-7': { input: 5.0, output: 25.0 },
   'claude-opus-4-6': { input: 5.0, output: 25.0 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
@@ -65,6 +78,23 @@ export const DEFAULT_PRICING: PricingTable = {
   'qwen3-32b': { input: 0.29, output: 0.59 },
   'mixtral-8x7b-32768': { input: 0.24, output: 0.24 },
 
+  // Z.ai (Zhipu AI / GLM) — https://docs.z.ai/guides/overview/pricing
+  // The `zai` CLI provider shipped without these, so every zai run had
+  // cost tracking and spending limits silently disabled.
+  'glm-5.2': { input: 1.4, output: 4.4 },
+  'glm-5.1': { input: 1.4, output: 4.4 },
+  'glm-5-turbo': { input: 1.2, output: 4.0 },
+  'glm-5': { input: 1.0, output: 3.2 },
+  'glm-4.7-flashx': { input: 0.07, output: 0.4 },
+  'glm-4.7-flash': { input: 0, output: 0 },
+  'glm-4.7': { input: 0.6, output: 2.2 },
+  'glm-4.6': { input: 0.6, output: 2.2 },
+  'glm-4.5-airx': { input: 1.1, output: 4.5 },
+  'glm-4.5-air': { input: 0.2, output: 1.1 },
+  'glm-4.5-flash': { input: 0, output: 0 },
+  'glm-4.5-x': { input: 2.2, output: 8.9 },
+  'glm-4.5': { input: 0.6, output: 2.2 },
+
   // Perplexity
   sonar: { input: 1.0, output: 1.0 },
   'sonar-pro': { input: 3.0, output: 15.0 },
@@ -90,6 +120,33 @@ function normalizeModelId(model: string): string {
     return model.split('/').pop()!;
   }
   return model;
+}
+
+/**
+ * Resolve a model ID to pricing by longest matching prefix.
+ *
+ * Providers publish dated and suffixed variants of models whose *base*
+ * name is also a pricing key — `gpt-4.1-mini-2025-04-14` starts with both
+ * `gpt-4.1` and `gpt-4.1-mini`; `gemini-2.5-flash-lite-preview-09-2025`
+ * starts with both `gemini-2.5-flash` and `gemini-2.5-flash-lite`. Taking
+ * the first prefix in table-insertion order billed those at the parent
+ * model's (much higher) rate, which silently mis-fires the `perRunLimit`
+ * and `perDayLimit` spending guards. Picking the longest match resolves to
+ * the most specific entry regardless of key order.
+ *
+ * Ties are impossible: two keys of equal length that are both prefixes of
+ * the same string are the same key.
+ */
+function longestPrefixMatch(
+  table: PricingTable,
+  modelId: string,
+): PricingTable[string] | undefined {
+  let bestKey: string | undefined;
+  for (const key of Object.keys(table)) {
+    if (!modelId.startsWith(key)) continue;
+    if (bestKey === undefined || key.length > bestKey.length) bestKey = key;
+  }
+  return bestKey === undefined ? undefined : table[bestKey];
 }
 
 /**
@@ -128,9 +185,7 @@ export function estimateCost(
   const table = pricing ?? DEFAULT_PRICING;
   const normalized = normalizeModelId(model);
 
-  const prices =
-    table[normalized] ||
-    Object.entries(table).find(([key]) => normalized.startsWith(key))?.[1];
+  const prices = table[normalized] ?? longestPrefixMatch(table, normalized);
 
   if (!prices) {
     // Distinguish the built-in default table from a truly caller-supplied

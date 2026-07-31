@@ -5,6 +5,7 @@ import {
   DEFAULT_PRICING,
   resetPricingWarnings,
 } from '../src/usage.js';
+import { DEFAULT_MODELS } from '../src/cli/resolve-model.js';
 
 describe('estimateCost', () => {
   beforeEach(() => {
@@ -44,6 +45,54 @@ describe('estimateCost', () => {
     // "claude-sonnet-4-6-20260301" should match "claude-sonnet-4-6"
     const cost = estimateCost('claude-sonnet-4-6-20260301', 1000, 500);
     expect(cost).toBeCloseTo(0.0105, 6);
+  });
+
+  describe('prefix matching picks the most specific entry', () => {
+    // Providers ship dated/suffixed variants of models whose *base* name is
+    // also a pricing key ("gpt-4.1-mini-2025-04-14" vs "gpt-4.1"). Matching
+    // the first prefix in table order billed those at the parent model's
+    // rate — up to 5x the real price — which silently mis-fires
+    // `usage.perRunLimit` / `perDayLimit`. The longest matching key wins.
+    const M = 1_000_000;
+
+    it('prices a dated gpt-4.1-mini as gpt-4.1-mini, not gpt-4.1', () => {
+      // gpt-4.1-mini: 0.4 in / 1.6 out. gpt-4.1: 2.0 / 8.0.
+      expect(estimateCost('gpt-4.1-mini-2025-04-14', M, M)).toBeCloseTo(2.0, 6);
+    });
+
+    it('prices a dated gpt-4.1-nano as gpt-4.1-nano, not gpt-4.1', () => {
+      // gpt-4.1-nano: 0.1 in / 0.4 out.
+      expect(estimateCost('gpt-4.1-nano-2025-04-14', M, M)).toBeCloseTo(0.5, 6);
+    });
+
+    it('prices a gemini flash-lite preview as flash-lite, not flash', () => {
+      // gemini-2.5-flash-lite: 0.1 / 0.4. gemini-2.5-flash: 0.3 / 2.5.
+      expect(
+        estimateCost('gemini-2.5-flash-lite-preview-09-2025', M, M),
+      ).toBeCloseTo(0.5, 6);
+    });
+
+    it('prices a dated o3-mini as o3-mini, not o3', () => {
+      // o3-mini: 1.1 / 4.4. o3: 2.0 / 8.0.
+      expect(estimateCost('o3-mini-2025-01-31', M, M)).toBeCloseTo(5.5, 6);
+    });
+
+    it('prices glm-4.5-air as air, not as the full glm-4.5', () => {
+      // glm-4.5-air: 0.2 / 1.1. glm-4.5: 0.6 / 2.2.
+      expect(estimateCost('glm-4.5-air-0722', M, M)).toBeCloseTo(1.3, 6);
+    });
+
+    it('still prefers an exact match over any prefix', () => {
+      expect(estimateCost('gpt-4.1', M, M)).toBeCloseTo(10.0, 6);
+    });
+
+    it('applies longest-prefix resolution to custom tables too', () => {
+      const pricing = {
+        'my-model': { input: 100, output: 100 },
+        'my-model-mini': { input: 1, output: 1 },
+      };
+      expect(estimateCost('my-model-mini-2026-01-01', M, M, pricing)).toBe(2);
+    });
   });
 
   describe('unknown-model warning (#38)', () => {
@@ -181,5 +230,31 @@ describe('DEFAULT_PRICING', () => {
     expect(DEFAULT_PRICING).toHaveProperty('gpt-4o');
     expect(DEFAULT_PRICING).toHaveProperty('gemini-2.5-pro');
     expect(DEFAULT_PRICING).toHaveProperty('mistral-large');
+  });
+
+  it('covers the current Claude generation', () => {
+    // A missing entry means estimateCost() returns 0, which silently
+    // disables perRunLimit / perDayLimit for that model.
+    for (const model of [
+      'claude-fable-5',
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-sonnet-5',
+    ]) {
+      expect(DEFAULT_PRICING).toHaveProperty(model);
+      expect(estimateCost(model, 1_000_000, 0)).toBeGreaterThan(0);
+    }
+  });
+
+  it('prices every CLI per-provider default model', () => {
+    // A CLI default missing from the table returns cost 0, which switches
+    // off perRunLimit / perDayLimit for anyone who never passes --model.
+    // Asserted against the real map so the two can't drift.
+    for (const [provider, model] of DEFAULT_MODELS) {
+      expect(
+        DEFAULT_PRICING,
+        `CLI default for "${provider}" (${model}) has no pricing entry`,
+      ).toHaveProperty(model);
+    }
   });
 });
