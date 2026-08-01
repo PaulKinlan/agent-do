@@ -77,13 +77,13 @@ export function parseSlashCommand(
  * problem found. Checked in source order so the message is stable.
  *
  * Rules:
- *   - Keys must match {@link SLASH_NAME_RE} (same character class as
- *     skill / routine ids — prevents `/` or whitespace smuggling).
+ *   - Keys must match the internal `SLASH_NAME_RE` (same character class
+ *     as skill / routine ids — prevents `/` or whitespace smuggling).
  *   - Values must look like {@link Agent} instances (duck-typed on
  *     `run` / `stream` being functions; the TS type already constrains
  *     this, the runtime check catches plain-object misuse).
- *   - No value may itself carry {@link HAS_SLASH_COMMANDS} — nested
- *     slash commands (`/a/b`) are disallowed. See the marker docs.
+ *   - No value may itself carry the internal `HAS_SLASH_COMMANDS` marker —
+ *     nested slash commands (`/a/b`) are disallowed. See the marker docs.
  */
 export function validateSlashCommands(
   commands: Record<string, Agent> | undefined,

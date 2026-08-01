@@ -80,6 +80,25 @@ describe('resolveModel — API key preflight', () => {
   it('treats an unknown provider as unknown without touching env', async () => {
     await expect(resolveModel('unknown-xyz')).rejects.toThrow(/Unknown provider "unknown-xyz"/);
   });
+
+  it('shows executable createAgent guidance for unsupported providers', async () => {
+    let message = '';
+    try {
+      await resolveModel('mistral', 'mistral-large-latest');
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    expect(message).toContain("import { createAgent } from 'agent-do';");
+    expect(message).toContain("import { createMistral } from '@ai-sdk/mistral';");
+    expect(message).toContain('const agent = createAgent({');
+    expect(message).toContain("id: 'my-agent',");
+    expect(message).toContain("name: 'My Agent',");
+    expect(message).toContain("model: createMistral()('mistral-large-latest'),");
+    expect(message).toContain("await agent.run('your task');");
+    expect(message).not.toContain("import { Agent } from 'agent-do';");
+    expect(message).not.toContain('new Agent(');
+  });
 });
 
 // ─── Default model IDs ─────────────────────────────────────────────────

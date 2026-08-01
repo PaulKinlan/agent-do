@@ -129,10 +129,14 @@ export async function resolveModel(
         `For other providers (Mistral, Groq, Cohere, OpenRouter, Bedrock, etc.),\n` +
         `use agent-do as a library and pass any Vercel AI SDK LanguageModel:\n` +
         `\n` +
-        `  import { Agent } from 'agent-do';\n` +
+        `  import { createAgent } from 'agent-do';\n` +
         `  import { createMistral } from '@ai-sdk/mistral';\n` +
         `\n` +
-        `  const agent = new Agent({ model: createMistral()('mistral-large-latest') });\n` +
+        `  const agent = createAgent({\n` +
+        `    id: 'my-agent',\n` +
+        `    name: 'My Agent',\n` +
+        `    model: createMistral()('mistral-large-latest'),\n` +
+        `  });\n` +
         `  await agent.run('your task');\n` +
         `\n` +
         `See: https://sdk.vercel.ai/providers for the full provider list.`,

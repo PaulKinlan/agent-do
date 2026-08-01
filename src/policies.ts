@@ -183,7 +183,7 @@ export type PolicyInput =
  * The `id` is validated against `/^[a-zA-Z0-9_-]+$/` — the same safe-id
  * contract skills/routines enforce, and the same constraint that lets
  * the id round-trip through the rendered `<policy id="...">` attribute
- * without mutation (see {@link escapeAttr}).
+ * without mutation (see the internal `escapeAttr` helper).
  *
  * Throws `TypeError` on an invalid id so misconfigured agents fail fast
  * at construction rather than rendering a broken prompt.
@@ -233,7 +233,7 @@ export function createPolicy(input: PolicyInput): Policy {
  * push the result unconditionally.
  *
  * Injection safety: every body and the `type` attribute value run
- * through {@link escapePolicyBody} / {@link escapeAttr}, so a hostile
+ * through the internal `escapePolicyBody` / `escapeAttr` helpers, so a hostile
  * policy containing `</policy>` + jailbreak text cannot terminate its
  * wrapper early (Codex #67 P1, applied to the policy surface).
  */

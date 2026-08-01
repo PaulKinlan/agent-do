@@ -5,5 +5,10 @@
   "theme": "markdown",
   "readme": "none",
   "excludePrivate": true,
-  "excludeInternal": true
+  "excludeInternal": true,
+  "intentionallyNotExported": [
+    "JustBashCommandHandle",
+    "MemoryToolsOptions",
+    "CreateSkillToolsOptions"
+  ]
 }

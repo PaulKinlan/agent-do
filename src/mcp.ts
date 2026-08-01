@@ -87,7 +87,7 @@ export type McpTransportConfig =
     };
 
 /**
- * Result of {@link mountMcpServers}. `tools` is a {@link ToolSet} that
+ * Result of {@link mountMcpServers}. `tools` is an AI SDK `ToolSet` that
  * callers merge into their existing tools. `close()` releases every
  * server's transport and should be called on agent shutdown to avoid
  * leaked subprocesses.
@@ -124,7 +124,7 @@ export function namespacedToolName(serverName: string, toolName: string): string
 
 /**
  * Connect to each MCP server in `configs`, list their tools, and return
- * them merged as a single {@link ToolSet}.
+ * them merged as a single AI SDK `ToolSet`.
  *
  * Lifecycle contract:
  *   - All-or-nothing: if any server's `connect()` or `listTools()` throws,

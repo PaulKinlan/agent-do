@@ -69,8 +69,8 @@ export interface ProgressEvent {
  * The event surface is deliberately narrow and non-abstract — each
  * channel matches one thing you'd want to grep for when diagnosing
  * prompt / caching / tool-call problems. If you need richer tracing,
- * wire {@link AgentConfig.debug.sink} to an OpenTelemetry span emitter
- * and keep the progress stream unchanged.
+ * wire `AgentConfig.debug.sink` to an OpenTelemetry span emitter and keep
+ * the progress stream unchanged.
  */
 export type DebugEvent =
   /** The resolved system prompt, emitted once per run before any model call. */
@@ -131,7 +131,7 @@ export type DebugEvent =
  * Debug / observability configuration. Set on {@link AgentConfig.debug}
  * to get a lower-level view than `--verbose` / `--show-content`.
  *
- * Channels map 1:1 to {@link DebugEvent.channel} values. `all: true` is a
+ * Channels map 1:1 to `DebugEvent.channel` values. `all: true` is a
  * convenience that turns every channel on. Channel-specific flags take
  * precedence over `all` only in the sense that `all` is the baseline;
  * there's no way to "all-except" a channel intentionally — callers who

@@ -246,6 +246,35 @@ describe('DEFAULT_PRICING', () => {
     }
   });
 
+  it.each([
+    ['gpt-5.6-sol', 5.0, 30.0],
+    ['gpt-5.6-terra', 2.0, 12.0],
+    ['gpt-5.6-luna', 0.2, 1.2],
+    ['gpt-5.6', 5.0, 30.0],
+    ['gemini-3.6-flash', 1.5, 7.5],
+    ['gemini-3.5-flash-lite', 0.3, 2.5],
+    ['gemini-3.5-flash', 1.5, 9.0],
+    ['glm-5.2', 1.4, 4.4],
+    ['glm-5.1', 1.4, 4.4],
+    ['glm-5-turbo', 1.2, 4.0],
+    ['glm-5', 1.0, 3.2],
+    ['glm-4.7-flashx', 0.07, 0.4],
+    ['glm-4.7-flash', 0, 0],
+    ['glm-4.7', 0.6, 2.2],
+    ['glm-4.6', 0.6, 2.2],
+    ['glm-4.5-airx', 1.1, 4.5],
+    ['glm-4.5-air', 0.2, 1.1],
+    ['glm-4.5-flash', 0, 0],
+    ['glm-4.5-x', 2.2, 8.9],
+    ['glm-4.5', 0.6, 2.2],
+  ])('pins %s pricing at $%s input / $%s output per 1M tokens', (
+    model,
+    input,
+    output,
+  ) => {
+    expect(DEFAULT_PRICING[model]).toEqual({ input, output });
+  });
+
   it('prices every CLI per-provider default model', () => {
     // A CLI default missing from the table returns cost 0, which switches
     // off perRunLimit / perDayLimit for anyone who never passes --model.

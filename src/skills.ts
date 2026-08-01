@@ -518,7 +518,7 @@ export interface CreateSkillToolsOptions {
 /**
  * Create Vercel AI SDK tools for skill management.
  *
- * `install_skill` is gated behind {@link CreateSkillToolsOptions.allowInstall}
+ * `install_skill` is gated behind `CreateSkillToolsOptions.allowInstall`
  * — it's a privileged operation that lets the caller rewrite its own
  * future system prompts. See issue #24 for the threat model.
  */
