@@ -1,5 +1,37 @@
 # agent-do
 
+## 0.7.0
+
+### Minor Changes
+
+- Upgrade to AI SDK 7 (`ai@^7.0.44`) and the v4 provider packages (`@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/openai` at `^4.0.0`).
+
+- Bring model IDs and pricing up to the current generation.
+
+- Move the OpenAI and Google CLI defaults to current models. `--provider openai` defaults to `gpt-5.6-terra` (was `gpt-4.1-mini`) and `--provider google` to `gemini-3.6-flash` (was `gemini-2.5-flash`). Each provider's default is now its current balanced tier — the same reasoning that puts Anthropic on Sonnet rather than Haiku or Opus. Pinning a model with `--model` or `AgentConfig.model` is unaffected.
+
+- Add opt-in cross-process file locking to `FilesystemMemoryStore` (#15 Tier 1). Set the `lock` option and mutating ops (`write`/`append`/`delete`/`mkdir`) serialise per-file across every process sharing the same `baseDir` — protecting against orchestrator workers, overlapping `run()` calls, and cron-spawned processes (#79). `undefined` preserves today's naive-overwrite behaviour byte-for-byte.
+
+- Add a `Policy` primitive — typed system-prompt modules that ground every decision on every turn (GitHub #80). `AgentConfig.policies: Policy[]` injects a well-marked `## Policies` section into the system prompt, with each policy wrapped in `<policy id="…" type="…">…</policy>` markers that carry the same injection-safety preamble skills use (a hostile body containing `</policy>` cannot break out of its wrapper). `createPolicy({ id, type, content })` or `createPolicy({ id, type, source })` builds a policy from an object or a POLICY.md source with YAML frontmatter; `parsePolicyMd()` and `buildPoliciesPrompt()` handle parsing/rendering. `InMemoryPolicyStore` + the `PolicyStore` interface support callers who load policies from disk (no `url`/network field, mirroring `SkillSearchResult`). There is no LLM-facing install tool — policies are operator-authored, since a model rewriting its own policy would be a persistent jailbreak.
+
+- Add **scheduled tasks** — declarative cron-driven agent runs with lock-file concurrency (#79). Many useful agents run on a schedule (inbox sweep every 15 min, daily brief at 8am, weekly digest); now that's a first-class primitive instead of hand-rolled cron/systemd per agent.
+
+- Add **shellm** — prompt files you run like shell scripts (issue #16). A plain-text prompt with a shebang (`#!/usr/bin/env agent-do`) and optional YAML frontmatter becomes an executable:
+
+- Add a slash-command router (`AgentConfig.slashCommands`): when a user's task starts with `/<name>`, the loop deterministically dispatches the remainder to a configured sub-agent BEFORE any model call on the parent — zero LLM cost, zero tool round-trips. An unknown `/<name>` returns a listing of available commands without calling the parent model; non-slash input bypasses the router unchanged.
+
+- Add Z.ai (Zhipu AI / GLM) as a first-class CLI provider via its OpenAI-compatible endpoint. `npx agent-do --provider zai --model glm-4.6` works out of the box — it reuses the bundled `@ai-sdk/openai` against `https://api.z.ai/api/paas/v4`, so no new dependency. Set `ZAI_API_KEY`; override the endpoint with `ZAI_BASE_URL` (e.g. for the GLM Coding Plan endpoint at `/api/coding/paas/v4`). Library example added at `examples/19-zai.ts`.
+
+### Patch Changes
+
+- Document the Node >=22 runtime requirement via `package.json` `engines` (npm emits a clean `EBADENGINE` instead of a confusing ESM/`node:` failure on older runtimes). README examples table now lists the MCP (14) and routines (15) examples that were missing. `docs/supply-chain.md` zod row corrected to `^4.4.3` (it still read `^3.23.0` through 0.6.0).
+
+- Repair all five demos in `demos/`, which had been failing at import since `createFileTools` stopped being exported from the package root in #98. They now use `createWorkspaceTools`, the documented replacement, which keeps the same tool names (`read_file`, `write_file`, `grep_file`, …) so demo prompts and event handling are unchanged. The code-reviewer demo also drops its hand-rolled read-only store in favour of `createWorkspaceTools(target, { readOnly: true })`.
+
+- Raise the `@modelcontextprotocol/sdk` floor to `^1.30.0`. 1.29.x pulled in `hono`, `@hono/node-server`, and `fast-uri` versions carrying published advisories (one high: `fast-uri` host confusion); 1.30.0 clears all of them. Dependencies are also refreshed within their existing ranges (`ai` 6.0.238, `@ai-sdk/*` 3.0.9x–3.0.104).
+
+- Fix `estimateCost` resolving dated model IDs to the wrong pricing entry. Model IDs that aren't an exact key fall back to prefix matching, which previously took the _first_ prefix in table order rather than the most specific one. `gpt-4.1-mini-2025-04-14` was billed at `gpt-4.1` rates (5× over), `gemini-2.5-flash-lite-preview-09-2025` at `gemini-2.5-flash` rates (5.6× over), and `o3-mini-*` at `o3` rates. Because `usage.limits.perRun` / `perDay` are enforced against these estimates, affected runs could abort well before the real spend reached the limit.
+
 ## 0.6.0
 
 ### Minor Changes
