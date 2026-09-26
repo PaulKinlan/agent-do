@@ -12,7 +12,8 @@ src/
   loop.ts             — runAgentLoop / streamAgentLoop — core loop implementation
   loop-history.ts     — conversation-history hygiene for the loop (#33)
   types.ts            — all TypeScript interfaces and types
-  index.ts            — all exports
+  index.ts            — all exports (Node entry)
+  browser.ts          — browser-safe entry point (pure loop, remote MCP, memory tools)
 
   stores.ts           — MemoryStore + FileEntry + SearchOptions interfaces
   stores/

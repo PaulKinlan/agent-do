@@ -8,6 +8,12 @@
 - `runAgentLoop(config, task, context?, history?): Promise<RunResult>` — run loop directly
 - `streamAgentLoop(config, task, context?, history?): AsyncGenerator<ProgressEvent>` — stream events
 
+## Browser Entry Point
+
+Import from `agent-do/browser` for browser environments (e.g. Chrome extensions, web workers, web apps):
+- Excludes Node-only modules (`node:fs`, `node:child_process`, `node:module`, `cross-spawn`, file locking).
+- Retains real agent loop, pure routine/cron helpers, remote MCP (`sse` and `http` transports), and memory tools.
+
 ## Agent Interface
 
 - `agent.run(task, context?, history?): Promise<string>` — synchronous execution

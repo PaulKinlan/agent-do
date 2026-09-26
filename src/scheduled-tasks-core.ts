@@ -1,0 +1,205 @@
+/**
+ * Scheduled tasks core — pure cron expression matching and validation.
+ *
+ * Separated from scheduled-tasks.ts so browser bundles can import the
+ * pure scheduler types and cron validation without pulling in Node fs
+ * or file-locking helpers.
+ */
+
+import type { FileLockOptions } from './types.js';
+
+/**
+ * One scheduled task.
+ *
+ * `cron` is standard 5-field: minute hour day-of-month month day-of-week
+ * (0-7, where 0 and 7 are Sunday). `payload` is the task text the agent runs.
+ */
+export interface ScheduledTask {
+  /** Stable id. Used in `scheduled-tasks run <id>` and as the lock key. */
+  id: string;
+  /** 5-field cron expression. */
+  cron: string;
+  /** Task text (or stringifiable payload) the agent runs when the schedule fires. */
+  payload: string | Record<string, unknown>;
+  /** Human-readable description. Shown by `list` / `status`. */
+  description?: string;
+  /**
+   * Reserved: `'isolated'` (v1 default — every run starts fresh) vs `'main'`
+   * (append to a persistent conversation — deferred; needs a history store).
+   */
+  sessionTarget?: 'isolated' | 'main';
+  /**
+   * Reserved: `'agentTurn'` (v1 default — payload becomes the task text) vs
+   * `'systemEvent'` (structured wake event — deferred; no event channel yet).
+   */
+  wakeMode?: 'agentTurn' | 'systemEvent';
+}
+
+export interface ScheduledTasksConfig {
+  tasks: ScheduledTask[];
+  /**
+   * Where status (last-run times, outcomes) is recorded. Default
+   * `<memoryDir>/scheduler-status.json`. The lock dir is `<memoryDir>/.locks`
+   * so it reuses the #15 machinery and is shared across hosts.
+   */
+  statusFile?: string;
+  /** Override the lock options (staleMs etc.) for overlap prevention. */
+  lock?: FileLockOptions;
+}
+
+// ── Cron matcher ────────────────────────────────────────────────────────
+
+const FIELDS = ['minute', 'hour', 'dom', 'month', 'dow'] as const;
+type Field = (typeof FIELDS)[number];
+
+const FIELD_RANGES: Record<Field, { min: number; max: number }> = {
+  minute: { min: 0, max: 59 },
+  hour: { min: 0, max: 23 },
+  dom: { min: 1, max: 31 },
+  month: { min: 1, max: 12 },
+  dow: { min: 0, max: 7 }, // 0 and 7 both Sunday
+};
+
+/**
+ * True iff `date` matches the 5-field cron expression `expr`.
+ *
+ * Throws on malformed expressions (unknown field, out-of-range value, bad
+ * step, non-numeric token). Validation happens up front in `createAgent()`,
+ * so a task that passed validation won't throw here — but the matcher is
+ * exported and used directly by tests, so it validates defensively.
+ *
+ * Note on dom/dow interaction (the classic cron gotcha): per Vixie cron, if
+ * BOTH dom and dow are restricted (not `*`), the date matches if EITHER
+ * matches; if only one is restricted, that one must match. This matches the
+ * behaviour of every system cron.
+ */
+export function matchesCron(expr: string, date: Date = new Date()): boolean {
+  const fields = parseCron(expr);
+  const minute = date.getMinutes();
+  const hour = date.getHours();
+  const dom = date.getDate();
+  const month = date.getMonth() + 1; // JS months are 0-based
+  // JS getDay(): 0=Sunday..6=Saturday. Cron dow: 0 and 7 = Sunday.
+  const dow = date.getDay();
+
+  if (!fields.minute.has(minute)) return false;
+  if (!fields.hour.has(hour)) return false;
+  if (!fields.month.has(month)) return false;
+
+  const domStar = fields.dom.isStar;
+  const dowStar = fields.dow.isStar;
+  const domMatch = fields.dom.has(dom);
+  // Normalise 7 → 0 so Sunday matches either spelling.
+  const dowMatch = fields.dow.has(dow) || fields.dow.has(7) && dow === 0;
+
+  if (domStar && dowStar) return true;
+  if (domStar) return dowMatch;
+  if (dowStar) return domMatch;
+  return domMatch || dowMatch; // both restricted → OR (Vixie semantics)
+}
+
+interface ParsedField {
+  has(n: number): boolean;
+  readonly isStar: boolean;
+}
+
+function parseCron(expr: string): Record<Field, ParsedField> {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) {
+    throw new Error(
+      `Invalid cron expression "${expr}": expected 5 fields (minute hour dom month dow), got ${parts.length}.`,
+    );
+  }
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+  return {
+    minute: parseField(parts[0]!, 'minute'),
+    hour: parseField(parts[1]!, 'hour'),
+    dom: parseField(parts[2]!, 'dom'),
+    month: parseField(parts[3]!, 'month'),
+    dow: parseField(parts[4]!, 'dow'),
+  };
+}
+
+function parseField(raw: string, field: Field): ParsedField {
+  const { min, max } = FIELD_RANGES[field];
+  const values = new Set<number>();
+  let isStar = false;
+
+  for (const item of raw.split(',')) {
+    if (item === '*') {
+      isStar = true;
+      for (let n = min; n <= max; n++) values.add(normalize(n, field));
+      continue;
+    }
+    // step: a-b/n, */n, or n/n
+    const stepMatch = item.match(/^(.*)\/(\d+)$/);
+    const step = stepMatch ? parseInt(stepMatch[2]!, 10) : 1;
+    const rangePart = stepMatch ? stepMatch[1]! : item;
+    if (step < 1) throw new Error(`Invalid cron step "${item}" in ${field}: step must be >= 1.`);
+
+    let lo: number, hi: number;
+    if (rangePart === '*') {
+      lo = min; hi = max;
+    } else if (rangePart.includes('-')) {
+      const [a, b] = rangePart.split('-');
+      if (a === undefined || b === undefined) {
+        throw new Error(`Invalid cron range "${rangePart}" in ${field}.`);
+      }
+      lo = parseInt(a, 10); hi = parseInt(b, 10);
+    } else {
+      lo = parseInt(rangePart, 10);
+      hi = lo; // single value → degenerate range [lo, lo]
+    }
+    if (Number.isNaN(lo) || Number.isNaN(hi)) {
+      throw new Error(`Invalid cron value "${item}" in ${field}: not a number.`);
+    }
+    if (lo < min || hi > max || lo > hi) {
+      throw new Error(
+        `Cron ${field} value out of range in "${item}": allowed ${min}-${max}.`,
+      );
+    }
+    for (let n = lo; n <= hi; n += step) values.add(normalize(n, field));
+  }
+
+  return {
+    has: (n: number) => values.has(normalize(n, field)),
+    isStar,
+  };
+}
+
+/** For dow, treat 7 as 0 (both Sunday). Other fields pass through. */
+function normalize(n: number, field: Field): number {
+  if (field === 'dow' && n === 7) return 0;
+  return n;
+}
+
+// ── Validation ──────────────────────────────────────────────────────────
+
+export function validateScheduledTasks(tasks: ScheduledTask[]): ScheduledTask[] {
+  const ids = new Set<string>();
+  for (const t of tasks) {
+    if (!t.id || !/^[a-zA-Z0-9_-]+$/.test(t.id)) {
+      throw new Error(`Scheduled task id "${t.id}" is invalid (use [a-zA-Z0-9_-]+).`);
+    }
+    if (ids.has(t.id)) {
+      throw new Error(`Duplicate scheduled task id "${t.id}".`);
+    }
+    ids.add(t.id);
+    // parseCron throws on malformed expressions — that's the validation.
+    parseCron(t.cron);
+    if (t.payload === undefined || t.payload === null) {
+      throw new Error(`Scheduled task "${t.id}" has no payload.`);
+    }
+  }
+  return tasks;
+}
+
+export interface TaskStatus {
+  lastRunAt?: string; // ISO
+  lastDurationMs?: number;
+  lastOutcome?: 'ok' | 'error';
+  lastError?: string;
+  runCount: number;
+}
+
+export type StatusRecord = Record<string, TaskStatus>;

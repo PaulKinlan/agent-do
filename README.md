@@ -1681,6 +1681,25 @@ const result = await runEvals(suite, { output: 'silent' });
 | `estimateCost` | `(model, input, output, pricing?) => number` | Estimate cost in USD |
 | `DEFAULT_PRICING` | `PricingTable` | Built-in pricing for 50+ models |
 
+### Browser exports (`agent-do/browser`)
+
+Import from `agent-do/browser` for browser environments (e.g. Chrome extensions, web workers, web apps):
+
+| Export | Description |
+|--------|-------------|
+| `createAgent` | Create an agent with `run()`, `stream()`, and `abort()` |
+| `runAgentLoop`, `streamAgentLoop` | Core agent loop functions |
+| `mountMcpServers` | Mount remote MCP servers via `sse` and `http` transports (rejects `stdio`) |
+| `createMemoryTools` | Private agent scratchpad with any `MemoryStore` |
+| `InMemoryMemoryStore` | In-memory store implementation |
+| `parseRoutineMd`, `interpolateRoutine`, `createRoutineTools`, `InMemoryRoutineStore` | Pure routine tools and in-memory store |
+| `matchesCron`, `validateScheduledTasks` | Cron expression validation and matching |
+| `createPolicy`, `parsePolicyMd`, `buildPoliciesPrompt`, `InMemoryPolicyStore` | System prompt policy modules |
+| `buildSkillsPrompt`, `createSkillTools`, `InMemorySkillStore` | Skill tools and prompt builders |
+| `UsageTracker`, `estimateCost`, `DEFAULT_PRICING` | Usage tracking and cost estimation |
+| `createOrchestrator` | Multi-agent orchestration |
+| `buildSystemPrompt`, `interpolate`, `builtinSections`, `builtinTemplates` | Prompt builder utilities |
+
 ### Test exports (`agent-do/testing`)
 
 | Export | Type | Description |

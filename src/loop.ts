@@ -78,8 +78,8 @@ import {
   createSkillTools,
   resolveSkillsMode,
 } from './skills.js';
-import { mountMcpServers, type MountedMcpServers } from './mcp.js';
-import { createRoutineTools } from './routines.js';
+import { mountMcpServers, type MountedMcpServers } from './mcp-core.js';
+import { createRoutineTools } from './routines-core.js';
 import { buildPoliciesPrompt } from './policies.js';
 import { UsageTracker, estimateCost } from './usage.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';

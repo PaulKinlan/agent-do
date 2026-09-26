@@ -1,7 +1,7 @@
 import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './types.js';
 import { runAgentLoop, streamAgentLoop } from './loop.js';
 import { validateSlashCommands, markHasSlashCommands } from './slash-commands.js';
-import { validateScheduledTasks } from './scheduled-tasks.js';
+import { validateScheduledTasks } from './scheduled-tasks-core.js';
 
 /**
  * Create an Agent instance from configuration.
