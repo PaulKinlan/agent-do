@@ -123,19 +123,31 @@ touching the repo, and a stale map costs more than it saves.
     Never commit a lockfile produced by an incremental command
     (`npm install <pkg>`, `npm update`, `npm install --package-lock-only`).
     Those prune nested optional platform bindings that npm doesn't need
-    on *your* machine but does need when resolving the full tree — for
-    this repo, `@rolldown/binding-wasm32-wasi`'s pinned
-    `@emnapi/core`/`@emnapi/runtime`. A full regeneration writes 11
-    `@emnapi` entries; an incremental one writes 6.
+    on *your* machine but does need when resolving the full tree.
 
-    **A passing local `npm ci` does not catch this** — it succeeds on the
-    pruned lockfile because your platform doesn't need those bindings. CI
-    does need them, so every job dies at `Install` with
-    `npm error Missing: @emnapi/core@… from lock file`. This has broken
-    `main` twice. There is exactly ONE lockfile now — the root one
+    **Do not check this by counting `@emnapi` entries.** Up to rolldown
+    1.2.1 the pruned entries were `@rolldown/binding-wasm32-wasi`'s pinned
+    `@emnapi/core`/`@emnapi/runtime`, and 11-vs-6 was a usable proxy;
+    rolldown has since dropped that wasm binding, so a correct lockfile on
+    this repo now has **zero** `@emnapi` entries and the count reads a
+    healthy lockfile as broken. Check the property instead — every
+    `dependencies` / `optionalDependencies` entry declared by any package
+    in the lockfile must resolve to an entry in that same lockfile, and
+    `npm ci --dry-run` must resolve the whole graph
+    (`docs/supply-chain.md` § Lockfile regeneration has both commands).
+
+    **A passing local `npm ci` does not catch a pruned lockfile** — it
+    succeeds because your platform doesn't need those bindings. CI does,
+    so every job dies at `Install` with
+    `npm error Missing: … from lock file`. This has broken `main` twice.
+    There is exactly ONE lockfile now — the root one
     (rule 12) — so there are no demo lockfiles to re-sync: regenerate the
     root with `rm -rf node_modules package-lock.json && npm install` and
     run `npm run demos:smoke` to confirm the demos still start.
+    (An incremental `npm install <pkg>` can also rewrite SIBLING spec
+    ranges in `package.json` — it silently lowers this repo's `@ai-sdk`
+    dependency floors to the `peerDependencies` range
+    (`agent-do-fn3`) — so check `git diff package.json` afterwards too.)
 11. **Changesets** — see below.
 12. **One lockfile, and the demos are npm workspaces.** `demos/*` are
     workspace members of the root package (`"workspaces": ["demos/*"]`), so

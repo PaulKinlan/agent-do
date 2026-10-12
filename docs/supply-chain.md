@@ -37,12 +37,28 @@ rm -rf node_modules package-lock.json && npm install
 
 Incremental commands (`npm install <pkg>`, `npm update`,
 `npm install --package-lock-only`) silently prune nested optional
-platform bindings — here, the `@emnapi/core` / `@emnapi/runtime` copies
-pinned by `@rolldown/binding-wasm32-wasi`. A full regeneration writes 11
-`@emnapi` entries; an incremental one writes 6, and `npm ci` then fails
-in CI with `Missing: @emnapi/core@… from lock file` even though it
-succeeds locally (your platform doesn't need those bindings; the CI
-resolver still validates them).
+platform bindings — the class of entry `npm ci` still validates from
+another platform. **Do not check this by counting the `@emnapi`
+entries.** Up to rolldown 1.2.1 the pruned entries were the
+`@emnapi/core` / `@emnapi/runtime` copies pinned by
+`@rolldown/binding-wasm32-wasi`, and 11-vs-6 was a usable proxy; rolldown
+then dropped that wasm binding (1.2.8 declares fifteen optional bindings
+and no wasm32 one), so a correct lockfile on this repo now has **zero**
+`@emnapi` entries and the proxy reads a healthy lockfile as broken. Check
+the property itself instead — every dependency and optionalDependency
+that any package in the lockfile declares must resolve to an entry in
+that same lockfile:
+
+```bash
+npm ci --dry-run        # the cheapest real check: npm validates the whole graph
+node -e 'const p=require("./package-lock.json").packages;const have=new Set(Object.keys(p).filter(k=>k.includes("node_modules/")).map(k=>k.split("node_modules/").pop()));const miss=[];for(const [k,m] of Object.entries(p))for(const f of ["dependencies","optionalDependencies"])for(const d of Object.keys(m[f]||{}))if(!have.has(d))miss.push(d+" <- "+k);console.log(miss.length?miss:"ok: no declared dependency is missing from the lockfile")'
+```
+
+A lockfile that fails `npm ci --dry-run` while succeeding on your own
+platform is the defect this rule exists for. Watch `git diff package.json`
+as well: an incremental `npm install <pkg>` also rewrites SIBLING spec
+ranges — it lowers this repo's `@ai-sdk` dependency floors to the
+`peerDependencies` range (`agent-do-fn3`).
 
 ### Runtime floor
 
