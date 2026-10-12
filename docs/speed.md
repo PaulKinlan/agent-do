@@ -126,7 +126,11 @@ R6/R7 (smaller central surfaces) if the widest rows keep growing.
 
 The full gate's own split (41.5 s): static 13.8 s, vitest 21.0 s (46 files / 870 tests), evals 1.4 s. The
 bounds in `tools/check.conf` (600 s / 180 s) are kill windows ~11× and ~3× the measurements: a bound that
-fires means the gate wedged, not that it was slow.
+fires means the gate wedged, not that it was slow. The fast gate's *per-suite* bound (`SUITE_BOUND`, 120 s)
+is deliberately below the outer 180 s window: it has to be the one that fires, so a hung suite is reported as
+`fast-gate: failed: <suite>` with its log tail, instead of the outer kill recording the whole gate as
+`unknown` and losing which suite wedged. `tests/gates.test.ts` asserts the relationship against
+`tools/check.conf`, so raising one bound alone goes red.
 
 ## 5. Changes the fast tier refuses (and why that is deliberate)
 

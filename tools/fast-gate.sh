@@ -56,7 +56,13 @@ _ENV_STATIC=${STATIC_CMD-}
 FAST_GATE_RUNNER=${FAST_GATE_RUNNER:-npx vitest run}
 STATIC_CMD=${STATIC_CMD:-true}
 JOBS=${FAST_GATE_JOBS:-4}
-SUITE_BOUND=${SUITE_BOUND:-180}
+# Per-suite kill window. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf, 180 s):
+# the per-suite bound exists so that a hung suite is reported as `fast-gate: failed: <suite>` together with
+# its log tail. If the outer window fires first it is reported as `unknown` in the cached record instead —
+# the same value in both places made that a race, not a decision. 120 s + the 15 s SIGKILL grace the runner
+# is given below + the static step (~14 s on a 2-vCPU VM) fits inside 180 s with room to spare.
+# tests/gates.test.ts pins the relationship against tools/check.conf rather than trusting this comment.
+SUITE_BOUND=${SUITE_BOUND:-120}
 
 LIST=0; BASE="${FAST_GATE_BASE:-}"; EXPLICIT=()
 while [ $# -gt 0 ]; do
@@ -129,7 +135,12 @@ done
 
 # --- fail loudly on anything unmapped, BEFORE running a subset that would look green -------------------
 if [ "${#UNMAPPED[@]}" -gt 0 ]; then
-  for f in $(printf '%s\n' "${UNMAPPED[@]}" | sort -u); do echo "fast-gate: unmapped: $f"; done
+  # mapfile, NOT `for f in $(...)`: an unquoted substitution word-SPLITS a changed path containing a space
+  # and pathname-EXPANDS one containing * ? or [, so a single changed file could be reported as several
+  # unmapped paths, or as paths that never changed (e.g. `--changed 'src/*.ts'` against a real checkout).
+  # ~/fleet/remote/check-coverage.py harvests these lines into the cached fast record.
+  mapfile -t UNMAPPED_UNIQ < <(printf '%s\n' "${UNMAPPED[@]}" | sort -u)
+  for f in "${UNMAPPED_UNIQ[@]}"; do echo "fast-gate: unmapped: $f"; done
   echo "fast-gate: FAIL - ${#UNMAPPED[@]} changed file(s) map to no suite in tools/suite-map.tsv." >&2
   echo "fast-gate: a changed module that maps to zero suites is exactly the false-green case fleet-1n0z" >&2
   echo "fast-gate: describes. Either the module has a suite that the map does not name (run" >&2
