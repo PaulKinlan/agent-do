@@ -1,12 +1,12 @@
 /**
  * Testing utilities for agent-do.
  *
- * Provides a createMockModel that wraps the AI SDK's MockLanguageModelV3
+ * Provides a createMockModel that wraps the AI SDK's MockLanguageModelV4
  * with a simpler interface for predetermined responses.
  */
 
 import {
-  MockLanguageModelV3,
+  MockLanguageModelV4,
   convertArrayToReadableStream,
 } from 'ai/test';
 
@@ -29,6 +29,33 @@ export interface MockModelOptions {
   inputTokensPerCall?: number;
   /** Simulated output tokens per call. Defaults to 20. */
   outputTokensPerCall?: number;
+}
+
+/**
+ * V4 finish reasons are `{ unified, raw }`, not the flat string the retired V3 spec used. Getting this
+ * wrong is silent rather than loud: the SDK's tool-execution gate reads `finishReason.unified`, so a flat
+ * string leaves it undefined, `isToolExecutionAllowedFinishReason()` returns false, and the tool calls the
+ * model just reported are never executed. The loop then feeds that unexecuted call back as history and the
+ * SDK rejects it with MissingToolResultsError (agent-do-5jv).
+ */
+function mockFinishReason(response: MockResponse) {
+  return {
+    unified: response?.toolCalls?.length ? 'tool-calls' : 'stop',
+    raw: undefined,
+  };
+}
+
+/** V4 usage is nested per direction (`{total, noCache, …}`), not the flat `{inputTokens, outputTokens}`. */
+function mockUsage(inputTokens: number, outputTokens: number) {
+  return {
+    inputTokens: {
+      total: inputTokens,
+      noCache: inputTokens,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+    },
+    outputTokens: { total: outputTokens, text: outputTokens, reasoning: undefined },
+  };
 }
 
 function buildStreamParts(
@@ -83,8 +110,8 @@ function buildStreamParts(
 
   parts.push({
     type: 'finish',
-    finishReason: response?.toolCalls?.length ? 'tool-calls' : 'stop',
-    usage: { inputTokens, outputTokens },
+    finishReason: mockFinishReason(response),
+    usage: mockUsage(inputTokens, outputTokens),
   });
 
   return parts;
@@ -118,7 +145,10 @@ function buildGenerateContent(
  * Create a mock LanguageModel that returns predetermined responses.
  * Works with both streamText() and generateText() from the Vercel AI SDK.
  *
- * Uses the AI SDK's built-in MockLanguageModelV3.
+ * Uses the AI SDK's built-in MockLanguageModelV4. If a model is left on the
+ * retired V3 spec, the SDK no longer runs the tools it reports (the step loop
+ * returns the call with zero results), and the loop then feeds that unexecuted
+ * call back as history - which the SDK rejects with MissingToolResultsError.
  */
 export function createMockModel(options: MockModelOptions) {
   let callIndex = 0;
@@ -127,7 +157,7 @@ export function createMockModel(options: MockModelOptions) {
   const inputTokens = options.inputTokensPerCall ?? 10;
   const outputTokens = options.outputTokensPerCall ?? 20;
 
-  return new MockLanguageModelV3({
+  return new MockLanguageModelV4({
     provider,
     modelId,
     doGenerate: async () => {
@@ -141,10 +171,8 @@ export function createMockModel(options: MockModelOptions) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return {
         content: buildGenerateContent(response, callIndex),
-        finishReason: response?.toolCalls?.length
-          ? 'tool-calls'
-          : 'stop',
-        usage: { inputTokens, outputTokens },
+        finishReason: mockFinishReason(response),
+        usage: mockUsage(inputTokens, outputTokens),
         warnings: [],
       } as any;
     },
