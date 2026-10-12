@@ -432,6 +432,7 @@
     "tests/orchestrator.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
+    "tests/testing-mock.test.ts",
     "tests/tool-result-integration.test.ts"
   ],
   "src/tools/content-guards.ts": [
