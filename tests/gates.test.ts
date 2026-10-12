@@ -72,6 +72,14 @@ function readLog(fx: ReturnType<typeof fixture>): string[] {
   return existsSync(fx.log) ? readFileSync(fx.log, 'utf8').split('\n').filter(Boolean) : [];
 }
 
+/** The unmapped paths a run reported, in order — the marker ~/fleet/remote/check-coverage.py harvests. */
+function unmappedLines(out: string): string[] {
+  return out
+    .split('\n')
+    .filter((l) => l.startsWith('fast-gate: unmapped: '))
+    .map((l) => l.slice('fast-gate: unmapped: '.length));
+}
+
 describe('tools/fast-gate.sh — affected-only selection', () => {
   it('runs EVERY suite the map names for a changed source file, and reports each positively', () => {
     const fx = fixture();
@@ -91,6 +99,21 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     expect(out).not.toContain('fast-gate: passed:');
     expect(readLog(fx)).toEqual([]); // nothing may run when the map is incomplete
     expect(status).not.toBe(0);
+  });
+
+  it('reports one unmapped path per changed file, even when the path contains a space', () => {
+    const fx = fixture();
+    const { out } = runGate(fx, ['--changed', 'src/a b.ts']);
+    expect(unmappedLines(out)).toEqual(['src/a b.ts']);
+  });
+
+  it('never pathname-expands a changed path, so it cannot name a file that did not change', () => {
+    // The fixture has src/a.ts. Before this case existed the loop was `for f in $(printf ...)`, whose
+    // unquoted substitution expands `src/*.ts` against the checkout: the record then named src/a.ts — a
+    // path that did NOT change — as unmapped. The map only knows src/a.ts, so the glob is unmapped itself.
+    const fx = fixture();
+    const { out } = runGate(fx, ['--changed', 'src/*.ts']);
+    expect(unmappedLines(out)).toEqual(['src/*.ts']);
   });
 
   it('maps a changed test file to itself (docs/speed.md R14 names this the measured defect)', () => {
@@ -150,6 +173,23 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     const staleMap = runGate(stale, ['--changed', 'src/a.ts']);
     expect(staleMap.out).toContain('fast-gate: missing: tests/gone.test.ts');
     expect(staleMap.status).not.toBe(0);
+  });
+});
+
+describe('tools/fast-gate.sh — kill windows', () => {
+  it('bounds one suite well inside the outer fast-tier kill window', () => {
+    // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
+    // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
+    // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
+    // rather than left to a comment, so raising one of them alone goes red.
+    const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
+    const bound = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
+    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8'))?.[1]);
+    expect(Number.isFinite(bound), 'SUITE_BOUND default must be a literal number in tools/fast-gate.sh').toBe(true);
+    expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
+    // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): the bound must be able to fire,
+    // escalate, and still leave the gate time to name the suite before the outer window ends.
+    expect(bound + 15).toBeLessThan(outer);
   });
 });
 
