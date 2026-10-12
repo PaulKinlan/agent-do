@@ -75,8 +75,12 @@ the locked tree does not contain (this has been seen as
 tree with `rm -rf node_modules && fleet-deps`.
 
 **If the sibling ranges have already moved**, do not commit the widened
-spec: restore `package.json` from git (`git checkout -- package.json`) and
-regenerate the lockfile from scratch per the rule above. A widened floor is
+spec: restore **just those range lines**. `git restore -p package.json`
+(or `git checkout -p package.json`) lets you pick the hunks, and editing them
+back by hand works too. Do *not* run a blanket `git checkout -- package.json`:
+that also throws away any deliberate range change you have not committed yet,
+which is a worse outcome than the trap you are undoing. Then regenerate the
+lockfile from scratch per the rule above. A widened floor is
 invisible to the test suite and only shows up later as a repo that accepts
 dependency versions it never agreed to.
 
