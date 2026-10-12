@@ -13,11 +13,9 @@ A multi-agent orchestrator where a Master agent coordinates a Researcher and Wri
 ## How to run
 
 ```bash
-# Install repo root dependencies first (if not already done)
-# (cd ../.. && npm install)
-
-# Install demo dependencies
-npm install
+# One install at the repo root covers the library AND every demo:
+# the demos are npm workspaces, so there is no per-demo install any more.
+(cd ../.. && npm install)
 
 # Set an API key for any supported provider:
 export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)

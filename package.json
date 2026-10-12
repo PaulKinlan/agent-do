@@ -2,6 +2,9 @@
   "name": "agent-do",
   "version": "0.7.0",
   "type": "module",
+  "workspaces": [
+    "demos/*"
+  ],
   "engines": {
     "node": ">=22"
   },
@@ -52,6 +55,7 @@
     "typecheck": "tsc --noEmit",
     "eval": "tsx evals/run.ts",
     "eval:live": "tsx evals/run.ts --live",
+    "demos:smoke": "bash scripts/demo-smoke.sh",
     "changeset": "changeset",
     "release": "bash scripts/release.sh",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"

@@ -1,24 +1,16 @@
 # agent-do Demos
 
-Comprehensive demo applications showcasing agent-do in real-world scenarios. Each demo is a standalone project with its own dependencies.
+Comprehensive demo applications showcasing agent-do in real-world scenarios. Each demo is a workspace member of the repository (npm workspaces), so the five of them share **one** install and **one** lockfile at the repo root.
 
 ## Setup
 
-From the repo root, install the main package first:
+Everything installs from the repo root — there is no per-demo install, and no per-demo `package-lock.json`:
 
 ```bash
 npm install
 ```
 
-Then install each demo's dependencies (using subshells so your working directory isn't changed):
-
-```bash
-(cd demos/assistant && npm install)
-(cd demos/research-team && npm install)
-(cd demos/code-reviewer && npm install)
-(cd demos/chief-of-staff && npm install)
-(cd demos/engineering-team && npm install)
-```
+That one command installs the library, the workspace links for all five demos, and their dependencies (which are hoisted to the root `node_modules`).
 
 ### Choose a model provider
 
