@@ -1,8 +1,50 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FilesystemMemoryStore } from '../src/stores/filesystem.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+
+/**
+ * `node:fs/promises` is a module namespace, so `vi.spyOn` on it is not allowed (ESM namespaces are frozen);
+ * a partial mock that delegates to the real module is the supported way to observe the store's concurrency
+ * STRUCTURALLY. `vi.hoisted` keeps the probe alive before the hoisted mock factory and the store import run.
+ *
+ * Why this exists (agent-do-j5j): the concurrency test used to time a 16-way `Promise.all` against a
+ * sequential loop and assert the parallel batch was faster. That is a wall-clock assertion on a shared
+ * machine: with a warm page cache the sequential awaits PIPELINE while all 16 parallel reads contend for
+ * libuv's 4-thread pool, so the "parallel" batch can come out 2x SLOWER from a perfectly correct
+ * implementation. It failed a landing gate at random (59 ms vs a 22.5 ms threshold) and the gate then treats
+ * a cached FAIL as deterministic, so the only way through was deleting the record and hoping.
+ * docs/speed.md names the pathology: a test asserting machine state turns someone else's change red for
+ * reasons unrelated to their change.
+ */
+const fsProbe = vi.hoisted(() => ({
+  inFlight: 0,
+  peak: 0,
+  /** When > 0, every read waits this many ms before touching the real fs. */
+  delayMs: 0,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    readFile: (async (...args: Parameters<typeof real.readFile>) => {
+      fsProbe.inFlight += 1;
+      if (fsProbe.inFlight > fsProbe.peak) fsProbe.peak = fsProbe.inFlight;
+      try {
+        // A fixed beat, not a latch: a serialising implementation then fails on the peak below instead of
+        // hanging, and this stays bounded whatever the implementation does.
+        if (fsProbe.delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, fsProbe.delayMs));
+        }
+        return await real.readFile(...args);
+      } finally {
+        fsProbe.inFlight -= 1;
+      }
+    }) as unknown as typeof real.readFile,
+  };
+});
 
 describe('FilesystemMemoryStore', () => {
   let store: FilesystemMemoryStore;
@@ -283,41 +325,29 @@ describe('FilesystemMemoryStore', () => {
     });
 
     it('runs concurrent reads in parallel rather than serialising them', async () => {
-      // Per Copilot's review: a pure correctness check (results match
-      // input) would also pass if reads were silently serialised. Time
-      // a parallel batch against a forced-sequential baseline — on an
-      // async implementation the parallel path is visibly faster for
-      // a large enough N. We use a generous ratio (< 0.8×) to stay
-      // robust on slow CI: even modest parallelism beats sequential.
+      // Per Copilot's review: a pure correctness check (results match input) would also pass if reads were
+      // silently serialised, so the concurrency itself has to be observed. It is observed STRUCTURALLY
+      // here: give the fs layer a fixed beat, issue N reads, and count the PEAK number the implementation
+      // had in flight at once. A serialising implementation can only ever reach 1, because it waits for
+      // each read before issuing the next - so the peak IS the property, with no wall clock, no seqMs
+      // floor and no ratio. The old timing version is explained in the fsProbe comment (agent-do-j5j).
       const N = 16;
       const big = 'y'.repeat(128 * 1024);
       for (let i = 0; i < N; i++) {
         await store.write('agent-1', `f${i}.txt`, big);
       }
 
-      const tSeq = Date.now();
-      for (let i = 0; i < N; i++) {
-        await store.read('agent-1', `f${i}.txt`);
-      }
-      const seqMs = Date.now() - tSeq;
-
-      const tPar = Date.now();
+      fsProbe.peak = 0;
+      fsProbe.delayMs = 50;
       const results = await Promise.all(
         Array.from({ length: N }, (_, i) => store.read('agent-1', `f${i}.txt`)),
       );
-      const parMs = Date.now() - tPar;
+      const observedPeak = fsProbe.peak;
+      fsProbe.delayMs = 0;
 
       expect(results).toHaveLength(N);
-      // The timing comparison is only meaningful when sequential reads
-      // are slow enough for OS scheduling jitter not to dominate. When
-      // seqMs is in the single-digit millisecond range (warm page cache),
-      // a 1–2 ms noise spike can make parMs appear slightly higher than
-      // seqMs even with a genuinely parallel implementation. Skip the
-      // assertion in that case — the correctness check above and the
-      // 'setImmediate' test above still guard against regressions.
-      if (seqMs >= 20) {
-        expect(parMs).toBeLessThanOrEqual(seqMs * 0.9);
-      }
+      expect(results.every((content) => content === big)).toBe(true);
+      expect(observedPeak, 'peak reads in flight at once').toBeGreaterThan(1);
     });
   });
 });
