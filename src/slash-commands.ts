@@ -12,6 +12,7 @@
  */
 
 import type { Agent } from './types.js';
+import type { AgentConfig, RunResult } from './types.js';
 
 /**
  * Valid slash-command name shape. Same character class as skill /
@@ -155,4 +156,65 @@ export function unknownSlashCommandMessage(
     `Unknown slash command "/${name}". ` +
     `Available commands: ${available}.`
   );
+}
+
+
+// Split out of src/loop.ts (agent-do-4os).
+/**
+ * Deterministic slash-command dispatch for the non-streaming loop
+ * (#76). Runs before any model call and before MCP mount, so routing
+ * costs zero LLM tokens and never spins up the parent's servers.
+ *
+ * Returns a complete {@link RunResult} when the task is a slash
+ * command (whether the command exists or not), or `null` to let the
+ * normal loop take over.
+ *
+ * Usage accounting across the dispatch boundary is intentionally not
+ * surfaced: the sub-agent tracks its own usage internally and the
+ * parent's {@link UsageTracker} never ran, so the returned usage is
+ * zeroed. Steps is `1` on a successful dispatch (one sub-agent turn)
+ * and `0` on an unknown command (no model ran at all).
+ */
+export async function tryRouteSlashCommandRun(
+  config: AgentConfig,
+  task: string,
+  context?: string,
+): Promise<RunResult | null> {
+  if (!config.slashCommands) return null;
+  const parsed = parseSlashCommand(task);
+  if (!parsed) return null;
+
+  const sub = config.slashCommands[parsed.name];
+  if (sub) {
+    // History is deliberately not forwarded (see AgentConfig.slashCommands
+    // docs) — the sub-agent starts a fresh turn with the remainder.
+    const text = await sub.run(parsed.rest, context);
+    return {
+      text,
+      usage: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCost: 0,
+        steps: 1,
+        records: [],
+      },
+      steps: 1,
+      aborted: false,
+    };
+  }
+
+  // Unknown command — surface the listing as the final text. No model
+  // call, so steps is 0.
+  return {
+    text: unknownSlashCommandMessage(parsed.name, config.slashCommands),
+    usage: {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCost: 0,
+      steps: 0,
+      records: [],
+    },
+    steps: 0,
+    aborted: false,
+  };
 }

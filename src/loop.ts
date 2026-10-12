@@ -17,6 +17,8 @@ import { setupDebug, emitSystemPromptDebug } from './debug.js';
 import { buildTools, type ToolResultCache, type ToolCallCounters } from './tools-build.js';
 import { buildSystemPrompt } from './system-prompt.js';
 import { buildOnStepEnd } from './step-bookkeeping.js';
+import { mountConfigMcp } from './mcp.js';
+import { tryRouteSlashCommandRun } from './slash-commands.js';
 
 // Re-exported so importers of the loop module (and its tests) keep working unchanged.
 export { buildOnStepEnd };
@@ -26,7 +28,6 @@ import { addCacheControl } from './cache.js';
 // re-exported here so existing importers of the loop module keep working unchanged.
 export { isAnthropicModel } from './cache.js';
 
-import { mountMcpServers, type MountedMcpServers } from './mcp.js';
 import { UsageTracker } from './usage.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
 import {
@@ -43,89 +44,7 @@ const DEFAULT_INNER_STEP_LIMIT = 5;
 
 
 
-/**
- * Mount any MCP servers declared on `config`, returning a config with
- * the discovered tools merged in alongside the caller's local tools,
- * plus the mounted-servers handle so the caller can close them.
- *
- * Returns `{ config: original, mcp: undefined }` when `mcpServers` is
- * absent or empty — zero-overhead path for the common case.
- */
-async function mountConfigMcp(
-  config: AgentConfig,
-): Promise<{ config: AgentConfig; mcp: MountedMcpServers | undefined }> {
-  if (!config.mcpServers || config.mcpServers.length === 0) {
-    return { config, mcp: undefined };
-  }
-  const mcp = await mountMcpServers(config.mcpServers);
-  // Local tools win on name collisions — the caller's explicit `tools`
-  // map is authoritative, and MCP servers can't silently shadow a local
-  // tool just by naming something the same. Server-side tools always
-  // live under the `mcp__<server>__` prefix so collisions only happen if
-  // the caller's local tool is already named with that prefix, which
-  // would be their choice.
-  const mergedTools = { ...mcp.tools, ...(config.tools ?? {}) };
-  return { config: { ...config, tools: mergedTools }, mcp };
-}
 
-/**
- * Deterministic slash-command dispatch for the non-streaming loop
- * (#76). Runs before any model call and before MCP mount, so routing
- * costs zero LLM tokens and never spins up the parent's servers.
- *
- * Returns a complete {@link RunResult} when the task is a slash
- * command (whether the command exists or not), or `null` to let the
- * normal loop take over.
- *
- * Usage accounting across the dispatch boundary is intentionally not
- * surfaced: the sub-agent tracks its own usage internally and the
- * parent's {@link UsageTracker} never ran, so the returned usage is
- * zeroed. Steps is `1` on a successful dispatch (one sub-agent turn)
- * and `0` on an unknown command (no model ran at all).
- */
-async function tryRouteSlashCommandRun(
-  config: AgentConfig,
-  task: string,
-  context?: string,
-): Promise<RunResult | null> {
-  if (!config.slashCommands) return null;
-  const parsed = parseSlashCommand(task);
-  if (!parsed) return null;
-
-  const sub = config.slashCommands[parsed.name];
-  if (sub) {
-    // History is deliberately not forwarded (see AgentConfig.slashCommands
-    // docs) — the sub-agent starts a fresh turn with the remainder.
-    const text = await sub.run(parsed.rest, context);
-    return {
-      text,
-      usage: {
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCost: 0,
-        steps: 1,
-        records: [],
-      },
-      steps: 1,
-      aborted: false,
-    };
-  }
-
-  // Unknown command — surface the listing as the final text. No model
-  // call, so steps is 0.
-  return {
-    text: unknownSlashCommandMessage(parsed.name, config.slashCommands),
-    usage: {
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      totalCost: 0,
-      steps: 0,
-      records: [],
-    },
-    steps: 0,
-    aborted: false,
-  };
-}
 
 /**
  * Run the agent loop and return the final result.

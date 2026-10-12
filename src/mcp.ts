@@ -25,6 +25,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
 import { createRequire } from 'node:module';
 import { wrapForModel } from './tools/content-guards.js';
+import type { AgentConfig } from './types.js';
 
 /**
  * Library version used in the MCP `Client` handshake metadata (what the
@@ -329,4 +330,31 @@ function formatMcpToolResult(result: unknown): string {
     return `Tool error: ${body}`;
   }
   return body;
+}
+
+
+// Split out of src/loop.ts (agent-do-4os).
+/**
+ * Mount any MCP servers declared on `config`, returning a config with
+ * the discovered tools merged in alongside the caller's local tools,
+ * plus the mounted-servers handle so the caller can close them.
+ *
+ * Returns `{ config: original, mcp: undefined }` when `mcpServers` is
+ * absent or empty — zero-overhead path for the common case.
+ */
+export async function mountConfigMcp(
+  config: AgentConfig,
+): Promise<{ config: AgentConfig; mcp: MountedMcpServers | undefined }> {
+  if (!config.mcpServers || config.mcpServers.length === 0) {
+    return { config, mcp: undefined };
+  }
+  const mcp = await mountMcpServers(config.mcpServers);
+  // Local tools win on name collisions — the caller's explicit `tools`
+  // map is authoritative, and MCP servers can't silently shadow a local
+  // tool just by naming something the same. Server-side tools always
+  // live under the `mcp__<server>__` prefix so collisions only happen if
+  // the caller's local tool is already named with that prefix, which
+  // would be their choice.
+  const mergedTools = { ...mcp.tools, ...(config.tools ?? {}) };
+  return { config: { ...config, tools: mergedTools }, mcp };
 }
