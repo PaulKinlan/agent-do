@@ -9,9 +9,10 @@
     "agent-do": "file:../../"
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^3.0.0",
-    "@ai-sdk/google": "^3.0.0",
-    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/anthropic": "^4.0.25",
+    "@ai-sdk/google": "^4.0.29",
+    "@ai-sdk/openai": "^4.0.25",
+    "ai": "^7.0.44",
     "tsx": "^4.0.0"
   }
 }

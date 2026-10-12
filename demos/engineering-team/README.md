@@ -27,7 +27,9 @@ export ANTHROPIC_API_KEY=sk-ant-...            # Anthropic (default)
 # export GOOGLE_GENERATIVE_AI_API_KEY=...      # Google / Gemini
 # export OPENAI_API_KEY=sk-...                 # OpenAI
 
-npm install
+# One install at the repo root covers the library AND every demo (npm workspaces):
+# there is no per-demo install any more.
+(cd ../.. && npm install)
 npm start "Add an audit log for write operations"
 # Or run interactively:
 npm start

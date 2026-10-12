@@ -78,7 +78,7 @@ tests/              — vitest unit tests (one file per module)
 examples/           — focused single-feature examples (npx tsx examples/NN-name.ts)
 evals/              — eval suites: behaviour.ts (mock tier, CI) + quality.live.ts
 docs/               — api-reference.md, sandbox.md, supply-chain.md, speed.md, guides/
-demos/              — comprehensive end-to-end demo applications
+demos/              — comprehensive end-to-end demo applications (npm workspaces, rule 12)
   assistant/        — interactive CLI assistant with persistent memory
   research-team/    — multi-agent research pipeline (master + workers)
   code-reviewer/    — automated code review (read-only filesystem)
@@ -101,7 +101,7 @@ touching the repo, and a stale map costs more than it saves.
 
 1. **Tests first** — write or update tests for every change. Run `npm test` before committing.
 2. **Examples** — if the change affects user-facing API, update the relevant example in `examples/`.
-3. **Demos** — if the change affects core API, verify all demos in `demos/` still work. Demos use `"agent-do": "file:../../"` so they always use the local version, which makes them the only check that exercises the *published export surface* the way a real consumer does. CI runs a credential-free smoke (`Demo smoke (no credentials)`): every demo must reach its "No provider API key found" check. **If you remove or rename an export, grep `demos/` before you assume nothing uses it** — every demo silently broke on `createFileTools` for months because nothing ran them.
+3. **Demos** — if the change affects core API, verify all demos in `demos/` still work. Demos use `"agent-do": "file:../../"` so they always use the local version, which makes them the only check that exercises the *published export surface* the way a real consumer does. CI runs a credential-free smoke (`Demo smoke (no credentials)`): every demo must reach its "No provider API key found" check. **If you remove or rename an export, grep `demos/` before you assume nothing uses it** — every demo silently broke on `createFileTools` for months because nothing ran them. Run it locally with `npm run demos:smoke`.
 4. **README** — keep the README API reference table and examples table current.
 5. **Types** — export all public types from `src/types.ts` and re-export from `src/index.ts`.
 6. **No internal dependencies** — this package must NOT reference any private/internal packages. It is standalone.
@@ -132,9 +132,27 @@ touching the repo, and a stale map costs more than it saves.
     pruned lockfile because your platform doesn't need those bindings. CI
     does need them, so every job dies at `Install` with
     `npm error Missing: @emnapi/core@… from lock file`. This has broken
-    `main` twice. Also re-run `npm install` in each `demos/*` afterwards
-    so the demo lockfiles stay in sync for the demo CI job.
+    `main` twice. There is exactly ONE lockfile now — the root one
+    (rule 12) — so there are no demo lockfiles to re-sync: regenerate the
+    root with `rm -rf node_modules package-lock.json && npm install` and
+    run `npm run demos:smoke` to confirm the demos still start.
 11. **Changesets** — see below.
+12. **One lockfile, and the demos are npm workspaces.** `demos/*` are
+    workspace members of the root package (`"workspaces": ["demos/*"]`), so
+    a single root `package-lock.json` covers the library and all five demos.
+    **Never add a `package-lock.json` under `demos/`** and never run
+    `npm install` inside a demo: five independent demo lockfiles were the
+    repo's top landing-collision hotspot (20+ recent commits), and removing
+    them is the whole point. A dependency change means regenerating the root
+    lockfile from scratch (rule 10) and then `npm run demos:smoke`.
+    **In a worktree hydrated by `fleet-deps`, run `npm install` once at the
+    root before you run, edit or debug a demo.** fleet-deps builds its store
+    entry with `npm ci` in a directory holding only `package.json` + the
+    lockfile, so npm never sees `demos/` and creates neither the member links
+    nor the root self-link (`node_modules/agent-do -> ..`) that the demos
+    import the library through; the store entry has no `agent-do` at all.
+    `npm run demos:smoke` repairs that one link itself, but a hand-run
+    (`cd demos/assistant && npm start`) needs the real install.
 
 ## Changesets (release discipline)
 
@@ -263,12 +281,17 @@ npx tsx examples/11-filesystem-store.ts
 
 ## Running Demos
 
+The demos are npm workspaces: **one install at the repo root**, no per-demo install.
+
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-(cd demos/assistant && npm install && npm start)
-(cd demos/research-team && npm install && npm start)
-(cd demos/code-reviewer && npm install && npm start)
+npm install                                   # once, at the repo root: covers the library and every demo
+export ANTHROPIC_API_KEY=sk-ant-...           # or a Google/OpenAI key; see demos/README.md
+npm start -w agent-do-demo-assistant          # run one demo from the root
+npm run demos:smoke                           # the credential-free check CI runs (no key needed)
 ```
+
+`npm start -w <workspace>` runs the demo with its own directory as the working directory, so
+`demos/assistant/.data/` and friends stay inside the demo. `(cd demos/assistant && npm start)` works too.
 
 ## Testing Strategy
 

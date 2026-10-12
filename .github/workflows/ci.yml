@@ -108,31 +108,12 @@ jobs:
           npm run build
 
       - name: Smoke-run every demo
-        env:
-          # Ensure no key leaks in from the runner environment.
-          ANTHROPIC_API_KEY: ''
-          GOOGLE_GENERATIVE_AI_API_KEY: ''
-          GOOGLE_API_KEY: ''
-          GEMINI_API_KEY: ''
-          OPENAI_API_KEY: ''
-        run: |
-          set -euo pipefail
-          failed=0
-          for dir in demos/*/; do
-            [ -f "${dir}package.json" ] || continue
-            name="$(basename "$dir")"
-            echo "── ${name} ──"
-            ( cd "$dir" && npm ci --silent )
-            out="$(cd "$dir" && timeout 120 npx tsx index.ts </dev/null 2>&1 || true)"
-            if printf '%s' "$out" | grep -q 'No provider API key found'; then
-              echo "OK — ${name} initialised and stopped at the credential check."
-            else
-              echo "::error::Demo '${name}' failed before the credential check:"
-              printf '%s\n' "$out" | head -20
-              failed=1
-            fi
-          done
-          exit "$failed"
+        # One install for the whole repo: the demos are npm workspaces, so there are no per-demo
+        # package-lock.json files any more (the five of them were the repo's top landing-collision
+        # hotspot) and `cd demos/x && npm ci` would re-install the entire tree five times over.
+        # scripts/demo-smoke.sh scrubs the provider env itself, so no key can leak in from the runner
+        # and no demo can make a real API call.
+        run: bash scripts/demo-smoke.sh
 
   agent-guides-in-sync:
     # AGENTS.md and CLAUDE.md are the same document under two names (different
