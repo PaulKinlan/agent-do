@@ -6,15 +6,13 @@
  * the iteration limit is reached.
  */
 
-import { streamText, stepCountIs, type ToolSet, type ModelMessage, type LanguageModel } from 'ai';
+import { streamText, stepCountIs, type ModelMessage, type LanguageModel } from 'ai';
 import type {
   AgentConfig,
   ConversationMessage,
   DebugEvent,
   ProgressEvent,
   RunResult,
-  RunUsage,
-  HookDecision,
 } from './types.js';
 import { setupDebug, emitSystemPromptDebug, emitCacheDebug } from './debug.js';
 import { buildTools, type ToolResultCache, type ToolCallCounters } from './tools-build.js';
@@ -24,18 +22,14 @@ import { addCacheControl } from './cache.js';
 // re-exported here so existing importers of the loop module keep working unchanged.
 export { isAnthropicModel } from './cache.js';
 
-import { evaluatePermission } from './permissions.js';
 import {
   buildSkillsPrompt,
   buildSkillUsageInstruction,
-  createSkillTools,
   resolveSkillsMode,
 } from './skills.js';
 import { mountMcpServers, type MountedMcpServers } from './mcp.js';
-import { createRoutineTools } from './routines.js';
 import { buildPoliciesPrompt } from './policies.js';
-import { UsageTracker, estimateCost } from './usage.js';
-import { normaliseToolResult, type ToolResult } from './tools/types.js';
+import { UsageTracker } from './usage.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
 import {
   parseSlashCommand,
