@@ -11,6 +11,7 @@ src/
   agent.ts            — createAgent() — the main entry point
   loop.ts             — runAgentLoop / streamAgentLoop — core loop implementation
   loop-history.ts     — conversation-history hygiene for the loop (#33)
+  cache.ts            — Anthropic prompt-cache breakpoints + isAnthropicModel (split from loop.ts)
   types.ts            — all TypeScript interfaces and types
   index.ts            — all exports
 
