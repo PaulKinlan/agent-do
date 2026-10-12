@@ -14,6 +14,7 @@ src/
   cache.ts            — Anthropic prompt-cache breakpoints + isAnthropicModel (split from loop.ts)
   debug.ts            — per-run debug surface: middleware install + system-prompt/cache events
   tools-build.ts      — tool permission wrapping + buildTools() (split from loop.ts)
+  system-prompt.ts    — buildSystemPrompt(): config + skills/policies into the model prompt (split from loop.ts)
   types.ts            — all TypeScript interfaces and types
   index.ts            — all exports
 
