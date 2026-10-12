@@ -13,6 +13,7 @@ src/
   loop-history.ts     — conversation-history hygiene for the loop (#33)
   cache.ts            — Anthropic prompt-cache breakpoints + isAnthropicModel (split from loop.ts)
   debug.ts            — per-run debug surface: middleware install + system-prompt/cache events
+  tools-build.ts      — tool permission wrapping + buildTools() (split from loop.ts)
   types.ts            — all TypeScript interfaces and types
   index.ts            — all exports
 
