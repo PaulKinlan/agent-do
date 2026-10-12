@@ -152,7 +152,14 @@ touching the repo, and a stale map costs more than it saves.
     (An incremental `npm install <pkg>` can also rewrite SIBLING spec
     ranges in `package.json` — it silently lowers this repo's `@ai-sdk`
     dependency floors to the `peerDependencies` range
-    (`agent-do-fn3`) — so check `git diff package.json` afterwards too.)
+    (`agent-do-fn3`) — so check `git diff package.json` afterwards too. For
+    a one-off diagnostic install use
+    `npm install <pkg>@<v> --no-save --no-package-lock`, and if the ranges
+    have already moved, restore **just those range lines** — `git restore
+    -p package.json`, not a blanket checkout, which would also discard a
+    deliberate uncommitted change — and regenerate instead of committing the
+    widened spec; `docs/supply-chain.md` has the
+    detail.)
 11. **Changesets** — see below.
 12. **One lockfile, and the demos are npm workspaces.** `demos/*` are
     workspace members of the root package (`"workspaces": ["demos/*"]`), so

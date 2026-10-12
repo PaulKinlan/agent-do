@@ -60,6 +60,30 @@ as well: an incremental `npm install <pkg>` also rewrites SIBLING spec
 ranges — it lowers this repo's `@ai-sdk` dependency floors to the
 `peerDependencies` range (`agent-do-fn3`).
 
+**If you need one specific version to investigate something, do not run a
+plain `npm install <pkg>@<version>`** — that is the case that rewrites the
+sibling specs above. Use
+
+```bash
+npm install <pkg>@<version> --no-save --no-package-lock --no-audit --no-fund
+```
+
+which leaves `package.json` and the lockfile exactly as they were. Its one
+caveat: resolving outside the lockfile can nest a duplicate transitive that
+the locked tree does not contain (this has been seen as
+`node_modules/ai/node_modules/@ai-sdk/provider`), so afterwards repair the
+tree with `rm -rf node_modules && fleet-deps`.
+
+**If the sibling ranges have already moved**, do not commit the widened
+spec: restore **just those range lines**. `git restore -p package.json`
+(or `git checkout -p package.json`) lets you pick the hunks, and editing them
+back by hand works too. Do *not* run a blanket `git checkout -- package.json`:
+that also throws away any deliberate range change you have not committed yet,
+which is a worse outcome than the trap you are undoing. Then regenerate the
+lockfile from scratch per the rule above. A widened floor is
+invisible to the test suite and only shows up later as a repo that accepts
+dependency versions it never agreed to.
+
 ### Runtime floor
 
 `engines.node` is `>=22`, inherited from AI SDK 7. Node 20 is no longer
