@@ -183,6 +183,20 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
     }
   });
 
+  // The fleet's coverage extractor (~/fleet/remote/check-coverage.py) does NOT read the map above: it looks
+  // for a test file whose NAME corresponds to the changed file. Without this contract every module whose
+  // suite is not eponymous is published in the cached fast verdict as `unmapped` at the moment its suites
+  // really did run. So the contract is not a copy of the map — it is the other half of the integration.
+  it('tells the fleet extractor the mappings its naming oracle cannot see', () => {
+    const contract: Record<string, string[]> = JSON.parse(readFileSync(join(REPO, 'tests', 'coverage-contract.json'), 'utf8'));
+    expect(contract['src/cli/args.ts']).toContain('tests/cli-args.test.ts'); // not eponymous: args -> cli-args
+    expect(contract['tools/*']).toEqual(['tests/gates.test.ts']); // a changed gate script -> the gate suite
+    for (const [pattern, suites] of Object.entries(contract)) {
+      expect(suites.length, `${pattern} has no suites`).toBeGreaterThan(0);
+      for (const suite of suites) expect(existsSync(join(REPO, suite)), `${pattern} -> missing ${suite}`).toBe(true);
+    }
+  });
+
   // Every shipped module is either covered by a mapped suite or on this list, deliberately. A module that
   // is on neither is UNMAPPED, so tools/fast-gate.sh fails on any change to it — correct, but it should be
   // learned here (with the reason) rather than from a red gate. Adding a module with no suite therefore

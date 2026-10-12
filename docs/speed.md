@@ -58,11 +58,22 @@ reaches it through relative imports (including `vi.mock(...)` targets, which are
 otherwise miss). One row per module, never a directory-wide glob: with `src/*.ts` a brand-new module would
 inherit the suites of its neighbours, i.e. claim coverage that never existed.
 
-`--check` mode fails when the committed map is stale, and `tests/gates.test.ts` runs it — so **both gates
-enforce it** and the map cannot rot:
+The same graph also writes **`tests/coverage-contract.json`**, and that file is not a duplicate — it exists
+because a *second* consumer decides "was this changed file exercised?", and it is not ours.
+`~/fleet/remote/check-coverage.py` (the fleet's coverage extractor, which writes the `coverage` block a
+reviewer reads in `~/.fleet/checks/<tree>.fast.json`) does **not** read `suite-map.tsv`: it looks for a test
+file whose *name* corresponds to the changed file. Without a contract, every module whose suite is not
+eponymous — `src/cli/args.ts` → `tests/cli-args.test.ts`, every `tools/*.sh` → `tests/gates.test.ts` — is
+published as `unmapped` in the record at the moment its suites really did run, which is the same
+"consumer and producer disagree" defect as R15, one layer down. The contract is that extractor's sanctioned
+hook, and it has a side benefit: because the extractor requires *every* contract-named suite to have run, it
+becomes an independent mode-(b) check that this file cannot be.
+
+`--check` mode fails when either committed file is stale, and `tests/gates.test.ts` runs it — so **both gates
+enforce it** and neither can rot:
 
 ```bash
-node tools/gen-suite-map.mjs          # rewrite tools/suite-map.tsv
+node tools/gen-suite-map.mjs          # rewrite tools/suite-map.tsv + tests/coverage-contract.json
 node tools/gen-suite-map.mjs --check  # what the gates run
 bash tools/fast-gate.sh --list        # what the fast gate WOULD run, running nothing
 ```
@@ -163,7 +174,7 @@ Three named pathologies from the fleet standard, and what each means here:
 
 ```bash
 bash tools/fast-gate.sh --list          # the selection the fast gate would make
-node tools/gen-suite-map.mjs --check    # the map matches the import graph
+node tools/gen-suite-map.mjs --check    # both generated files match the import graph
 npx vitest run tests/gates.test.ts      # the gate's own suite (11 cases: fail-loud, markers, map truth)
 ~/fleet/bin/fleet-budget                # this VM's gate medians against the budgets (R1/R2)
 ~/fleet/bin/fleet-budget --fast
