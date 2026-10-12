@@ -452,6 +452,21 @@
     "tests/trust-boundary.test.ts",
     "tests/workspace-tools.test.ts"
   ],
+  "src/system-prompt.ts": [
+    "tests/cli-scheduled-tasks.test.ts",
+    "tests/conversation-history.test.ts",
+    "tests/cost-runaway.test.ts",
+    "tests/debug-observability.test.ts",
+    "tests/eval-runner.test.ts",
+    "tests/hooks.test.ts",
+    "tests/is-anthropic-model.test.ts",
+    "tests/loop.test.ts",
+    "tests/orchestrator.test.ts",
+    "tests/script-import.test.ts",
+    "tests/slash-commands.test.ts",
+    "tests/system-prompt-delivery.test.ts",
+    "tests/tool-result-integration.test.ts"
+  ],
   "src/testing/index.ts": [
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
