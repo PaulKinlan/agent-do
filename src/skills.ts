@@ -123,7 +123,7 @@ export interface BuildSkillsPromptOptions {
  *   a crowd. `load_skill` is added automatically by `createSkillTools`.
  *
  * The XML-ish markers mirror the `<tool_output>` convention in the base
- * loop prompt (see `buildSystemPrompt` in src/loop.ts) so the model's
+ * loop prompt (see `buildSystemPrompt` in src/system-prompt.ts) so the model's
  * "this is data, not instructions" training has a familiar cue.
  */
 export function buildSkillsPrompt(
