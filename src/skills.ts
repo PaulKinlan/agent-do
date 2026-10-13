@@ -3,6 +3,7 @@ import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import YAML from 'yaml';
 import type { Skill, SkillStore, SkillSearchResult } from './types.js';
+import { splitFrontmatter } from './frontmatter.js';
 
 /**
  * Per-field schemas for the frontmatter block of a SKILL.md file.
@@ -411,9 +412,9 @@ function escapeSkillManifestBody(value: string): string {
  * ```
  */
 export function parseSkillMd(content: string, id?: string): Skill {
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  const split = splitFrontmatter(content);
 
-  if (!match) {
+  if (!split) {
     // No frontmatter — treat entire content as the skill body
     const generatedId = id || 'unknown-skill';
     return {
@@ -424,8 +425,8 @@ export function parseSkillMd(content: string, id?: string): Skill {
     };
   }
 
-  const frontmatter = match[1];
-  const body = match[2];
+  const frontmatter = split.frontmatter;
+  const body = split.body;
 
   // Proper YAML parsing. On parse error (malformed frontmatter) fall back
   // to an empty object so the body is still returned rather than the whole
