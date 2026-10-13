@@ -40,6 +40,7 @@ import YAML from 'yaml';
 import type { Routine, RoutineInput, RoutineStore } from './types.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { splitFrontmatter } from './frontmatter.js';
 
 // ── Frontmatter parsing ────────────────────────────────────────────────
 
@@ -109,9 +110,9 @@ function extractRoutineMeta(raw: unknown): RoutineMeta {
  * there's no frontmatter.
  */
 export function parseRoutineMd(content: string, id?: string): Routine {
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  const split = splitFrontmatter(content);
 
-  if (!match) {
+  if (!split) {
     const generatedId = id || 'unknown-routine';
     return {
       id: generatedId,
@@ -122,8 +123,8 @@ export function parseRoutineMd(content: string, id?: string): Routine {
     };
   }
 
-  const frontmatter = match[1];
-  const body = clampBody(match[2].trim());
+  const frontmatter = split.frontmatter;
+  const body = clampBody(split.body.trim());
 
   let rawMeta: unknown = {};
   try {

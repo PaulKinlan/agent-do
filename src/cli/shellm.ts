@@ -42,6 +42,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
+import { splitFrontmatter } from '../frontmatter.js';
 
 /** Max bytes we'll read from a shellm file. Mirrors script-mode cap. */
 const SHELLM_MAX_BYTES = 2 * 1024 * 1024;
@@ -180,41 +181,3 @@ function parseFrontmatterConfig(frontmatter: string): ShellmConfig {
   return cfg;
 }
 
-/**
- * Split a document into YAML frontmatter + body without the
- * catastrophic-backtracking risk of `/^---\n([\s\S]*?)\n---\n/`
- * (CodeQL `js/polynomial-redos`). See policies.ts for the full
- * rationale; this is a copy pending shared-helper extraction.
- */
-function splitFrontmatter(content: string): { frontmatter: string; body: string } | null {
-  const openEnd = fenceLineEnd(content, 0);
-  if (openEnd === -1) return null;
-  if (openEnd >= content.length || content[openEnd] !== '\n') return null;
-  const afterOpen = openEnd + 1;
-
-  let lineStart = afterOpen;
-  let searchFrom = afterOpen;
-  while (searchFrom <= content.length) {
-    const nextNl = content.indexOf('\n', searchFrom);
-    const lineEnd = nextNl === -1 ? content.length : nextNl;
-    if (fenceLineEnd(content, lineStart) === lineEnd) {
-      if (lineEnd >= content.length) break; // bare trailing `---` → no match
-      const frontEnd = Math.max(afterOpen, lineStart - 1);
-      return {
-        frontmatter: content.slice(afterOpen, frontEnd),
-        body: content.slice(lineEnd + 1),
-      };
-    }
-    if (nextNl === -1) break;
-    lineStart = nextNl + 1;
-    searchFrom = nextNl + 1;
-  }
-  return null;
-}
-
-function fenceLineEnd(s: string, start: number): number {
-  if (s[start] !== '-' || s[start + 1] !== '-' || s[start + 2] !== '-') return -1;
-  let i = start + 3;
-  while (s[i] === ' ' || s[i] === '\t' || s[i] === '\r') i++;
-  return i;
-}
