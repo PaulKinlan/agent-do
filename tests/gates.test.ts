@@ -266,3 +266,327 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * agent-do-qmx: when the outer window (CHECK_FAST_TIMEOUT) kills the gate, the run used to end with one
+ * `No such file or directory` shell error per suite and left the in-flight runners holding the heavy slot
+ * until fleet-heavy reaped them. These cases pin the cleanup: the scratch directory goes away only after
+ * the suite processes do, and a descendant of a runner cannot outlive the run.
+ */
+describe('tools/fast-gate.sh — cleanup when the run is killed', () => {
+  /** How long the run gets before the outer window fires; the stub below never finishes on its own. */
+  const OUTER_WINDOW_MS = 3_000;
+
+  it('kills the suite processes, takes their descendants with them, and does not race the scratch dir', async () => {
+    const fx = fixture();
+    const marker = `agent-do-gates-reap-${process.pid}-${Date.now()}`;
+    const pidFile = join(fx.root, 'pids.txt');
+    const stub = join(fx.root, 'stub-hanger');
+    // The runner records its own pid and then starts a descendant that carries the marker in its argv. The
+    // descendant must NOT be a single simple command: `bash -c 'sleep 300'` execs into `sleep`, which
+    // replaces the command line and would drop the marker, making the assertion below match nothing at all.
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+echo "$$" >> "$PID_FILE"
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+echo "$!" >> "$PID_FILE"
+wait
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: OUTER_WINDOW_MS,
+      env: {
+        ...process.env,
+        FAST_GATE_RUNNER: stub,
+        STATIC_CMD: 'true',
+        RUN_LOG: fx.log,
+        PID_FILE: pidFile,
+        MARKER: marker,
+        FAST_GATE_JOBS: '1',
+      },
+    });
+
+    // The run was killed by the bound rather than finishing. Post-fix that is the TERM trap exiting with
+    // 130; pre-fix bash dies from the signal and spawnSync reports no status at all. Both mean "killed".
+    expect(r.status).not.toBe(0);
+    expect(r.status === 130 || r.status === null || r.signal === 'SIGTERM').toBe(true);
+    expect(existsSync(pidFile)).toBe(true); // the stub really did start
+
+    const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    // The old trap removed $TMP while the subshells were still writing their `.rc` files.
+    expect(output).not.toContain('No such file or directory');
+
+    // The runner's descendant must be gone: cleanup signals the process group, so a child of the runner (not
+    // of this script) dies with it. Without that, this is the leak fleet-heavy used to have to clean up.
+    const pids = readFileSync(pidFile, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map(Number);
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      // Do not leak the descendant out of a failing run: kill what the fix failed to kill.
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    if (stillAlive) {
+      console.error('[diag bound-kill] inner gate output:\n' + output);
+      const ps = spawnSync('ps', ['-eo', 'pid,sid,pgid,stat,args'], { encoding: 'utf8' }).stdout ?? '';
+      console.error(ps.split('\n').filter((l) => l.includes(marker)).join('\n'));
+      console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
+    }
+    expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
+  }, 30_000);
+});
+
+describe('tools/fast-gate.sh — a suite that leaves a process behind', () => {
+  it('reaps a descendant of a runner that exited successfully, and still reports the verdict', async () => {
+    // This is the shape fleet-heavy caught on a PASSING run (agent-do-qmx): three vitest processes held the
+    // heavy slot after the job finished. The runner here exits 0 and leaves a descendant, which is the part the
+    // pid-based cleanup cannot see — the subshell is reaped, the descendant is reparented, and `timeout` put
+    // the runner in its own process group, so only session membership still links them.
+    const fx = fixture();
+    const marker = `agent-do-gates-leftover-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-leaky');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+# Not a single simple command: bash -c with one command would exec and drop the marker.
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
+    });
+
+    // The gate must still deliver its verdict: the cleanup runs after the suites have reported.
+    expect(`${r.stdout ?? ''}${r.stderr ?? ''}`).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    if (stillAlive) {
+      console.error('[diag leftover] inner gate output:\n' + `${r.stdout ?? ''}${r.stderr ?? ''}`);
+      const ps = spawnSync('ps', ['-eo', 'pid,sid,pgid,stat,args'], { encoding: 'utf8' }).stdout ?? '';
+      console.error(ps.split('\n').filter((l) => l.includes(marker)).join('\n'));
+      console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
+    }
+    expect(stillAlive, 'a suite left a process behind after the gate reported its verdict').toBe(false);
+  }, 30_000);
+});
+
+describe('tools/fast-gate.sh — reaping must not depend on helper processes', () => {
+  it('reaps the suite tree even when pgrep and pkill fail', async () => {
+    // The measured failure this guards (agent-do-qmx round 3): the reaper shelled out to `pgrep`/`pkill` with every
+    // failure swallowed, so under contention — a run sharing the VM with the merger's full gate — those forks
+    // failed and the reaper killed nothing at all. The same suite passed on an idle VM and failed on a loaded one.
+    // The reaper now reads /proc and signals with the `kill` builtin, so failing helpers change nothing.
+    const fx = fixture();
+    const shim = join(fx.root, 'bin');
+    mkdirSync(shim, { recursive: true });
+    for (const tool of ['pgrep', 'pkill'] as const) {
+      writeFileSync(join(shim, tool), '#!/bin/sh\necho "shim: $0 refuses to work" >&2\nexit 127\n', { mode: 0o755 });
+    }
+    const marker = `agent-do-gates-nofork-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-leaky-nofork');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        PATH: `${shim}:${process.env.PATH ?? ''}`,
+        FAST_GATE_RUNNER: stub,
+        STATIC_CMD: 'true',
+        RUN_LOG: fx.log,
+        MARKER: marker,
+      },
+    });
+
+    const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(output).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillAlive, 'the reaper needed its helpers: a descendant survived with pgrep/pkill failing').toBe(false);
+  }, 30_000);
+});
+
+describe('tools/fast-gate.sh — teardown before the caller checks the slot', () => {
+  it('does not return while a killed descendant is still exiting', async () => {
+    // agent-do-qmx, P2 from the pre-landing review: fleet-heavy checks the slot holders the instant the job
+    // ends, and a descendant caught mid-exit there is reported as a leaked process (measured: one pid on a run
+    // whose own scan found nothing a second later). The gate now waits, bounded, for its sessions to empty
+    // before returning, so the check immediately after it returns must find nothing. No sleep in the assertion:
+    // the point is the instant the gate returns.
+    const fx = fixture();
+    const marker = `agent-do-gates-teardown-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-stubborn');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+# Ignores TERM, so only the KILL pass ends it — the case where teardown takes the longest.
+bash -c 'trap "" TERM; while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
+    });
+
+    expect(`${r.stdout ?? ''}${r.stderr ?? ''}`).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    const stillExiting = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+    if (stillExiting) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillExiting, 'a descendant was still exiting when the gate returned').toBe(false);
+  }, 30_000);
+});
+
+describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
+  it('prints a fast-gate: unknown marker when the outer bound kills it', async () => {
+    // agent-do-wot (found by rev-45 reviewing agent-do-qmx): the TERM path reaped the tree but exited without
+    // saying anything, so the coverage extractor saw no result at all — the exact failure this bead exists to
+    // fix. The marker must be line-anchored, because remote/check-coverage.py matches ^fast-gate:\s*unknown:
+    const fx = fixture();
+    const hang = join(fx.root, 'hang');
+    writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
+
+    // `timeout --foreground -k 5 3` mirrors the real path exactly: fleet-check invokes the gate as
+    // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
+    // process group, which would mask a leak this test is meant to catch.
+    const r = spawnSync(
+      'timeout',
+      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
+      {
+        cwd: fx.repo,
+        encoding: 'utf8',
+        timeout: 40_000,
+        env: { ...process.env, FAST_GATE_RUNNER: hang, STATIC_CMD: 'true' },
+      },
+    );
+
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    // 124 is the bound's own exit code: it proves the TERM path ran, not some other branch that prints a marker.
+    expect(r.status).toBe(124);
+    expect(out).toMatch(/^fast-gate: unknown: /m);
+    expect(out).toContain('killed by the outer bound');
+    // And it must not claim a suite result it never produced.
+    expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
+    expect(out).not.toMatch(/^fast-gate: passed: /m);
+  }, 45_000);
+});
+
+describe('tools/fast-gate.sh — a bound kill during the static step', () => {
+  it('prints the unknown marker and reaps the static step', async () => {
+    // rev-48, review round 3: the traps were installed AFTER STATIC_CMD, so a bound kill during the static step
+    // emitted no marker at all (the same defect one stage earlier) and left the step's process holding the heavy
+    // slot. The traps now sit above the static step, which runs in its own recorded session so the same trap
+    // reaps it.
+    const fx = fixture();
+    const stub = join(fx.root, `static-hang-${process.pid}-${Date.now()}`);
+    writeFileSync(stub, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
+
+    // --foreground again: fleet-check's real bound does not signal the process group, so a static step left
+    // running after the bound fires is exactly what this case must catch.
+    const r = spawnSync(
+      'timeout',
+      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
+      {
+        cwd: fx.repo,
+        encoding: 'utf8',
+        timeout: 40_000,
+        env: { ...process.env, FAST_GATE_RUNNER: 'true', STATIC_CMD: stub },
+      },
+    );
+
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(r.status).toBe(124);
+    expect(out).toMatch(/^fast-gate: unknown: /m);
+    expect(out).toContain('killed by the outer bound');
+
+    const leaked = (spawnSync('pgrep', ['-f', stub], { encoding: 'utf8' }).stdout ?? '').trim();
+    for (const pid of leaked.split('\n').filter(Boolean)) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+    expect(leaked, 'the killed static step was left running').toBe('');
+  }, 45_000);
+});
+

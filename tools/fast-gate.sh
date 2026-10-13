@@ -23,7 +23,8 @@
 #   fast-gate: passed: <suite>            (positive marker: this suite really executed)
 #   fast-gate: failed: <suite>
 #   fast-gate: unmapped: <path>           (the fail-loud case, and the process exits 1)
-#   fast-gate: unknown: <reason>          (a step before the suites failed: nothing below it was exercised)
+#   fast-gate: unknown: <reason>          (a step before the suites failed, or the outer bound killed this
+#                                          script before a verdict: nothing was measured either way)
 # Do not reformat those lines. They are anchored at line start with the `fast-gate:` prefix by design
 # (docs/speed.md R15): an unanchored token is harvested out of ordinary test output as if it were a marker.
 #
@@ -37,6 +38,36 @@
 # Exit codes: 0 = every selected suite passed (or nothing was affected); 1 = a suite failed, a step failed,
 # a mapped suite is missing, or a changed file is unmapped. ANY non-zero is "unknown", never "green".
 set -uo pipefail
+
+# --- verdict bookkeeping, installed before any work: the outer window can TERM this script at any stage,
+# including during argument parsing and the base lookup below, and a run that dies without a
+# marker is recorded as *no result at all* (agent-do-wot). rev-48 caught the first attempt
+# installing these after STATIC_CMD, which left the static step able to die silently.
+# SIGTERM/SIGINT must run the cleanup too: without these traps bash dies straight away on the bound kill and
+# the EXIT trap never fires, which is how the orphans happened.
+#
+# AND IT MUST LEAVE A VERDICT (agent-do-wot, found by rev-45). The outer window (CHECK_FAST_TIMEOUT) TERMs this
+# script; the coverage extractor needs `fast-gate: unknown: <reason>` starting at the beginning of a line, or
+# the run reads as "no result at all" - which is the very class of bug this bead exists to fix. Printed before
+# the cleanup so it survives however long reaping takes, and only while no verdict has been emitted yet, so a
+# late TERM cannot contradict a PASS/FAIL that already went out.
+VERDICT_EMITTED=0
+emit_bound_unknown() {
+  [ "$VERDICT_EMITTED" = 1 ] && return 0
+  VERDICT_EMITTED=1
+  # The leading newline is deliberate: the last suite may have been killed mid-line, and a marker appended to
+  # that partial line would not match the extractor's line-anchored pattern (remote/check-coverage.py).
+  printf '\nfast-gate: unknown: killed by the outer bound (%s) before a verdict - no suite result\n' "$1"
+}
+bound_kill() {
+  emit_bound_unknown "$1"
+  # cleanup() exists only once the scratch dir does. Before that there is nothing to reap, and a missing cleanup
+  # must not turn the marker itself into an error - the marker is the part that has to survive.
+  if declare -F cleanup >/dev/null 2>&1; then cleanup; fi
+  exit 130
+}
+trap 'bound_kill SIGTERM' TERM
+trap 'bound_kill SIGINT' INT
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
@@ -163,18 +194,198 @@ if [ "$LIST" -eq 1 ]; then
   exit 0
 fi
 
+TMP=$(mktemp -d)
+CHILD_PIDS=()
+CLEANED=0
+HAVE_SETSID=0
+HAVE_PROC=0
+command -v setsid >/dev/null 2>&1 && HAVE_SETSID=1
+[ -r /proc/self/stat ] && HAVE_PROC=1
+
+# The reaper reads /proc and signals with the `kill` BUILTIN. That is deliberate, and it is the second fix in
+# this bead: the first version shelled out to `pgrep -P` and `pkill -s`, every failure swallowed by
+# `2>/dev/null || true`. Under contention those forks can fail, and the reaper then silently degraded to killing
+# nothing exactly when the VM was busy — measured: two cases in tests/gates.test.ts failed in a gate run that
+# shared the VM with the merger's full gate, while the same suite passed on an idle VM, and the gate still left
+# descendants behind. A reaper whose failure mode is "quietly do nothing" is worse than none, so this one spawns
+# no process at all: it reads /proc with the shell's own builtins.
+SELF_SID=0
+if [ "$HAVE_PROC" = 1 ]; then
+  IFS= read -r _fg_stat < /proc/self/stat 2>/dev/null || _fg_stat=""
+  _fg_rest=${_fg_stat##*) }
+  IFS=' ' read -r _fg_state _fg_ppid _fg_pgrp _fg_sid _fg_junk <<<"$_fg_rest"
+  SELF_SID=${_fg_sid:-0}
+fi
+[ -n "$SELF_SID" ] || SELF_SID=0
+
+# Process table snapshot, one "<pid> <ppid> <pgrp> <session>" line per process. The comm field may contain
+# spaces and parentheses, so only what follows the LAST ')' is split.
+PROC_TABLE=""
+build_proc_table() {
+  local stat line pid rest out=""
+  for stat in /proc/[0-9]*/stat; do
+    [ -r "$stat" ] || continue
+    # 2>/dev/null BEFORE the input redirection: redirections are applied left to right, so a process that
+    # dies between the `-r` check above and this read would otherwise print its own warning to our stderr.
+    IFS= read -r line 2>/dev/null <"$stat" || continue
+    pid=${line%% *}
+    rest=${line##*) }
+    set -- $rest
+    out="$out$pid $2 $3 $4"$'\n'
+  done
+  PROC_TABLE=$out
+}
+
+# Signal every process in session $3 (skipping $4 and the caller) plus the group each belongs to. The session is
+# the sweep that matters: it covers a suite that has ALREADY reported and left a descendant behind (measured: a
+# passing run left vitest processes holding the heavy slot), which no pid or parent walk can find, because the
+# recorded child has been reaped and its orphans reparented. The group signal is what reaches a runner's own
+# children, which `timeout` has moved into a new group.
+kill_session() { # $1 = signal, $2 = caller pid, $3 = session id, $4 = pid to spare
+  # Capture the parameters BEFORE the table is parsed: `set --` below rebinds $1.. and would otherwise make the
+  # signal name and the session id read as fields of the row under inspection (that bug cost a local gate run).
+  local sig=$1 caller=$2 want_sid=$3 spare=$4
+  local line pid ppid pgrp sid
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    set -- $line
+    pid=$1 pgrp=$3 sid=$4
+    [ "$sid" = "$want_sid" ] || continue
+    [ -n "$caller" ] && [ "$pid" = "$caller" ] && continue
+    [ -n "$spare" ] && [ "$pid" = "$spare" ] && continue
+    [ "$pgrp" = "$sid" ] && kill "-$sig" "-$pgrp" 2>/dev/null
+    kill "-$sig" "$pid" 2>/dev/null
+  done <<<"$PROC_TABLE"
+}
+
+# Fallback for a suite that never got its own session (no setsid here): walk the recorded child's tree, children
+# first, from the same snapshot. Without /proc only the child itself can be signalled, which is said out loud by
+# the caller rather than left to be assumed.
+kill_tree() { # $1 = signal, $2 = pid
+  local sig=$1 root=$2 kids="" line pid ppid ppid_row
+  if [ "$HAVE_PROC" != 1 ]; then
+    kill "-$sig" "$root" 2>/dev/null || true
+    return 0
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    set -- $line
+    pid=$1 ppid_row=$2
+    [ "$ppid_row" = "$root" ] && kids="$kids $pid"
+  done <<<"$PROC_TABLE"
+  for pid in $kids; do
+    kill_tree "$sig" "$pid"
+  done
+  kill "-$sig" "$root" 2>/dev/null || true
+}
+
+# Signal everything the suites left behind, in one /proc snapshot per pass.
+reap() { # $1 = signal name
+  local pid sid
+  [ "$HAVE_PROC" = 1 ] && build_proc_table
+  for pid in "${CHILD_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    kill_tree "$1" "$pid"
+  done
+  [ "$HAVE_PROC" = 1 ] || return 0
+  local f
+  for f in "$TMP"/*.sid; do
+    [ -f "$f" ] || continue
+    IFS= read -r sid 2>/dev/null <"$f" || continue
+    case "$sid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    # Never signal our own session: that would take the caller down with the gate.
+    [ "$sid" -gt 1 ] 2>/dev/null || continue
+    [ "$SELF_SID" != "$sid" ] || continue
+    kill_session "$1" "" "$sid" ""
+  done
+}
+
+# Are any processes still alive in the sessions we started? Used by the teardown wait below.
+session_members_exist() {
+  local line pid sid f
+  [ "$HAVE_PROC" = 1 ] || return 1
+  build_proc_table
+  for f in "$TMP"/*.sid; do
+    [ -f "$f" ] || continue
+    IFS= read -r sid 2>/dev/null <"$f" || continue
+    case "$sid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    [ "$sid" -gt 1 ] 2>/dev/null || continue
+    [ "$SELF_SID" != "$sid" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      set -- $line
+      pid=$1
+      [ "$4" = "$sid" ] && [ "$pid" != "$$" ] && return 0
+    done <<<"$PROC_TABLE"
+  done
+  return 1
+}
+
+# Reap the suite processes BEFORE removing the scratch directory (agent-do-qmx). The old EXIT-only trap did
+# neither part: when the outer window (CHECK_FAST_TIMEOUT in tools/check.conf) killed this script, the
+# in-flight runners and their descendants kept holding the heavy slot until fleet-heavy killed ~15 leftover
+# processes, and `rm -rf "$TMP"` landed while the subshells were still writing their `.rc` files, so the run
+# ended with one `No such file or directory` shell error per suite instead of a verdict.
+cleanup() {
+  [ "$CLEANED" = 1 ] && return 0
+  CLEANED=1
+  trap - EXIT INT TERM
+  # Unconditional, and not gated on a recorded child still being alive: a successful suite can leave a worker
+  # behind after its own subshell has been reaped, and that case has to be swept too.
+  reap TERM
+  sleep 0.3
+  reap KILL
+  wait 2>/dev/null || true
+  # Let the kernel finish tearing the killed processes down before this script returns. fleet-heavy checks the
+  # slot holders the instant the job ends, and a descendant that is still mid-exit shows up there as a leak:
+  # measured, one pid on a run whose own scan found nothing even 1 s later (agent-do-qmx, P2 finding from the
+  # pre-landing review). Bounded: at most ~1 s, and if `sleep` cannot spawn the loop simply stops waiting
+  # rather than hanging, which is the old behaviour and not a new failure mode.
+  if [ "$HAVE_PROC" = 1 ]; then
+    local waited=0
+    while [ "$waited" -lt 10 ] && session_members_exist; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  fi
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+
 # --- the STATIC step: the same command the full gate runs (R2/R8), once ---------------------------------
 # It exists in the fast tier because this is a TypeScript repo and the suite runner TRANSPILES without
 # type-checking: without this step a changed file with a type error is green on the fast gate and red on
 # the merger's build, i.e. the fast gate would be certifying something it never looked at.
 printf '\n[gate] static: %s\n' "$STATIC_CMD"
-if ! ( cd "$ROOT" && eval "$STATIC_CMD" ); then
+# Run it in its own session with that session recorded, exactly as the suites below are run. The traps above are
+# installed before this point (rev-48, review round 3: they used to be installed after STATIC_CMD, so a bound kill
+# during this step emitted no marker at all), and recording the session is what lets that same trap reap a killed
+# `npm run build`/tsc instead of leaving it holding the heavy slot. Baseline command substitution is not used:
+# every `$( )` would be a new child of a shell mid-teardown.
+STATIC_RC=0
+if [ "$HAVE_SETSID" = 1 ]; then
+  setsid bash -c '
+    cd "$1" || exit 1
+    echo $$ >"$3"
+    eval "$2"
+  ' fast-gate-static "$ROOT" "$STATIC_CMD" "$TMP/static.sid" &
+  static_pid=$!
+  CHILD_PIDS+=("$static_pid")
+  wait "$static_pid" || STATIC_RC=$?
+else
+  ( cd "$ROOT" && eval "$STATIC_CMD" ) || STATIC_RC=$?
+fi
+if [ "$STATIC_RC" -ne 0 ]; then
   echo 'fast-gate: unknown: STATIC_CMD failed, so no suite was reached (this is NOT a test result)'
   exit 1
 fi
 
 # --- run the suites, one process per suite, bounded parallelism ----------------------------------------
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
 MISSING=()
 for s in "${SELECTED[@]}"; do [ -f "$ROOT/$s" ] || MISSING+=("$s"); done
 if [ "${#MISSING[@]}" -gt 0 ]; then
@@ -188,7 +399,24 @@ printf 'fast-gate: running: %s\n' "${SELECTED[@]}"
 n=0
 for s in "${SELECTED[@]}"; do
   key=$(printf '%s' "$s" | tr '/.' '__')
-  ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
+  if [ "$HAVE_SETSID" = 1 ]; then
+    # Own session per suite (see reap): `setsid` execs in place, so `$!` and the pid the inner shell records are
+    # the session id. RUNNER goes through the environment because it may carry arguments (`npx vitest run`),
+    # which must keep splitting.
+    RUNNER=$FAST_GATE_RUNNER setsid bash -c '
+      cd "$1" || exit 1
+      echo $$ >"$6"
+      # shellcheck disable=SC2086
+      timeout -k 15 "$2" $RUNNER "$3" >"$4" 2>&1
+      echo $? >"$5"
+    ' fast-gate-suite "$ROOT" "$SUITE_BOUND" "$s" "$TMP/$key.log" "$TMP/$key.rc" "$TMP/$key.sid" &
+  else
+    # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
+    echo "fast-gate: note: no setsid on this platform; suite processes are killed by tree, which can miss a" >&2
+    echo "fast-gate: note: runner's reparented orphans after the suite has reported." >&2
+    ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
+  fi
+  CHILD_PIDS+=("$!")
   n=$((n + 1))
   if [ "$n" -ge "$JOBS" ]; then wait -n; n=$((n - 1)); fi
 done
@@ -205,6 +433,11 @@ for s in "${SELECTED[@]}"; do
     rc=1
   fi
 done
-[ "$rc" -eq 0 ] && echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))" \
-                || echo "fast-gate: FAIL (see the suite logs above)" >&2
+if [ "$rc" -eq 0 ]; then
+  echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))"
+else
+  echo "fast-gate: FAIL (see the suite logs above)" >&2
+fi
+# A verdict is out: a TERM arriving now must not add a second, contradictory one (agent-do-wot).
+VERDICT_EMITTED=1
 exit $rc
