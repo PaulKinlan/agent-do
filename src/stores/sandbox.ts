@@ -107,12 +107,19 @@ export class SandboxBackedMemoryStore implements MemoryStore {
     if (!this.sandbox.realpath) return joined;
 
     const agentRoot = `${base}${agentSegment}` || '/';
-    const canonicalAgentRoot = await realpathSafe(this.sandbox, agentRoot);
-    const canonical = await realpathSafe(this.sandbox, joined);
-    if (!withinPath(canonical, canonicalAgentRoot)) {
+    const resolvedRoot = await realpathSafe(this.sandbox, agentRoot, POSIX_PATH_API);
+    const resolved = await realpathSafe(this.sandbox, joined, POSIX_PATH_API);
+    if (!resolvedRoot.ok || !resolved.ok) {
+      // The resolver could not attest the path - a symlink chain longer than the
+      // bound, a cycle, or an error it cannot classify. Refusing is the only
+      // safe answer: falling back to the uncanonicalised path is a bypass
+      // (agent-do-qhn).
       throw new Error('Path traversal via symlink not allowed');
     }
-    return canonical;
+    if (!withinPath(resolved.path, resolvedRoot.path)) {
+      throw new Error('Path traversal via symlink not allowed');
+    }
+    return resolved.path;
   }
 
   private async checkWrite(
@@ -357,65 +364,126 @@ function relativeFrom(base: string, full: string): string {
  * Returns the input unchanged if no ancestor exists or `realpath` is
  * undefined; the caller's containment check is still authoritative.
  */
-/** How many symlink hops a single resolution may take before giving up. */
+/** How many symlink expansions a single resolution may take before giving up. */
 const MAX_SYMLINK_HOPS = 32;
 
-export async function realpathSafe(sandbox: SandboxApi, p: string): Promise<string> {
-  if (!sandbox.realpath) return p;
-  let suffix = '';
+/**
+ * A resolved path, or the reason the resolver could not attest one.
+ *
+ * The `ok: false` case exists so that a caller can never mistake "could not
+ * resolve" for "resolved to something harmless": returning the input unchanged
+ * is what made the earlier bypasses work, because a deny list then judged the
+ * alias rather than the file the I/O would touch.
+ */
+export type ResolvedPath = { ok: true; path: string } | { ok: false; reason: 'symlink-chain' };
+
+/**
+ * `sandbox.realpath()` requires the path to exist (matching Node's
+ * `fs.realpath`). This walks up to the deepest existing ancestor, canonicalises
+ * that, and re-appends the unresolved remainder — so a fresh write is judged as
+ * the file it would land on.
+ *
+ * Two different bounds are kept deliberately apart:
+ *
+ *  - walking up to the nearest existing ancestor is bounded only by the path's
+ *    own depth, terminating at the root;
+ *  - expanding a symlink needs its own budget, because a chain (or a cycle) can
+ *    be arbitrarily long.
+ *
+ * Counting them together was a bypass in its own right (agent-do-qhn): a path
+ * with more missing directory levels than the budget exhausted it *before*
+ * reaching the symlink, and exhaustion returned the input unchanged — permitted.
+ * So exhaustion now fails closed, and so does any error that leaves the path
+ * unattested. `ResolvedPath.ok === false` means the caller must refuse.
+ *
+ * A symlink whose target does not exist yet is followed through `stat()` (lstat
+ * semantics on this contract) and `readlink()`, which is what closes
+ * agent-do-5ww. A substrate offering neither `realpath` nor `readlink` reports
+ * "no symlinks to resolve" by returning the input, as the contract states, and
+ * the caller's own containment check remains authoritative.
+ */
+export interface PathApi {
+  join(base: string, ...parts: string[]): string;
+  dirname(p: string): string;
+  relative(from: string, to: string): string;
+  isAbsolute(p: string): boolean;
+}
+
+/**
+ * POSIX path arithmetic for a connector's namespace, which the contract defines
+ * as connector-relative and POSIX-shaped. Callers resolving *host* paths pass
+ * `node:path` instead, so this module needs no Node import of its own.
+ */
+export const POSIX_PATH_API: PathApi = {
+  join(base, ...parts) {
+    let out = stripTrailingSlash(base);
+    for (const part of parts) {
+      if (!part) continue;
+      out = out === '' ? part : `${out}/${part}`;
+    }
+    return out === '' ? '/' : out;
+  },
+  dirname: parentDir,
+  relative(from, to) {
+    const f = stripTrailingSlash(from);
+    const t = stripTrailingSlash(to);
+    if (t === f) return '.';
+    return t.startsWith(`${f}/`) ? t.slice(f.length + 1) : t;
+  },
+  isAbsolute(p) {
+    return p.startsWith('/');
+  },
+};
+
+export async function realpathSafe(
+  sandbox: SandboxApi,
+  p: string,
+  pathApi: PathApi,
+): Promise<ResolvedPath> {
+  if (!sandbox.realpath) return { ok: true, path: p };
+  let parts: string[] = [];
   let current = p;
-  for (let hop = 0; hop <= MAX_SYMLINK_HOPS; hop += 1) {
+  let hops = 0;
+  for (;;) {
     try {
       const canonical = await sandbox.realpath(current);
-      return suffix ? joinPath(canonical, suffix) : canonical;
+      return { ok: true, path: parts.length ? pathApi.join(canonical, ...parts) : canonical };
     } catch (err) {
       if (!isNotFoundError(err)) {
-        // Unknown error — let the caller's containment check stay
-        // authoritative; the next real I/O call will raise the
-        // underlying error if it persists.
-        return p;
+        // The path exists but cannot be resolved (EACCES, ELOOP, a connector
+        // error). Handing it back uncanonicalised would let a deny list judge
+        // the wrong name, so refuse instead.
+        return { ok: false, reason: 'symlink-chain' };
       }
     }
 
-    // A path realpath cannot resolve need not be absent: it may be a symlink
-    // whose *target* does not exist yet, which realpath reports as ENOENT for
-    // the link. Walking up from there keeps the link's own name — the alias a
-    // deny list then judges — while the I/O follows the link to wherever it
-    // really points (agent-do-5ww). So inspect the component before walking
-    // up: `stat()` is lstat semantics on this contract, and `readlink` gives
-    // the target, which is relative to the link's own directory unless it is
-    // absolute.
+    // realpath cannot report a symlink whose target is missing: it fails with
+    // ENOENT for the link, exactly as if it were absent. Inspect the component
+    // before walking past it, or the link's own name survives into the answer.
     if (sandbox.readlink) {
       try {
         const stat = await sandbox.stat(current);
         if (stat.isSymbolicLink) {
+          hops += 1;
+          if (hops > MAX_SYMLINK_HOPS) return { ok: false, reason: 'symlink-chain' };
           const link = await sandbox.readlink(current);
-          const target = link.startsWith('/') ? link : joinPath(parentDir(current), link);
-          current = suffix ? joinPath(target, suffix) : target;
-          suffix = '';
+          const target = pathApi.isAbsolute(link)
+            ? link
+            : pathApi.join(pathApi.dirname(current), link);
+          current = parts.length ? pathApi.join(target, ...parts) : target;
+          parts = [];
           continue;
         }
       } catch {
-        // Genuinely absent, or a substrate without stat/readlink: fall through
-        // to the ancestor walk below.
+        // Genuinely absent, or a substrate without stat/readlink: walk up.
       }
     }
 
-    const parent = parentDir(current);
-    if (parent === current) return p; // hit root without resolving
-    const base = current.slice(stripTrailingSlash(parent).length).replace(/^\/+/, '');
-    suffix = suffix ? `${base}/${suffix}` : base;
+    const parent = pathApi.dirname(current);
+    if (parent === current) return { ok: true, path: p }; // reached the root
+    parts.unshift(pathApi.relative(parent, current));
     current = parent;
   }
-  // A symlink chain longer than the bound: leave the caller's containment
-  // check authoritative rather than guess, the same stance as an unknown error.
-  return p;
-}
-
-function joinPath(parent: string, child: string): string {
-  if (!child) return parent;
-  if (parent === '/' || parent === '') return `/${child}`;
-  return `${stripTrailingSlash(parent)}/${child}`;
 }
 
 /**

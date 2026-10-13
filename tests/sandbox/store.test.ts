@@ -157,6 +157,13 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(store.exists('bob', 'secret.txt')).resolves.toBe(false);
   });
 
+  it('refuses a symlink cycle rather than returning an uncanonicalised path (agent-do-qhn)', async () => {
+    await mkdir(path.join(root, 'alice'), { recursive: true });
+    await symlink('loop-b', path.join(root, 'alice', 'loop-a'));
+    await symlink('loop-a', path.join(root, 'alice', 'loop-b'));
+    await expect(store.write('alice', 'loop-a', 'pwned')).rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('skips canonical containment check when the connector lacks realpath', async () => {
     // Connectors without `realpath` (e.g. just-bash's virtual fs) get
     // string-only path normalisation. Verify that no realpath-shaped

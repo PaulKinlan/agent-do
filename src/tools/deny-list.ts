@@ -113,7 +113,14 @@ export interface DenyGuard {
 /** Rule reported when a path is inside the workspace lexically but resolves outside it. */
 const OUTSIDE_WORKSPACE_RULE = 'outside-workspace';
 
-type CanonicalPath = { rel: string } | { escape: true } | { outside: true };
+type CanonicalPath =
+  | { rel: string }
+  | { escape: true }
+  | { outside: true }
+  | { unresolved: true };
+
+/** Rule reported when the resolver could not attest which file a path reaches. */
+const UNRESOLVED_PATH_RULE = 'unresolved-path';
 
 /** True when `rel` is the parent directory itself, not merely a name starting with dots. */
 function isParentSegment(rel: string, sep: string): boolean {
@@ -158,9 +165,10 @@ async function canonicalise(
   if (isParentSegment(lexical, pathApi.sep) || pathApi.isAbsolute(lexical)) {
     return { escape: true };
   }
-  const real = await realpathSafe(substrate, abs);
-  const realRoot = await realpathSafe(substrate, rootPath);
-  const realRel = pathApi.relative(realRoot, real);
+  const real = await realpathSafe(substrate, abs, pathApi);
+  const realRoot = await realpathSafe(substrate, rootPath, pathApi);
+  if (!real.ok || !realRoot.ok) return { unresolved: true };
+  const realRel = pathApi.relative(realRoot.path, real.path);
   if (isParentSegment(realRel, pathApi.sep) || pathApi.isAbsolute(realRel)) {
     return { outside: true };
   }
@@ -212,6 +220,12 @@ export function createDenyGuard(
   const policyPath = async (relPath: string): Promise<{ rel: string } | { decision: DenyDecision }> => {
     const canon = await canonicaliseForPolicy(relPath);
     if ('escape' in canon) return { decision: { blocked: false } };
+    // An unattested path is blocked outright: unlike `outside`, it is not a
+    // judgment about sensitivity that an operator flag could sensibly override -
+    // we do not know which file the I/O would reach.
+    if ('unresolved' in canon) {
+      return { decision: { blocked: true, rule: UNRESOLVED_PATH_RULE } };
+    }
     if ('outside' in canon) {
       return {
         decision: options.includeSensitive

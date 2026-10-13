@@ -386,6 +386,62 @@ describe('dangling symlinks resolve to their target before policy runs (agent-do
     expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'planted'))).toBe(false);
   });
 
+  // ---- agent-do-qhn: the two bounds are separate, and exhaustion fails closed ----
+  it('blocks a symlink that is hidden behind more missing directories than the hop budget', async () => {
+    // rev-30's shape: >32 nonexistent nested directories BEFORE the symlink is
+    // reached. When the ancestor walk shares the symlink budget with symlink
+    // expansion, the budget is spent long before the link is inspected and the
+    // raw path is permitted. The walk is bounded by the path's own depth only.
+    await fs.promises.symlink('.git', path.join(dir, 'alias'));
+    const deep = Array.from({ length: 40 }, (_, i) => `d${i}`).join('/');
+    expect(await run('write_file', { path: `alias/hooks/${deep}/planted`, content: 'x' })).toContain(
+      'Blocked by deny list',
+    );
+    expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'd0'))).toBe(false);
+  });
+
+  it('blocks a dangling symlink chain longer than the hop budget', async () => {
+    // Budget exhaustion specifically: realpath resolves a *valid* chain in one
+    // call, but each link of a dangling chain costs one hop, so 35 links exceed
+    // the bound of 32. On exhaustion there is no safe path to return, so the
+    // policy must refuse rather than fall back to the raw path.
+    const links = Array.from({ length: 35 }, (_, i) => `c${i}`);
+    for (let i = 0; i < links.length - 1; i += 1) {
+      await fs.promises.symlink(links[i + 1], path.join(dir, links[i]));
+    }
+    await fs.promises.symlink(path.join(dir, '.git', 'hooks', 'planted'), path.join(dir, links[links.length - 1]));
+    const out = await run('write_file', { path: links[0], content: 'x' });
+    expect(out).toContain('Blocked by deny list');
+    expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'planted'))).toBe(false);
+  });
+
+  it('still allows a deep path with many missing directories and no symlink', async () => {
+    // The positive control for the above: an unbounded ancestor walk must not
+    // turn an ordinary deep path into a refusal.
+    const deep = Array.from({ length: 40 }, (_, i) => `a${i}`).join('/');
+    const out = await run('write_file', { path: `notes/${deep}/out.txt`, content: 'x' });
+    expect(out).not.toContain('Blocked by deny list');
+    expect(out).not.toContain('unresolved');
+  });
+
+  it('blocks a symlink cycle, reporting the unattested path rule', async () => {
+    // A cycle never resolves, so the hop budget is genuinely exhausted; there is
+    // no safe path to return, and the policy must say so rather than shrug.
+    await fs.promises.symlink('loop-b', path.join(dir, 'loop-a'));
+    await fs.promises.symlink('loop-a', path.join(dir, 'loop-b'));
+    const out = await run('read_file', { path: 'loop-a' });
+    expect(out).toContain('Blocked by deny list');
+    // The model-facing message names the path; the *rule* is in `data`, per the
+    // ToolResult convention for a blocked result.
+    const tools = createWorkspaceTools(dir);
+    const raw = (await (tools.read_file!.execute as Function)({ path: 'loop-a' }, {})) as {
+      modelContent: string;
+      data?: Record<string, unknown>;
+    };
+    expect(raw.data?.rule).toBe('unresolved-path');
+    expect(raw.data?.blocked).toBe(true);
+  });
+
   // ---- positive: a dangling link that stays inside the workspace still works ----
   it('allows a fresh write on a dangling symlink whose target is inside the workspace', async () => {
     // The policy resolves it to notes/todo.md, which is inside the workspace, so
