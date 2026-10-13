@@ -237,16 +237,29 @@ What it resolves, and what happens when it cannot:
 - A **dangling** symlink, whose target does not exist yet, is followed by `stat()` (lstat semantics on this
   contract) and `readlink()`, so `alias -> .git/hooks/planted` is blocked as `.git/hooks/planted` instead of being
   judged by the innocent alias. Chains are followed, bounded at 32 hops.
-- A connector offering neither `realpath` nor `readlink` — both are optional on the contract, for substrates with no
-  symlinks — falls back to the lexically normalised path. The store's containment check stays authoritative there,
-  as it does for any path that escapes the workspace lexically (`Path traversal via symlink not allowed`).
-- A connector that has `realpath` but not `readlink` is a narrower case, and it fails **closed**: `stat()` (lstat
-  semantics) still reports that an entry is a symlink, so the resolver knows there is a target it cannot read, and
-  refuses rather than judging the link's own name.
+- The walk runs whether or not the connector has `realpath`: the presence of a primitive decides how the walk
+  *ends*, never whether it happens, because `stat()` (required on the contract, lstat semantics) can report a
+  symlink on its own.
+- A connector that reports **no symlinks** — omitting both `realpath` and `readlink`, which the contract permits for
+  substrates without them — keeps the lexically normalised path: there is nothing to resolve, and the store's
+  containment check stays authoritative, as it does for any path that escapes the workspace lexically
+  (`Path traversal via symlink not allowed`).
+- A connector that can *see* a symlink but cannot read its target is refused, whether or not it has `realpath`: an
+  identified link whose target cannot be read is unattested. just-bash is this shape — it reports links via
+  `[ -L ]` and exposes neither primitive — so its links are refused rather than judged by the link's own name.
+- A path is only accepted when every component of it was positively attested: canonicalised, observed not to be a
+  symlink, or observed to be a link whose target was read and followed within the hop budget. Anything the resolver
+  cannot classify as "this component is not there yet" is refused rather than passed through.
 
 A path that is inside the workspace lexically but resolves outside it through a symlink is blocked as
 `outside-workspace`, unless the operator passes `--include-sensitive`. A symlink whose target is inside the
 workspace is still allowed, including a dangling one: the policy blocks the target, not the link.
+
+**Not covered: hard links.** Rules match path patterns, so a second directory entry for a deny-listed inode is not
+matched by them. With `fs.link('.env', 'notes/readme.txt')` the contents of `.env` are readable as
+`notes/readme.txt`, because the name matches no rule and there is nothing for resolution to canonicalise — a
+*symlink* to the same file is blocked, because resolution names the target. The file tools cannot create a link, but
+a shell in the same sandbox can. `docs/security.md` states the boundary and the operator guidance.
 
 `.agent-doignore` is still read from the **host** filesystem, so it is skipped for sandbox-backed workspaces
 (`skipAgentDoIgnore` is forced on): reading the host's file for a virtual root would find an unrelated file or
