@@ -238,7 +238,16 @@ export async function mountMcpServers(
           inputSchema: schema,
           execute: async (args: unknown) => {
             if (closed) {
-              return `Error: MCP server "${config.name}" is closed.`;
+              // Same framing contract as the paths below: the model never gets
+              // a bare string from an MCP tool (agent-do-hvz).
+              return {
+                modelContent: wrapForModel(
+                  `Error calling ${toolName}: MCP server "${config.name}" is closed.`,
+                  { tool: toolName, path: `${config.name}:${mcpTool.name}` },
+                ).content,
+                userSummary: `[${toolName}] refused — server "${config.name}" is closed`,
+                data: { server: config.name, tool: mcpTool.name, error: true, closed: true },
+              };
             }
             try {
               const result = await client.callTool({
@@ -261,7 +270,29 @@ export async function mountMcpServers(
             } catch (error) {
               const msg =
                 error instanceof Error ? error.message : String(error);
-              return `Error calling ${toolName}: ${msg}`;
+              // A rejection is third-party content exactly like a response:
+              // a hostile or compromised server can put injection markers or a
+              // fake boundary tag in an error message just as easily as in a
+              // body. So the model gets the same framed, marker-redacted view
+              // the success path produces, and the raw message stays on the
+              // operator side in `userSummary` / `data` instead of being handed
+              // to the model as a bare string (agent-do-hvz; the same class as
+              // the shell-tool findings in agent-do-dte).
+              const wrapped = wrapForModel(`Error calling ${toolName}: ${msg}`, {
+                tool: toolName,
+                path: `${config.name}:${mcpTool.name}`,
+              });
+              return {
+                modelContent: wrapped.content,
+                userSummary: `[${toolName}] threw — ${msg}`,
+                data: {
+                  server: config.name,
+                  tool: mcpTool.name,
+                  error: true,
+                  message: msg,
+                  neutralisedMarkers: wrapped.redactedMarkerCount,
+                },
+              };
             }
           },
         });

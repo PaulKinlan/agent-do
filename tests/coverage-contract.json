@@ -584,6 +584,7 @@
     "tests/hooks.test.ts",
     "tests/is-anthropic-model.test.ts",
     "tests/loop.test.ts",
+    "tests/mcp.test.ts",
     "tests/memory-tools.test.ts",
     "tests/orchestrator.test.ts",
     "tests/sandbox/shell-tool.test.ts",
