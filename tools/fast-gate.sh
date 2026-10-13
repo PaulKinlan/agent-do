@@ -39,6 +39,36 @@
 # a mapped suite is missing, or a changed file is unmapped. ANY non-zero is "unknown", never "green".
 set -uo pipefail
 
+# --- verdict bookkeeping, installed before any work: the outer window can TERM this script at any stage,
+# including during argument parsing and the base lookup below, and a run that dies without a
+# marker is recorded as *no result at all* (agent-do-wot). rev-48 caught the first attempt
+# installing these after STATIC_CMD, which left the static step able to die silently.
+# SIGTERM/SIGINT must run the cleanup too: without these traps bash dies straight away on the bound kill and
+# the EXIT trap never fires, which is how the orphans happened.
+#
+# AND IT MUST LEAVE A VERDICT (agent-do-wot, found by rev-45). The outer window (CHECK_FAST_TIMEOUT) TERMs this
+# script; the coverage extractor needs `fast-gate: unknown: <reason>` starting at the beginning of a line, or
+# the run reads as "no result at all" - which is the very class of bug this bead exists to fix. Printed before
+# the cleanup so it survives however long reaping takes, and only while no verdict has been emitted yet, so a
+# late TERM cannot contradict a PASS/FAIL that already went out.
+VERDICT_EMITTED=0
+emit_bound_unknown() {
+  [ "$VERDICT_EMITTED" = 1 ] && return 0
+  VERDICT_EMITTED=1
+  # The leading newline is deliberate: the last suite may have been killed mid-line, and a marker appended to
+  # that partial line would not match the extractor's line-anchored pattern (remote/check-coverage.py).
+  printf '\nfast-gate: unknown: killed by the outer bound (%s) before a verdict - no suite result\n' "$1"
+}
+bound_kill() {
+  emit_bound_unknown "$1"
+  # cleanup() exists only once the scratch dir does. Before that there is nothing to reap, and a missing cleanup
+  # must not turn the marker itself into an error - the marker is the part that has to survive.
+  if declare -F cleanup >/dev/null 2>&1; then cleanup; fi
+  exit 130
+}
+trap 'bound_kill SIGTERM' TERM
+trap 'bound_kill SIGINT' INT
+
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 MAP="$HERE/suite-map.tsv"
@@ -164,17 +194,6 @@ if [ "$LIST" -eq 1 ]; then
   exit 0
 fi
 
-# --- the STATIC step: the same command the full gate runs (R2/R8), once ---------------------------------
-# It exists in the fast tier because this is a TypeScript repo and the suite runner TRANSPILES without
-# type-checking: without this step a changed file with a type error is green on the fast gate and red on
-# the merger's build, i.e. the fast gate would be certifying something it never looked at.
-printf '\n[gate] static: %s\n' "$STATIC_CMD"
-if ! ( cd "$ROOT" && eval "$STATIC_CMD" ); then
-  echo 'fast-gate: unknown: STATIC_CMD failed, so no suite was reached (this is NOT a test result)'
-  exit 1
-fi
-
-# --- run the suites, one process per suite, bounded parallelism ----------------------------------------
 TMP=$(mktemp -d)
 CHILD_PIDS=()
 CLEANED=0
@@ -336,29 +355,36 @@ cleanup() {
   rm -rf "$TMP"
 }
 trap cleanup EXIT
-# SIGTERM/SIGINT must run the cleanup too: without these traps bash dies straight away on the bound kill and
-# the EXIT trap never fires, which is how the orphans happened.
-#
-# AND IT MUST LEAVE A VERDICT (agent-do-wot, found by rev-45). The outer window (CHECK_FAST_TIMEOUT) TERMs this
-# script; the coverage extractor needs `fast-gate: unknown: <reason>` starting at the beginning of a line, or
-# the run reads as "no result at all" - which is the very class of bug this bead exists to fix. Printed before
-# the cleanup so it survives however long reaping takes, and only while no verdict has been emitted yet, so a
-# late TERM cannot contradict a PASS/FAIL that already went out.
-VERDICT_EMITTED=0
-emit_bound_unknown() {
-  [ "$VERDICT_EMITTED" = 1 ] && return 0
-  VERDICT_EMITTED=1
-  # The leading newline is deliberate: the last suite may have been killed mid-line, and a marker appended to
-  # that partial line would not match the extractor's line-anchored pattern (remote/check-coverage.py).
-  printf '\nfast-gate: unknown: killed by the outer bound (%s) before a verdict - no suite result\n' "$1"
-}
-bound_kill() {
-  emit_bound_unknown "$1"
-  cleanup
-  exit 130
-}
-trap 'bound_kill SIGTERM' TERM
-trap 'bound_kill SIGINT' INT
+
+# --- the STATIC step: the same command the full gate runs (R2/R8), once ---------------------------------
+# It exists in the fast tier because this is a TypeScript repo and the suite runner TRANSPILES without
+# type-checking: without this step a changed file with a type error is green on the fast gate and red on
+# the merger's build, i.e. the fast gate would be certifying something it never looked at.
+printf '\n[gate] static: %s\n' "$STATIC_CMD"
+# Run it in its own session with that session recorded, exactly as the suites below are run. The traps above are
+# installed before this point (rev-48, review round 3: they used to be installed after STATIC_CMD, so a bound kill
+# during this step emitted no marker at all), and recording the session is what lets that same trap reap a killed
+# `npm run build`/tsc instead of leaving it holding the heavy slot. Baseline command substitution is not used:
+# every `$( )` would be a new child of a shell mid-teardown.
+STATIC_RC=0
+if [ "$HAVE_SETSID" = 1 ]; then
+  setsid bash -c '
+    cd "$1" || exit 1
+    echo $$ >"$3"
+    eval "$2"
+  ' fast-gate-static "$ROOT" "$STATIC_CMD" "$TMP/static.sid" &
+  static_pid=$!
+  CHILD_PIDS+=("$static_pid")
+  wait "$static_pid" || STATIC_RC=$?
+else
+  ( cd "$ROOT" && eval "$STATIC_CMD" ) || STATIC_RC=$?
+fi
+if [ "$STATIC_RC" -ne 0 ]; then
+  echo 'fast-gate: unknown: STATIC_CMD failed, so no suite was reached (this is NOT a test result)'
+  exit 1
+fi
+
+# --- run the suites, one process per suite, bounded parallelism ----------------------------------------
 
 MISSING=()
 for s in "${SELECTED[@]}"; do [ -f "$ROOT/$s" ] || MISSING+=("$s"); done

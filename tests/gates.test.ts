@@ -525,10 +525,12 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
     const hang = join(fx.root, 'hang');
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
-    // `timeout -k 5 3` mirrors the real path: the outer window TERMs the gate while a suite is still running.
+    // `timeout --foreground -k 5 3` mirrors the real path exactly: fleet-check invokes the gate as
+    // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
+    // process group, which would mask a leak this test is meant to catch.
     const r = spawnSync(
       'timeout',
-      ['-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
+      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
       {
         cwd: fx.repo,
         encoding: 'utf8',
@@ -545,6 +547,46 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
     // And it must not claim a suite result it never produced.
     expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
     expect(out).not.toMatch(/^fast-gate: passed: /m);
+  }, 45_000);
+});
+
+describe('tools/fast-gate.sh — a bound kill during the static step', () => {
+  it('prints the unknown marker and reaps the static step', async () => {
+    // rev-48, review round 3: the traps were installed AFTER STATIC_CMD, so a bound kill during the static step
+    // emitted no marker at all (the same defect one stage earlier) and left the step's process holding the heavy
+    // slot. The traps now sit above the static step, which runs in its own recorded session so the same trap
+    // reaps it.
+    const fx = fixture();
+    const stub = join(fx.root, `static-hang-${process.pid}-${Date.now()}`);
+    writeFileSync(stub, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
+
+    // --foreground again: fleet-check's real bound does not signal the process group, so a static step left
+    // running after the bound fires is exactly what this case must catch.
+    const r = spawnSync(
+      'timeout',
+      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
+      {
+        cwd: fx.repo,
+        encoding: 'utf8',
+        timeout: 40_000,
+        env: { ...process.env, FAST_GATE_RUNNER: 'true', STATIC_CMD: stub },
+      },
+    );
+
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(r.status).toBe(124);
+    expect(out).toMatch(/^fast-gate: unknown: /m);
+    expect(out).toContain('killed by the outer bound');
+
+    const leaked = (spawnSync('pgrep', ['-f', stub], { encoding: 'utf8' }).stdout ?? '').trim();
+    for (const pid of leaked.split('\n').filter(Boolean)) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+    expect(leaked, 'the killed static step was left running').toBe('');
   }, 45_000);
 });
 
