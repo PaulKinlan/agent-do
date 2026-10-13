@@ -178,49 +178,105 @@ TMP=$(mktemp -d)
 CHILD_PIDS=()
 CLEANED=0
 HAVE_SETSID=0
-HAVE_SESSION_KILL=0
+HAVE_PROC=0
 command -v setsid >/dev/null 2>&1 && HAVE_SETSID=1
-if command -v pkill >/dev/null 2>&1 && pkill --help 2>/dev/null | grep -q -- '--session'; then
-  HAVE_SESSION_KILL=1
-fi
-# Our own session id, so a malformed or empty session file can never make the sweep signal the gate itself (and
-# with it fleet-check, fleet-heavy and the caller).
-SELF_SID=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ') || SELF_SID=0
+[ -r /proc/self/stat ] && HAVE_PROC=1
 
-# Signal a process and everything below it, children first. A process-group signal is not enough here:
-# `timeout` moves its child into a new process group (so that it can kill the command's own tree itself),
-# so `kill -TERM -$pid` reaches the runner and misses the runner's children — measured on this fleet, and
-# exactly the leak agent-do-qmx is about. Walking down the tree before signalling the parent means nothing is
-# reparented and missed in the gap between the two signals.
-kill_tree() { # $1 = signal name, $2 = pid
-  local child
-  for child in $(pgrep -P "$2" 2>/dev/null); do
-    kill_tree "$1" "$child"
+# The reaper reads /proc and signals with the `kill` BUILTIN. That is deliberate, and it is the second fix in
+# this bead: the first version shelled out to `pgrep -P` and `pkill -s`, every failure swallowed by
+# `2>/dev/null || true`. Under contention those forks can fail, and the reaper then silently degraded to killing
+# nothing exactly when the VM was busy — measured: two cases in tests/gates.test.ts failed in a gate run that
+# shared the VM with the merger's full gate, while the same suite passed on an idle VM, and the gate still left
+# descendants behind. A reaper whose failure mode is "quietly do nothing" is worse than none, so this one spawns
+# no process at all: it reads /proc with the shell's own builtins.
+SELF_SID=0
+if [ "$HAVE_PROC" = 1 ]; then
+  IFS= read -r _fg_stat < /proc/self/stat 2>/dev/null || _fg_stat=""
+  _fg_rest=${_fg_stat##*) }
+  IFS=' ' read -r _fg_state _fg_ppid _fg_pgrp _fg_sid _fg_junk <<<"$_fg_rest"
+  SELF_SID=${_fg_sid:-0}
+fi
+[ -n "$SELF_SID" ] || SELF_SID=0
+
+# Process table snapshot, one "<pid> <ppid> <pgrp> <session>" line per process. The comm field may contain
+# spaces and parentheses, so only what follows the LAST ')' is split.
+PROC_TABLE=""
+build_proc_table() {
+  local stat line pid rest out=""
+  for stat in /proc/[0-9]*/stat; do
+    [ -r "$stat" ] || continue
+    IFS= read -r line <"$stat" 2>/dev/null || continue
+    pid=${line%% *}
+    rest=${line##*) }
+    set -- $rest
+    out="$out$pid $2 $3 $4"$'\n'
   done
-  kill "-$1" "$2" 2>/dev/null || true
+  PROC_TABLE=$out
 }
 
-# Signal everything the suites left behind. The tree walk covers a run that is still in flight; the session
-# sweep covers the harder half — a suite that has ALREADY reported, whose runner's descendants are still alive
-# (measured: a PASSING gate run left three vitest processes holding the heavy slot until fleet-heavy killed
-# them). Those are invisible to a pid or a `pgrep -P` walk from the recorded child, because the child has been
-# reaped and its orphans reparented; session membership is the link that survives, which is why each suite is
-# started with `setsid` and writes its own pid (== its session id) to $TMP/$key.sid.
+# Signal every process in session $3 (skipping $4 and the caller) plus the group each belongs to. The session is
+# the sweep that matters: it covers a suite that has ALREADY reported and left a descendant behind (measured: a
+# passing run left vitest processes holding the heavy slot), which no pid or parent walk can find, because the
+# recorded child has been reaped and its orphans reparented. The group signal is what reaches a runner's own
+# children, which `timeout` has moved into a new group.
+kill_session() { # $1 = signal, $2 = caller pid, $3 = session id, $4 = pid to spare
+  # Capture the parameters BEFORE the table is parsed: `set --` below rebinds $1.. and would otherwise make the
+  # signal name and the session id read as fields of the row under inspection (that bug cost a local gate run).
+  local sig=$1 caller=$2 want_sid=$3 spare=$4
+  local line pid ppid pgrp sid
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    set -- $line
+    pid=$1 pgrp=$3 sid=$4
+    [ "$sid" = "$want_sid" ] || continue
+    [ -n "$caller" ] && [ "$pid" = "$caller" ] && continue
+    [ -n "$spare" ] && [ "$pid" = "$spare" ] && continue
+    [ "$pgrp" = "$sid" ] && kill "-$sig" "-$pgrp" 2>/dev/null
+    kill "-$sig" "$pid" 2>/dev/null
+  done <<<"$PROC_TABLE"
+}
+
+# Fallback for a suite that never got its own session (no setsid here): walk the recorded child's tree, children
+# first, from the same snapshot. Without /proc only the child itself can be signalled, which is said out loud by
+# the caller rather than left to be assumed.
+kill_tree() { # $1 = signal, $2 = pid
+  local sig=$1 root=$2 kids="" line pid ppid ppid_row
+  if [ "$HAVE_PROC" != 1 ]; then
+    kill "-$sig" "$root" 2>/dev/null || true
+    return 0
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    set -- $line
+    pid=$1 ppid_row=$2
+    [ "$ppid_row" = "$root" ] && kids="$kids $pid"
+  done <<<"$PROC_TABLE"
+  for pid in $kids; do
+    kill_tree "$sig" "$pid"
+  done
+  kill "-$sig" "$root" 2>/dev/null || true
+}
+
+# Signal everything the suites left behind, in one /proc snapshot per pass.
 reap() { # $1 = signal name
   local pid sid
+  [ "$HAVE_PROC" = 1 ] && build_proc_table
   for pid in "${CHILD_PIDS[@]:-}"; do
     [ -n "$pid" ] || continue
     kill_tree "$1" "$pid"
   done
-  [ "$HAVE_SESSION_KILL" = 1 ] || return 0
-  for sid in $(cat "$TMP"/*.sid 2>/dev/null || true); do
+  [ "$HAVE_PROC" = 1 ] || return 0
+  local f
+  for f in "$TMP"/*.sid; do
+    [ -f "$f" ] || continue
+    IFS= read -r sid <"$f" 2>/dev/null || continue
     case "$sid" in
       '' | *[!0-9]*) continue ;;
     esac
     # Never signal our own session: that would take the caller down with the gate.
     [ "$sid" -gt 1 ] 2>/dev/null || continue
     [ "$SELF_SID" != "$sid" ] || continue
-    pkill "-$1" -s "$sid" 2>/dev/null || true
+    kill_session "$1" "" "$sid" ""
   done
 }
 

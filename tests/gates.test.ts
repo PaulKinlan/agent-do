@@ -343,6 +343,12 @@ wait
         }
       }
     }
+    if (stillAlive) {
+      console.error('[diag bound-kill] inner gate output:\n' + output);
+      const ps = spawnSync('ps', ['-eo', 'pid,sid,pgid,stat,args'], { encoding: 'utf8' }).stdout ?? '';
+      console.error(ps.split('\n').filter((l) => l.includes(marker)).join('\n'));
+      console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
+    }
     expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
   }, 30_000);
 });
@@ -393,6 +399,73 @@ exit 0
         }
       }
     }
+    if (stillAlive) {
+      console.error('[diag leftover] inner gate output:\n' + `${r.stdout ?? ''}${r.stderr ?? ''}`);
+      const ps = spawnSync('ps', ['-eo', 'pid,sid,pgid,stat,args'], { encoding: 'utf8' }).stdout ?? '';
+      console.error(ps.split('\n').filter((l) => l.includes(marker)).join('\n'));
+      console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
+    }
     expect(stillAlive, 'a suite left a process behind after the gate reported its verdict').toBe(false);
+  }, 30_000);
+});
+
+describe('tools/fast-gate.sh — reaping must not depend on helper processes', () => {
+  it('reaps the suite tree even when pgrep and pkill fail', async () => {
+    // The measured failure this guards (agent-do-qmx round 3): the reaper shelled out to `pgrep`/`pkill` with every
+    // failure swallowed, so under contention — a run sharing the VM with the merger's full gate — those forks
+    // failed and the reaper killed nothing at all. The same suite passed on an idle VM and failed on a loaded one.
+    // The reaper now reads /proc and signals with the `kill` builtin, so failing helpers change nothing.
+    const fx = fixture();
+    const shim = join(fx.root, 'bin');
+    mkdirSync(shim, { recursive: true });
+    for (const tool of ['pgrep', 'pkill'] as const) {
+      writeFileSync(join(shim, tool), '#!/bin/sh\necho "shim: $0 refuses to work" >&2\nexit 127\n', { mode: 0o755 });
+    }
+    const marker = `agent-do-gates-nofork-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-leaky-nofork');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        PATH: `${shim}:${process.env.PATH ?? ''}`,
+        FAST_GATE_RUNNER: stub,
+        STATIC_CMD: 'true',
+        RUN_LOG: fx.log,
+        MARKER: marker,
+      },
+    });
+
+    const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    expect(output).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillAlive, 'the reaper needed its helpers: a descendant survived with pgrep/pkill failing').toBe(false);
   }, 30_000);
 });
