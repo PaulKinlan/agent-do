@@ -23,7 +23,8 @@
 #   fast-gate: passed: <suite>            (positive marker: this suite really executed)
 #   fast-gate: failed: <suite>
 #   fast-gate: unmapped: <path>           (the fail-loud case, and the process exits 1)
-#   fast-gate: unknown: <reason>          (a step before the suites failed: nothing below it was exercised)
+#   fast-gate: unknown: <reason>          (a step before the suites failed, or the outer bound killed this
+#                                          script before a verdict: nothing was measured either way)
 # Do not reformat those lines. They are anchored at line start with the `fast-gate:` prefix by design
 # (docs/speed.md R15): an unanchored token is harvested out of ordinary test output as if it were a marker.
 #
@@ -337,7 +338,27 @@ cleanup() {
 trap cleanup EXIT
 # SIGTERM/SIGINT must run the cleanup too: without these traps bash dies straight away on the bound kill and
 # the EXIT trap never fires, which is how the orphans happened.
-trap 'cleanup; exit 130' INT TERM
+#
+# AND IT MUST LEAVE A VERDICT (agent-do-wot, found by rev-45). The outer window (CHECK_FAST_TIMEOUT) TERMs this
+# script; the coverage extractor needs `fast-gate: unknown: <reason>` starting at the beginning of a line, or
+# the run reads as "no result at all" - which is the very class of bug this bead exists to fix. Printed before
+# the cleanup so it survives however long reaping takes, and only while no verdict has been emitted yet, so a
+# late TERM cannot contradict a PASS/FAIL that already went out.
+VERDICT_EMITTED=0
+emit_bound_unknown() {
+  [ "$VERDICT_EMITTED" = 1 ] && return 0
+  VERDICT_EMITTED=1
+  # The leading newline is deliberate: the last suite may have been killed mid-line, and a marker appended to
+  # that partial line would not match the extractor's line-anchored pattern (remote/check-coverage.py).
+  printf '\nfast-gate: unknown: killed by the outer bound (%s) before a verdict - no suite result\n' "$1"
+}
+bound_kill() {
+  emit_bound_unknown "$1"
+  cleanup
+  exit 130
+}
+trap 'bound_kill SIGTERM' TERM
+trap 'bound_kill SIGINT' INT
 
 MISSING=()
 for s in "${SELECTED[@]}"; do [ -f "$ROOT/$s" ] || MISSING+=("$s"); done
@@ -386,6 +407,11 @@ for s in "${SELECTED[@]}"; do
     rc=1
   fi
 done
-[ "$rc" -eq 0 ] && echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))" \
-                || echo "fast-gate: FAIL (see the suite logs above)" >&2
+if [ "$rc" -eq 0 ]; then
+  echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))"
+else
+  echo "fast-gate: FAIL (see the suite logs above)" >&2
+fi
+# A verdict is out: a TERM arriving now must not add a second, contradictory one (agent-do-wot).
+VERDICT_EMITTED=1
 exit $rc

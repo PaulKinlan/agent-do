@@ -515,3 +515,36 @@ exit 0
     expect(stillExiting, 'a descendant was still exiting when the gate returned').toBe(false);
   }, 30_000);
 });
+
+describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
+  it('prints a fast-gate: unknown marker when the outer bound kills it', async () => {
+    // agent-do-wot (found by rev-45 reviewing agent-do-qmx): the TERM path reaped the tree but exited without
+    // saying anything, so the coverage extractor saw no result at all — the exact failure this bead exists to
+    // fix. The marker must be line-anchored, because remote/check-coverage.py matches ^fast-gate:\s*unknown:
+    const fx = fixture();
+    const hang = join(fx.root, 'hang');
+    writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
+
+    // `timeout -k 5 3` mirrors the real path: the outer window TERMs the gate while a suite is still running.
+    const r = spawnSync(
+      'timeout',
+      ['-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
+      {
+        cwd: fx.repo,
+        encoding: 'utf8',
+        timeout: 40_000,
+        env: { ...process.env, FAST_GATE_RUNNER: hang, STATIC_CMD: 'true' },
+      },
+    );
+
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    // 124 is the bound's own exit code: it proves the TERM path ran, not some other branch that prints a marker.
+    expect(r.status).toBe(124);
+    expect(out).toMatch(/^fast-gate: unknown: /m);
+    expect(out).toContain('killed by the outer bound');
+    // And it must not claim a suite result it never produced.
+    expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
+    expect(out).not.toMatch(/^fast-gate: passed: /m);
+  }, 45_000);
+});
+
