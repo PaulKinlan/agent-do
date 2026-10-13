@@ -98,6 +98,31 @@ describe('wrapForModel', () => {
     const out = wrapForModel(body, { tool: 'read_file', path: 'ok.md' });
     expect(out.truncated).toBe(false);
   });
+
+  it('accepts a command origin instead of a path (shell tool)', () => {
+    const out = wrapForModel('exit_code: 0', { tool: 'bash', command: 'ls -la' });
+    expect(out.content).toContain('<tool_output tool="bash" command="ls -la">');
+    expect(out.content).not.toContain('path=');
+  });
+
+  it('emits both attributes when a wrap gives a path and a command', () => {
+    const out = wrapForModel('x', {
+      tool: 'bash',
+      path: '/tmp',
+      command: 'ls',
+    });
+    expect(out.content).toContain(
+      '<tool_output tool="bash" path="/tmp" command="ls">',
+    );
+  });
+
+  it('escapes HTML-special characters in the command attribute', () => {
+    const out = wrapForModel('x', {
+      tool: 'bash',
+      command: 'echo "a<b>&c"',
+    });
+    expect(out.content).toContain('command="echo &quot;a&lt;b>&amp;c&quot;"');
+  });
 });
 
 describe('INJECTION_MARKER_REGEX', () => {

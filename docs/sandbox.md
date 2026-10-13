@@ -63,7 +63,7 @@ convention.
 
 | Factory | Backend | Network model | Notes |
 |---|---|---|---|
-| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Default fallback for `createShellTool()`. **Not a security boundary.** Commands get an allowlisted environment, not the parent's (see below). |
+| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Pass it to `createShellTool()` explicitly to opt into host execution — there is no default fallback. Commands get an allowlisted environment, not the parent's (see below). **Not a security boundary.** |
 | `createJustBashSandbox(opts?)` | [vercel-labs/just-bash][just-bash] virtual fs + interpreter | `allowNet` fetch hook inside the interpreter | Optional peer dep — install `just-bash` to use. |
 | `wrapJustBashSandbox(instance)` | as above | as above | For callers that construct the underlying just-bash `Sandbox` themselves. |
 
@@ -160,7 +160,7 @@ The three consumer-facing tool factories are:
 |---|---|---|
 | `createMemoryTools(store, agentId)` | `memory_read`, `memory_write`, `memory_list`, `memory_delete`, `memory_search` | Pass a `SandboxBackedMemoryStore(sandbox, root)` if you want sandboxed memory. |
 | `createWorkspaceTools(workingDir, opts)` | `read_file`, `write_file`, `edit_file`, `list_directory`, `delete_file`, `grep_file`, `find_files` | Pass `{ sandbox }` to swap the internal store for a sandbox-backed one. |
-| `createShellTool(sandbox?)` | `bash` (or your `name` override) | Takes a sandbox directly. Defaults to `createHostSandbox()` if none supplied. |
+| `createShellTool(sandbox)` | `bash` (or your `name` override) | Sandbox is required; there is no implicit host fallback. |
 
 `createMemoryTools` and `createShellTool` overlap on capability with
 `createWorkspaceTools` (the shell can `cat`, `ls`, etc.) but they're

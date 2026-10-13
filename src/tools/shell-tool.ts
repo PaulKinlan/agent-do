@@ -7,31 +7,52 @@
  * `createWorkspaceTools`. This factory creates exactly one tool
  * whose `execute` runs `sandbox.exec(...)`.
  *
- * When `sandbox` is undefined, the tool falls back to
- * {@link createHostSandbox} — i.e. it runs commands directly on the
- * host. That keeps the API ergonomic but **is not isolating**; the CLI
- * prints a warning, and library callers should pass an isolating
- * connector (`createJustBashSandbox`, etc.) for any task that touches
- * untrusted input.
+ * When `sandbox` is supplied, that connector is what runs the commands.
+ * There is no implicit fallback: host execution is **not** a security
+ * boundary, so it has to be asked for by passing
+ * `createHostSandbox()` explicitly. Calling `createShellTool()` with no
+ * sandbox throws rather than silently giving the model the host shell.
+ * For any task that touches untrusted input, pass an isolating connector
+ * (`createJustBashSandbox`, or your own).
  *
- * Output is bounded to a UTF-8 byte cap on each stream. Per-call
- * timeouts are forwarded to `sandbox.exec` — connectors are expected
- * to honour them. The tool itself doesn't enforce a wall-clock cap on
- * top, since racing a timer would leak the underlying process; if your
- * connector ignores `timeout`, fix it there.
+ * Output is wrapped in `<tool_output tool="…" command="…">` markers with
+ * the same prompt-injection-marker redaction `read_file` and `memory_read`
+ * apply — shell stdout/stderr is attacker-controlled text (a fetched
+ * page, a log line, a filename) and reaches the model through the same
+ * trust boundary as any other tool output. Output is bounded to a UTF-8
+ * byte cap on each stream. Per-call timeouts are forwarded to
+ * `sandbox.exec` — connectors are expected to honour them. The tool
+ * itself doesn't enforce a wall-clock cap on top, since racing a timer
+ * would leak the underlying process; if your connector ignores `timeout`,
+ * fix it there.
  */
 
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import type { SandboxApi } from '../sandbox/types.js';
-import { createHostSandbox } from '../sandbox/connectors/host.js';
 import type { ToolResult } from './types.js';
 import {
   DEFAULT_MAX_READ_BYTES,
   truncateUtf8ByBytes,
   utf8ByteLength,
+  wrapForModel,
 } from './content-guards.js';
+
+/**
+ * Cap on the `command` attribute echoed inside the `<tool_output>`
+ * marker. The command is already visible to the model (it wrote it) and
+ * may be long; this just stops a heredoc-sized command from bloating
+ * the marker.
+ */
+const MAX_COMMAND_ATTR_CHARS = 200;
+
+/**
+ * Slack added on top of the two per-stream caps when sizing the whole
+ * framed body, so the per-stream `…[truncated]` markers stay the only
+ * truncation a caller sees.
+ */
+const FRAMED_BODY_SLACK_BYTES = 4 * 1024;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const s = (schema: z.ZodType): any => schema;
@@ -69,12 +90,22 @@ export interface CreateShellToolOptions {
 }
 
 export function createShellTool(
-  sandbox: SandboxApi | undefined,
+  sandbox: SandboxApi,
   options: CreateShellToolOptions = {},
 ): ToolSet {
-  // Default to the host connector so `createShellTool()` works without
-  // ceremony. This is *not* isolation — see the file header.
-  const target = sandbox ?? createHostSandbox({ cwd: options.cwd });
+  // Runtime guard for JS consumers (and for a TS `any`/`undefined` that
+  // gets past the compiler): never hand the model the host shell by
+  // accident.
+  if (!sandbox) {
+    throw new Error(
+      'createShellTool() requires a sandbox. Pass an isolating connector ' +
+        '(e.g. `await createJustBashSandbox()`), or pass ' +
+        '`createHostSandbox()` explicitly to run commands directly on the ' +
+        'host — host execution is not a security boundary, so it is never ' +
+        'enabled implicitly.',
+    );
+  }
+  const target = sandbox;
 
   const toolName = options.name ?? 'bash';
   const defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
@@ -83,7 +114,7 @@ export function createShellTool(
   const description =
     options.description ??
     'Run a shell command in the configured sandbox. ' +
-      'Returns stdout, stderr, and exit code. ' +
+      'Returns stdout, stderr, and exit code inside <tool_output> markers. ' +
       'Filesystem and network access are scoped to whatever the connector allows. ' +
       'No stdin support — use `<<EOF` heredocs or input files.';
 
@@ -143,13 +174,26 @@ export function createShellTool(
       const durationMs = Date.now() - startedAt;
       const stdout = capUtf8(result.stdout, maxOutputBytes);
       const stderr = capUtf8(result.stderr, maxOutputBytes);
-      const modelContent = renderForModel(stdout, stderr, result.exitCode);
+      const framed = wrapForModel(
+        renderForModel(stdout, stderr, result.exitCode),
+        {
+          tool: toolName,
+          command: summarizeCommand(command),
+          // Per-stream caps above already bound the body; this is a
+          // backstop that should not fire in practice.
+          maxBytes: maxOutputBytes * 2 + FRAMED_BODY_SLACK_BYTES,
+        },
+      );
+      const markerNote =
+        framed.redactedMarkerCount > 0
+          ? `, redacted ${framed.redactedMarkerCount} potential injection marker${framed.redactedMarkerCount === 1 ? '' : 's'}`
+          : '';
       const summary =
         `[${toolName}] exit=${result.exitCode}, ` +
         `${utf8ByteLength(result.stdout)}B stdout, ` +
-        `${utf8ByteLength(result.stderr)}B stderr, ${durationMs}ms`;
+        `${utf8ByteLength(result.stderr)}B stderr, ${durationMs}ms${markerNote}`;
       return {
-        modelContent,
+        modelContent: framed.content,
         userSummary: summary,
         data: {
           command,
@@ -159,6 +203,7 @@ export function createShellTool(
           stderrBytes: utf8ByteLength(result.stderr),
           stdoutTruncated: stdout.truncated,
           stderrTruncated: stderr.truncated,
+          redactedMarkerCount: framed.redactedMarkerCount,
           durationMs,
         },
       };
@@ -187,4 +232,16 @@ function renderForModel(stdout: Capped, stderr: Capped, exitCode: number): strin
   parts.push('stderr:');
   parts.push(stderr.content || '(empty)');
   return parts.join('\n');
+}
+
+/**
+ * One-line, length-capped form of the command for the marker attribute.
+ * Collapsing newlines keeps the attribute readable for multi-line
+ * commands (heredocs, `&&` chains) without changing what ran.
+ */
+function summarizeCommand(command: string): string {
+  const oneLine = command.replace(/\s+/g, ' ').trim();
+  return oneLine.length > MAX_COMMAND_ATTR_CHARS
+    ? `${oneLine.slice(0, MAX_COMMAND_ATTR_CHARS - 1)}…`
+    : oneLine;
 }

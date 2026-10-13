@@ -44,14 +44,22 @@ export const DEFAULT_MAX_GREP_LINE_BYTES = 4 * 1024;
 export const INJECTION_MARKER_REGEX =
   /(?:ignore|disregard)(?:\s+(?:all|the|any|these|those))?\s+(?:prior|previous|above|preceding)\s+instructions|<\/?system>|<<\s*system\s*>>|^---\s*(?:system|instruction|override)/gim;
 
-export interface WrapOptions {
-  /** Tool that produced the content (read_file, memory_read, etc.). */
+export type WrapOptions = WrapOrigin & {
+  /** Tool that produced the content (read_file, memory_read, bash, etc.). */
   tool: string;
-  /** Path the content came from — echoed in the boundary marker attributes. */
-  path: string;
   /** Optional cap override, defaults to {@link DEFAULT_MAX_READ_BYTES}. */
   maxBytes?: number;
-}
+};
+
+/**
+ * Where the wrapped content came from — echoed in the boundary marker
+ * attributes. A file/memory read gives a `path`; a command runner (the
+ * shell tool) gives a `command`. At least one is required, so a marker
+ * always names its origin.
+ */
+export type WrapOrigin =
+  | { path: string; command?: string }
+  | { path?: string; command: string };
 
 // Portable UTF-8 helpers. agent-do runs in browsers as well as Node, so we
 // use the WHATWG TextEncoder / TextDecoder rather than `Buffer`. Both are
@@ -92,11 +100,12 @@ export interface WrappedContent {
 }
 
 /**
- * Produce the model-facing string for a file / memory read.
+ * Produce the model-facing string for a file / memory / tool read.
  *
- * Wraps the content in `<tool_output tool="…" path="…">…</tool_output>`,
- * applies the size cap, and replaces obvious injection markers. Returns
- * enough metadata for the caller to populate `ToolResult.data`.
+ * Wraps the content in `<tool_output tool="…" path="…">…</tool_output>`
+ * (or `command="…"` for command output), applies the size cap, and
+ * replaces obvious injection markers. Returns enough metadata for the
+ * caller to populate `ToolResult.data`.
  */
 export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const cap = opts.maxBytes ?? DEFAULT_MAX_READ_BYTES;
@@ -114,8 +123,16 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
     ? `\n... [truncated at ${cap} bytes of ${totalBytes}]`
     : '';
 
+  const attrs = [`tool="${escapeAttr(opts.tool)}"`];
+  if (opts.path !== undefined) {
+    attrs.push(`path="${escapeAttr(opts.path)}"`);
+  }
+  if (opts.command !== undefined) {
+    attrs.push(`command="${escapeAttr(opts.command)}"`);
+  }
+
   const content = [
-    `<tool_output tool="${escapeAttr(opts.tool)}" path="${escapeAttr(opts.path)}">`,
+    `<tool_output ${attrs.join(' ')}>`,
     redacted + trailer,
     `</tool_output>`,
   ].join('\n');
