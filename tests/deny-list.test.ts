@@ -5,7 +5,6 @@ import * as path from 'node:path';
 import {
   createDenyGuard,
   DEFAULT_READ_DENY,
-  DEFAULT_WRITE_DENY,
 } from '../src/tools/deny-list.js';
 import { createWorkspaceTools } from '../src/tools/workspace-tools.js';
 import type { ToolResult } from '../src/tools/types.js';
@@ -23,89 +22,89 @@ describe('createDenyGuard', () => {
   describe('defaults', () => {
     const g = () => createDenyGuard(workDir, { skipAgentDoIgnore: true });
 
-    it('blocks reads of .env and variants', () => {
-      expect(g().checkRead('.env').blocked).toBe(true);
-      expect(g().checkRead('.env.local').blocked).toBe(true);
-      expect(g().checkRead('.env.production').blocked).toBe(true);
+    it('blocks reads of .env and variants', async () => {
+      expect((await g().checkRead('.env')).blocked).toBe(true);
+      expect((await g().checkRead('.env.local')).blocked).toBe(true);
+      expect((await g().checkRead('.env.production')).blocked).toBe(true);
     });
 
-    it('blocks reads of key material', () => {
-      expect(g().checkRead('server.pem').blocked).toBe(true);
-      expect(g().checkRead('server.key').blocked).toBe(true);
-      expect(g().checkRead('id_rsa').blocked).toBe(true);
-      expect(g().checkRead('id_rsa.pub').blocked).toBe(true);
-      expect(g().checkRead('id_ed25519').blocked).toBe(true);
+    it('blocks reads of key material', async () => {
+      expect((await g().checkRead('server.pem')).blocked).toBe(true);
+      expect((await g().checkRead('server.key')).blocked).toBe(true);
+      expect((await g().checkRead('id_rsa')).blocked).toBe(true);
+      expect((await g().checkRead('id_rsa.pub')).blocked).toBe(true);
+      expect((await g().checkRead('id_ed25519')).blocked).toBe(true);
     });
 
-    it('blocks writes to .git/** and node_modules/**', () => {
-      expect(g().checkWrite('.git/HEAD').blocked).toBe(true);
-      expect(g().checkWrite('.git/hooks/pre-commit').blocked).toBe(true);
-      expect(g().checkWrite('node_modules/foo/index.js').blocked).toBe(true);
+    it('blocks writes to .git/** and node_modules/**', async () => {
+      expect((await g().checkWrite('.git/HEAD')).blocked).toBe(true);
+      expect((await g().checkWrite('.git/hooks/pre-commit')).blocked).toBe(true);
+      expect((await g().checkWrite('node_modules/foo/index.js')).blocked).toBe(true);
     });
 
-    it('does not block reads of node_modules or .git/HEAD (useful for recon)', () => {
-      expect(g().checkRead('node_modules/foo/index.js').blocked).toBe(false);
-      expect(g().checkRead('.git/HEAD').blocked).toBe(false);
+    it('does not block reads of node_modules or .git/HEAD (useful for recon)', async () => {
+      expect((await g().checkRead('node_modules/foo/index.js')).blocked).toBe(false);
+      expect((await g().checkRead('.git/HEAD')).blocked).toBe(false);
     });
 
-    it('still blocks reads of .git/objects and hooks (sensitive internals)', () => {
-      expect(g().checkRead('.git/objects/ab/123').blocked).toBe(true);
-      expect(g().checkRead('.git/hooks/pre-commit').blocked).toBe(true);
+    it('still blocks reads of .git/objects and hooks (sensitive internals)', async () => {
+      expect((await g().checkRead('.git/objects/ab/123')).blocked).toBe(true);
+      expect((await g().checkRead('.git/hooks/pre-commit')).blocked).toBe(true);
     });
 
-    it('returns the matching rule for operator visibility', () => {
-      const decision = g().checkRead('.env');
+    it('returns the matching rule for operator visibility', async () => {
+      const decision = await g().checkRead('.env');
       expect(decision.blocked).toBe(true);
       expect(decision.rule).toBeDefined();
       expect(DEFAULT_READ_DENY).toContain(decision.rule);
     });
 
-    it('allows ordinary source files', () => {
-      expect(g().checkRead('src/app.ts').blocked).toBe(false);
-      expect(g().checkRead('README.md').blocked).toBe(false);
-      expect(g().checkWrite('src/app.ts').blocked).toBe(false);
+    it('allows ordinary source files', async () => {
+      expect((await g().checkRead('src/app.ts')).blocked).toBe(false);
+      expect((await g().checkRead('README.md')).blocked).toBe(false);
+      expect((await g().checkWrite('src/app.ts')).blocked).toBe(false);
     });
 
-    it('normalises leading ./ and back-slashes', () => {
-      expect(g().checkRead('./.env').blocked).toBe(true);
-      expect(g().checkRead('.ssh\\config').blocked).toBe(true);
+    it('normalises leading ./ and back-slashes', async () => {
+      expect((await g().checkRead('./.env')).blocked).toBe(true);
+      expect((await g().checkRead('.ssh\\config')).blocked).toBe(true);
     });
 
-    it('treats path traversal as out-of-scope (store handles it)', () => {
+    it('treats path traversal as out-of-scope (store handles it)', async () => {
       // `ignore` throws on `..`; we swallow that and let the store catch it.
-      expect(g().checkRead('../secret').blocked).toBe(false);
-      expect(g().checkWrite('../../etc/passwd').blocked).toBe(false);
+      expect((await g().checkRead('../secret')).blocked).toBe(false);
+      expect((await g().checkWrite('../../etc/passwd')).blocked).toBe(false);
     });
   });
 
   describe('options', () => {
-    it('extra patterns are additive', () => {
+    it('extra patterns are additive', async () => {
       const guard = createDenyGuard(workDir, {
         extra: ['secrets/**', '*.cred'],
         skipAgentDoIgnore: true,
       });
-      expect(guard.checkRead('secrets/a.txt').blocked).toBe(true);
-      expect(guard.checkRead('user.cred').blocked).toBe(true);
-      expect(guard.checkRead('.env').blocked).toBe(true); // default still applies
+      expect((await guard.checkRead('secrets/a.txt')).blocked).toBe(true);
+      expect((await guard.checkRead('user.cred')).blocked).toBe(true);
+      expect((await guard.checkRead('.env')).blocked).toBe(true); // default still applies
     });
 
-    it('includeSensitive disables the built-in defaults', () => {
+    it('includeSensitive disables the built-in defaults', async () => {
       const guard = createDenyGuard(workDir, {
         includeSensitive: true,
         skipAgentDoIgnore: true,
       });
-      expect(guard.checkRead('.env').blocked).toBe(false);
-      expect(guard.checkWrite('.git/hooks/pre-commit').blocked).toBe(false);
+      expect((await guard.checkRead('.env')).blocked).toBe(false);
+      expect((await guard.checkWrite('.git/hooks/pre-commit')).blocked).toBe(false);
     });
 
-    it('includeSensitive still honours caller-supplied extras', () => {
+    it('includeSensitive still honours caller-supplied extras', async () => {
       const guard = createDenyGuard(workDir, {
         includeSensitive: true,
         extra: ['custom-secret'],
         skipAgentDoIgnore: true,
       });
-      expect(guard.checkRead('custom-secret').blocked).toBe(true);
-      expect(guard.checkRead('.env').blocked).toBe(false);
+      expect((await guard.checkRead('custom-secret')).blocked).toBe(true);
+      expect((await guard.checkRead('.env')).blocked).toBe(false);
     });
 
     it('loads .agent-doignore if present at workspace root', async () => {
@@ -114,8 +113,8 @@ describe('createDenyGuard', () => {
         '# project secrets\nsecrets/**\n*.local\n',
       );
       const guard = createDenyGuard(workDir);
-      expect(guard.checkRead('secrets/x').blocked).toBe(true);
-      expect(guard.checkRead('config.local').blocked).toBe(true);
+      expect((await guard.checkRead('secrets/x')).blocked).toBe(true);
+      expect((await guard.checkRead('config.local')).blocked).toBe(true);
     });
   });
 });
@@ -251,5 +250,79 @@ describe('createWorkspaceTools with deny list', () => {
     const r = await call('grep_file', { pattern: 'token' });
     expect(r.modelContent).toContain('good.txt');
     expect(r.modelContent).not.toContain('.ssh/config');
+  });
+});
+
+describe('canonical paths close the ".."-and-symlink policy bypass (agent-do-cn2)', () => {
+  let dir: string;
+  let outsideDir: string;
+  let outsideFile: string;
+
+  beforeEach(async () => {
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agent-do-deny-cn2-'));
+    outsideDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agent-do-cn2-outside-'));
+    await fs.promises.writeFile(path.join(dir, '.env'), 'SECRET=leak\n');
+    await fs.promises.writeFile(path.join(dir, 'readme.md'), 'public\n');
+    await fs.promises.mkdir(path.join(dir, 'foo'));
+    await fs.promises.mkdir(path.join(dir, '.git', 'hooks'), { recursive: true });
+    await fs.promises.symlink(path.join(dir, '.env'), path.join(dir, 'link-abs'));
+    await fs.promises.symlink('.env', path.join(dir, 'link-rel'));
+    await fs.promises.symlink(path.join(dir, '.git'), path.join(dir, 'gitdir'));
+    await fs.promises.symlink(path.join(dir, 'readme.md'), path.join(dir, 'link-readme'));
+    outsideFile = path.join(outsideDir, 'outside.txt');
+    await fs.promises.writeFile(outsideFile, 'outside\n');
+    await fs.promises.symlink(outsideFile, path.join(dir, 'link-outside'));
+    await fs.promises.symlink(path.join(outsideDir, 'not-created-yet.txt'), path.join(dir, 'link-dangling-outside'));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    await fs.promises.rm(outsideDir, { recursive: true, force: true });
+  });
+
+  const g = () => createDenyGuard(dir, { skipAgentDoIgnore: true });
+
+  it('blocks a deny-listed file reached through a legal ".." segment', async () => {
+    expect(await g().checkRead('foo/../.env')).toEqual({ blocked: true, rule: '.env' });
+    expect(await g().checkRead('./foo/../.env')).toEqual({ blocked: true, rule: '.env' });
+  });
+
+  it('blocks a deny-listed file reached through an in-workspace symlink', async () => {
+    expect(await g().checkRead('link-abs')).toEqual({ blocked: true, rule: '.env' });
+    expect(await g().checkRead('link-rel')).toEqual({ blocked: true, rule: '.env' });
+  });
+
+  it('blocks writes into .git through ".." and through a symlinked .git', async () => {
+    expect((await g().checkWrite('foo/../.git/hooks/x')).blocked).toBe(true);
+    expect((await g().checkWrite('gitdir/hooks/y')).blocked).toBe(true);
+  });
+
+  it('blocks a symlink that resolves outside the workspace, including a dangling one', async () => {
+    expect(await g().checkRead('link-outside')).toEqual({ blocked: true, rule: 'outside-workspace' });
+    // A dangling symlink cannot be resolved by realpath, but a write through it
+    // still lands on the outside target, so the policy has to see through it.
+    expect((await g().checkRead('link-dangling-outside')).blocked).toBe(true);
+    expect((await g().checkWrite('link-dangling-outside')).blocked).toBe(true);
+  });
+
+  it('leaves benign paths, benign ".." paths and benign symlinks alone', async () => {
+    expect((await g().checkRead('readme.md')).blocked).toBe(false);
+    expect((await g().checkRead('foo/../readme.md')).blocked).toBe(false);
+    expect((await g().checkRead('link-readme')).blocked).toBe(false);
+    expect((await g().checkWrite('foo/new.txt')).blocked).toBe(false);
+    expect((await g().checkWrite('foo/../new.txt')).blocked).toBe(false);
+  });
+
+  it('reopens an outside-workspace symlink only when the operator opts in', async () => {
+    expect((await g().checkRead('link-outside')).blocked).toBe(true);
+    const permissive = createDenyGuard(dir, { skipAgentDoIgnore: true, includeSensitive: true });
+    expect((await permissive.checkRead('link-outside')).blocked).toBe(false);
+    // the flag's documented behaviour on the defaults is unchanged
+    expect((await permissive.checkRead('.env')).blocked).toBe(false);
+  });
+
+  it('still blocks plain .env and .git/hooks (control)', async () => {
+    expect(await g().checkRead('.env')).toEqual({ blocked: true, rule: '.env' });
+    expect((await g().checkWrite('.git/hooks/pre-commit')).blocked).toBe(true);
   });
 });

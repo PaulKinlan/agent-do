@@ -256,6 +256,12 @@ export function createHostSandbox(options: HostSandboxOptions = {}): SandboxApi 
         force: opts?.force ?? false,
       });
     },
+    async readlink(path) {
+      // The raw target, not the resolved path. Used by realpathSafe when a
+      // symlink's target does not exist yet - realpath cannot report that
+      // case, because it fails with ENOENT for the link itself.
+      return await fsp.readlink(path);
+    },
     async realpath(path) {
       // Used by SandboxBackedMemoryStore to enforce tenant isolation
       // against symlink escape (an `alice/link → ../bob` symlink would

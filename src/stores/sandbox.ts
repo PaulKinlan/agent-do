@@ -357,11 +357,14 @@ function relativeFrom(base: string, full: string): string {
  * Returns the input unchanged if no ancestor exists or `realpath` is
  * undefined; the caller's containment check is still authoritative.
  */
-async function realpathSafe(sandbox: SandboxApi, p: string): Promise<string> {
+/** How many symlink hops a single resolution may take before giving up. */
+const MAX_SYMLINK_HOPS = 32;
+
+export async function realpathSafe(sandbox: SandboxApi, p: string): Promise<string> {
   if (!sandbox.realpath) return p;
   let suffix = '';
   let current = p;
-  while (true) {
+  for (let hop = 0; hop <= MAX_SYMLINK_HOPS; hop += 1) {
     try {
       const canonical = await sandbox.realpath(current);
       return suffix ? joinPath(canonical, suffix) : canonical;
@@ -372,13 +375,41 @@ async function realpathSafe(sandbox: SandboxApi, p: string): Promise<string> {
         // underlying error if it persists.
         return p;
       }
-      const parent = parentDir(current);
-      if (parent === current) return p; // hit root without resolving
-      const base = current.slice(stripTrailingSlash(parent).length).replace(/^\/+/, '');
-      suffix = suffix ? `${base}/${suffix}` : base;
-      current = parent;
     }
+
+    // A path realpath cannot resolve need not be absent: it may be a symlink
+    // whose *target* does not exist yet, which realpath reports as ENOENT for
+    // the link. Walking up from there keeps the link's own name — the alias a
+    // deny list then judges — while the I/O follows the link to wherever it
+    // really points (agent-do-5ww). So inspect the component before walking
+    // up: `stat()` is lstat semantics on this contract, and `readlink` gives
+    // the target, which is relative to the link's own directory unless it is
+    // absolute.
+    if (sandbox.readlink) {
+      try {
+        const stat = await sandbox.stat(current);
+        if (stat.isSymbolicLink) {
+          const link = await sandbox.readlink(current);
+          const target = link.startsWith('/') ? link : joinPath(parentDir(current), link);
+          current = suffix ? joinPath(target, suffix) : target;
+          suffix = '';
+          continue;
+        }
+      } catch {
+        // Genuinely absent, or a substrate without stat/readlink: fall through
+        // to the ancestor walk below.
+      }
+    }
+
+    const parent = parentDir(current);
+    if (parent === current) return p; // hit root without resolving
+    const base = current.slice(stripTrailingSlash(parent).length).replace(/^\/+/, '');
+    suffix = suffix ? `${base}/${suffix}` : base;
+    current = parent;
   }
+  // A symlink chain longer than the bound: leave the caller's containment
+  // check authoritative rather than guess, the same stance as an unknown error.
+  return p;
 }
 
 function joinPath(parent: string, child: string): string {

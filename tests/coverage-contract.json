@@ -287,9 +287,12 @@
   ],
   "src/sandbox/connectors/host.ts": [
     "tests/conversation-history.test.ts",
+    "tests/deny-list.test.ts",
     "tests/sandbox/host.test.ts",
     "tests/sandbox/shell-tool.test.ts",
-    "tests/sandbox/store.test.ts"
+    "tests/sandbox/store.test.ts",
+    "tests/script-import.test.ts",
+    "tests/workspace-tools.test.ts"
   ],
   "src/sandbox/connectors/index.ts": [
     "tests/conversation-history.test.ts"

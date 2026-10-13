@@ -55,7 +55,7 @@ src/prompts/builder.ts	tests/conversation-history.test.ts tests/prompts.test.ts
 src/prompts/sections.ts	tests/conversation-history.test.ts tests/prompts.test.ts
 src/prompts/templates.ts	tests/conversation-history.test.ts tests/prompts.test.ts
 src/routines.ts	tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/frontmatter.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/routines.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts
-src/sandbox/connectors/host.ts	tests/conversation-history.test.ts tests/sandbox/host.test.ts tests/sandbox/shell-tool.test.ts tests/sandbox/store.test.ts
+src/sandbox/connectors/host.ts	tests/conversation-history.test.ts tests/deny-list.test.ts tests/sandbox/host.test.ts tests/sandbox/shell-tool.test.ts tests/sandbox/store.test.ts tests/script-import.test.ts tests/workspace-tools.test.ts
 src/sandbox/connectors/index.ts	tests/conversation-history.test.ts
 src/sandbox/connectors/just-bash.ts	tests/conversation-history.test.ts tests/sandbox/just-bash.test.ts
 src/sandbox/types.ts	tests/conversation-history.test.ts tests/deny-list.test.ts tests/sandbox/host.test.ts tests/sandbox/just-bash.test.ts tests/sandbox/shell-tool.test.ts tests/sandbox/store.test.ts tests/script-import.test.ts tests/workspace-tools.test.ts
