@@ -207,8 +207,14 @@ function renderRoutineArg(key: string, value: unknown): string {
       ? value
       : (JSON.stringify(value) ?? String(value));
   const disarmed = text
-    .replace(/<\/routine_arg\b/gi, '</ routine_arg')
-    .replace(/<routine_arg\b/gi, '< routine_arg')
+    // No `\b` here (unlike escapeRoutineBody's `/<routine\b/`, where the
+    // word boundary is what stops the wrapper's own `<routine_arg>` from
+    // being escaped): these patterns only ever see the argument value, so a
+    // near-miss like `</routine_argue>` or `<routine_arg1>` must be disarmed
+    // too — a model that reads it as the real closer would treat the text
+    // after it as operator instruction.
+    .replace(/<\/routine_arg/gi, '</ routine_arg')
+    .replace(/<routine_arg/gi, '< routine_arg')
     .replace(INJECTION_MARKER_REGEX, '[redacted prompt-injection marker]');
   return `<routine_arg name="${escapeAttr(key)}">${disarmed}</routine_arg>`;
 }
