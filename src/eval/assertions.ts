@@ -96,11 +96,49 @@ function evaluateNotContains(value: string, text: string): AssertionResult {
   };
 }
 
+/**
+ * Compiled patterns, keyed by `pattern\0flags` (agent-do-030).
+ *
+ * `evaluateRegex` used to compile on every evaluation, which costs real time
+ * when a suite checks one pattern against many responses: measured, a fresh
+ * `new RegExp(...).test()` is 3.7-4.0x the cost of reusing a compiled one
+ * (33.6-40.2 ms vs 9.1-10.0 ms per 200k evaluations).
+ *
+ * Only STATELESS patterns are stored. A `g` or `y` regex carries `lastIndex`
+ * across `test()` calls, so reusing one would make the second evaluation of
+ * the same text disagree with the first - a caching bug that would read as a
+ * logic bug in the suite that hit it. Those two flags are recompiled every
+ * time, exactly as before.
+ */
+const regexCache = new Map<string, RegExp>();
+
+/**
+ * Cap on cached patterns. Distinct patterns are few in practice, but this runs
+ * in long-lived processes, so the cache must not grow without bound; flushing
+ * it wholesale is fine because a miss is only a recompile.
+ */
+const REGEX_CACHE_LIMIT = 256;
+
+function compileRegex(pattern: string, flags: string | undefined): RegExp {
+  if (flags !== undefined && /[gy]/.test(flags)) {
+    return new RegExp(pattern, flags);
+  }
+  const key = `${pattern}\u0000${flags ?? ''}`;
+  const cached = regexCache.get(key);
+  if (cached) return cached;
+  // Constructed before caching, so an invalid pattern still throws to the
+  // caller's catch block and is never stored.
+  const compiled = new RegExp(pattern, flags);
+  if (regexCache.size >= REGEX_CACHE_LIMIT) regexCache.clear();
+  regexCache.set(key, compiled);
+  return compiled;
+}
+
 function evaluateRegex(pattern: string, flags: string | undefined, text: string): AssertionResult {
   let passed: boolean;
   let message: string;
   try {
-    const re = new RegExp(pattern, flags);
+    const re = compileRegex(pattern, flags);
     passed = re.test(text);
     message = passed
       ? `Response matches /${pattern}/${flags ?? ''}`

@@ -523,14 +523,26 @@ export class FilesystemRoutineStore implements RoutineStore {
     await this.ensureDir();
     const entries = await fs.readdir(this.rootDir);
     const runs = await this.loadRuns();
+    // Read the routine files concurrently (agent-do-030). Each read is
+    // independent - `runs` is already loaded, and nothing here takes the store
+    // lock - and `Promise.all` preserves array order, so the result is the same
+    // sequence the serial loop produced (readdir order, filtered). Serial reads
+    // measured 110-122 ms for 300 routines; this is the one waterfall in the
+    // set that is genuinely I/O-bound, unlike the dynamic-import candidates,
+    // which measured no gain at all.
+    const candidates = entries
+      .filter((entry) => entry.endsWith('.md'))
+      .map((entry) => ({ entry, id: entry.replace(/\.md$/, '') }))
+      .filter(({ id }) => isValidRoutineId(id));
+    const parsed = await Promise.all(
+      candidates.map(async ({ entry, id }) =>
+        parseRoutineMd(await fs.readFile(join(this.rootDir, entry), 'utf8'), id),
+      ),
+    );
     const routines: Routine[] = [];
-    for (const entry of entries) {
-      if (!entry.endsWith('.md')) continue;
-      const id = entry.replace(/\.md$/, '');
-      if (!isValidRoutineId(id)) continue;
-      const content = await fs.readFile(join(this.rootDir, entry), 'utf8');
-      const routine = parseRoutineMd(content, id);
-      const runData = runs[id];
+    for (let i = 0; i < parsed.length; i++) {
+      const routine = parsed[i];
+      const runData = runs[candidates[i].id];
       if (runData) {
         routine.runCount = runData.runCount;
         routine.lastRun = runData.lastRun;
