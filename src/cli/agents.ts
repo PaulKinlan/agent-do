@@ -210,7 +210,7 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
  * ancestor wins (matching the lookup behavior of `loadSavedAgent`).
  */
 export async function listSavedAgents(): Promise<void> {
-  const seen = new Map<string, { config: SavedAgent; file: string; location: string }>();
+  const seen = new Map<string, { config: SavedAgent | null; file: string; location: string }>();
 
   for (const dir of walkUp(process.cwd())) {
     const agentsDir = path.join(dir, AGENTS_DIR);
@@ -221,13 +221,12 @@ export async function listSavedAgents(): Promise<void> {
     for (const file of files.filter(f => f.endsWith('.json'))) {
       const name = file.replace(/\.json$/, '');
       if (seen.has(name)) continue; // closer ancestor already claimed this name
-      try {
-        const content = await fs.promises.readFile(path.join(agentsDir, file), 'utf-8');
-        const config = JSON.parse(content) as SavedAgent;
-        seen.set(name, { config, file, location: dir });
-      } catch {
-        seen.set(name, { config: { name } as SavedAgent, file, location: dir });
-      }
+      // Same validated read as `loadSavedAgent`. The file lives on disk and may
+      // be corrupt or hand-edited, so it must not reach the listing unchecked:
+      // a bare `JSON.parse(...) as SavedAgent` let a planted file feed
+      // arbitrary values (or a non-string name) into this output.
+      const config = await readSavedAgentFile(path.join(agentsDir, file));
+      seen.set(name, { config, file, location: dir });
     }
   }
 
@@ -241,17 +240,50 @@ export async function listSavedAgents(): Promise<void> {
   for (const name of [...seen.keys()].sort()) {
     const { config, location } = seen.get(name)!;
     const rel = path.relative(cwd, location) || '.';
-    const model = config.model ?? '(default)';
-    if (!config.provider) {
-      console.log(`  ${name.padEnd(20)} (invalid config)  [${rel}]`);
+    if (!config) {
+      // `name` is derived from the filename, which can hold any character the
+      // filesystem allows — `printable` keeps control characters (and therefore
+      // terminal escape sequences) out of the operator's terminal.
+      console.log(`  ${printable(name).padEnd(20)} (invalid config)  [${rel}]`);
       continue;
     }
-    const prompt = config.systemPrompt ?? '';
+    const model = printable(config.model ?? '(default)');
+    const prompt = printable(config.systemPrompt);
     console.log(
-      `  ${config.name.padEnd(20)} ${config.provider}/${model}  ${prompt.slice(0, 40)}${prompt.length > 40 ? '...' : ''}  [${rel}]`,
+      `  ${printable(config.name).padEnd(20)} ${config.provider}/${model}  ${prompt.slice(0, 40)}${prompt.length > 40 ? '...' : ''}  [${rel}]`,
     );
   }
   console.log();
+}
+
+/**
+ * Replace control characters so a value read from disk can't inject terminal
+ * escape sequences, and cannot break out of the line it is printed on: `\n` is
+ * a control character here too, because preserving it let a planted filename
+ * forge a second, trusted-looking `[agent-do] …` diagnostic line
+ * (agent-do-axt). Multi-line output is built out of lines (`writeDiagnostic`),
+ * never by letting an untrusted value supply the line break.
+ */
+function printable(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    out += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? '?' : ch;
+  }
+  return out;
+}
+
+/**
+ * Write a diagnostic to stderr, one line at a time. The array is the *trusted*
+ * structure — the separators are ours — while every value interpolated into a
+ * line is untrusted (a filename, an fs error message that quotes the path, a Zod
+ * issue that quotes the received value) and must be passed through
+ * {@link printable} first. So a planted file can neither drive the operator's
+ * terminal nor invent a `[agent-do] …` line of its own, on stderr or stdout
+ * (agent-do-2ey, agent-do-axt).
+ */
+function writeDiagnostic(lines: readonly string[]): void {
+  process.stderr.write(`${lines.join('\n')}\n`);
 }
 
 /**
@@ -271,6 +303,19 @@ export async function listSavedAgents(): Promise<void> {
 export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
   const filePath = await findAgentFile(name);
   if (!filePath) return null;
+  return readSavedAgentFile(filePath);
+}
+
+/**
+ * Read and validate one saved-agent file by path. Returns `null` when the file
+ * is unreadable, malformed JSON, or fails the {@link SavedAgentSchema}
+ * validation, printing the reason to stderr so a planted bad file doesn't fail
+ * silently. Shared by {@link loadSavedAgent} and {@link listSavedAgents} so
+ * both surfaces enforce the same constraints — the listing previously parsed
+ * with a bare `JSON.parse(content) as SavedAgent` and read fields the schema
+ * had never checked.
+ */
+async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> {
   // Read and parse as two separate steps so the failure modes don't
   // blur together (Copilot #64). "Malformed JSON" is an actionable
   // diagnostic; "permission denied" is something the operator needs
@@ -280,9 +325,9 @@ export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
     content = await fs.promises.readFile(filePath, 'utf-8');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[agent-do] Could not read agent file ${filePath}: ${msg}\n`,
-    );
+    writeDiagnostic([
+      `[agent-do] Could not read agent file ${printable(filePath)}: ${printable(msg)}`,
+    ]);
     return null;
   }
   let raw: unknown;
@@ -290,19 +335,19 @@ export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
     raw = safeJsonParse(content);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[agent-do] Ignoring malformed agent file ${filePath}: ${msg}\n`,
-    );
+    writeDiagnostic([
+      `[agent-do] Ignoring malformed agent file ${printable(filePath)}: ${printable(msg)}`,
+    ]);
     return null;
   }
   const parsed = SavedAgentSchema.safeParse(raw);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
-      .join('\n');
-    process.stderr.write(
-      `[agent-do] Ignoring invalid agent file ${filePath}:\n${issues}\n`,
-    );
+    writeDiagnostic([
+      `[agent-do] Ignoring invalid agent file ${printable(filePath)}:`,
+      ...parsed.error.issues.map(
+        (i) => `  ${printable(i.path.join('.') || '(root)')}: ${printable(i.message)}`,
+      ),
+    ]);
     return null;
   }
   return parsed.data;
