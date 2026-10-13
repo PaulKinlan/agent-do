@@ -263,7 +263,28 @@ describe('saved agents', () => {
     expect(loaded!.systemPrompt).toBe('child version');
   });
 
-  describe('listSavedAgents', () => {
+  /**
+ * Every line that claims to be a diagnostic must be one of the diagnostics this module actually writes.
+ * A planted name or file content must not be able to invent a line that reads as a trusted message
+ * (agent-do-axt) — asserting the property, rather than one message shape, is what makes the case meaningful
+ * whatever a future fs/JSON error message happens to quote.
+ */
+function expectTrustedDiagnosticLinesOnly(output: string): void {
+  const trusted = [
+    '[agent-do] Could not read agent file ',
+    '[agent-do] Ignoring malformed agent file ',
+    '[agent-do] Ignoring invalid agent file ',
+  ];
+  for (const line of output.split('\n')) {
+    // Deliberately looser than the full prefix: an injected line may be truncated mid-prefix by whatever quotes
+    // it (measured: `JSON.parse` keeps ~20 characters, so planted content yields a line starting `[agent-d"...`).
+    // A real diagnostic always carries one of the three full prefixes, so anything else here is forged.
+    if (!line.startsWith('[agent-')) continue;
+    expect(trusted.some((prefix) => line.startsWith(prefix)), `forged diagnostic line: ${line}`).toBe(true);
+  }
+}
+
+describe('listSavedAgents', () => {
     const validConfig = {
       name: 'good-agent',
       provider: 'google',
@@ -377,6 +398,28 @@ describe('saved agents', () => {
       const second = await captureListing();
       expect(second.stderr).toContain('Ignoring invalid agent file');
       expect(second.stderr).not.toContain('\u001b');
+    });
+
+    it('does not let a filename forge a trusted-looking diagnostic line', async () => {
+      // agent-do-axt: keeping `\n` in the sanitiser let a planted name invent a second line that reads as a
+      // trusted message from the CLI rather than as part of a quoted filename.
+      await writeAgentFile('forged\n[agent-do] Agent accepted: ok=true.json', '{not json');
+
+      const { stderr } = await captureListing();
+      expect(stderr).toContain('Ignoring malformed agent file');
+      expect(stderr).not.toContain('forged\n[agent-do]');
+      expectTrustedDiagnosticLinesOnly(stderr);
+    });
+
+    it('does not let planted file content forge a trusted-looking diagnostic line', async () => {
+      // The other interpolation that can carry a newline: the message we print alongside the path. An fs error
+      // quotes the path, and some `JSON.parse` errors quote the content — measured: `{"a": }\n<text>` yields a
+      // message that embeds that snippet raw. So the value has to be sanitised, not just the path.
+      await writeAgentFile('content.json', '{"a": }\n[agent-do] Agent accepted: ok=true');
+
+      const { stderr } = await captureListing();
+      expect(stderr).toContain('Ignoring malformed agent file');
+      expectTrustedDiagnosticLinesOnly(stderr);
     });
 
     it('prefers the closest ancestor when a name exists at two levels', async () => {
