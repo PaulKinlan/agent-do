@@ -205,7 +205,9 @@ build_proc_table() {
   local stat line pid rest out=""
   for stat in /proc/[0-9]*/stat; do
     [ -r "$stat" ] || continue
-    IFS= read -r line <"$stat" 2>/dev/null || continue
+    # 2>/dev/null BEFORE the input redirection: redirections are applied left to right, so a process that
+    # dies between the `-r` check above and this read would otherwise print its own warning to our stderr.
+    IFS= read -r line 2>/dev/null <"$stat" || continue
     pid=${line%% *}
     rest=${line##*) }
     set -- $rest
@@ -269,7 +271,7 @@ reap() { # $1 = signal name
   local f
   for f in "$TMP"/*.sid; do
     [ -f "$f" ] || continue
-    IFS= read -r sid <"$f" 2>/dev/null || continue
+    IFS= read -r sid 2>/dev/null <"$f" || continue
     case "$sid" in
       '' | *[!0-9]*) continue ;;
     esac
@@ -278,6 +280,29 @@ reap() { # $1 = signal name
     [ "$SELF_SID" != "$sid" ] || continue
     kill_session "$1" "" "$sid" ""
   done
+}
+
+# Are any processes still alive in the sessions we started? Used by the teardown wait below.
+session_members_exist() {
+  local line pid sid f
+  [ "$HAVE_PROC" = 1 ] || return 1
+  build_proc_table
+  for f in "$TMP"/*.sid; do
+    [ -f "$f" ] || continue
+    IFS= read -r sid 2>/dev/null <"$f" || continue
+    case "$sid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    [ "$sid" -gt 1 ] 2>/dev/null || continue
+    [ "$SELF_SID" != "$sid" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      set -- $line
+      pid=$1
+      [ "$4" = "$sid" ] && [ "$pid" != "$$" ] && return 0
+    done <<<"$PROC_TABLE"
+  done
+  return 1
 }
 
 # Reap the suite processes BEFORE removing the scratch directory (agent-do-qmx). The old EXIT-only trap did
@@ -295,6 +320,18 @@ cleanup() {
   sleep 0.3
   reap KILL
   wait 2>/dev/null || true
+  # Let the kernel finish tearing the killed processes down before this script returns. fleet-heavy checks the
+  # slot holders the instant the job ends, and a descendant that is still mid-exit shows up there as a leak:
+  # measured, one pid on a run whose own scan found nothing even 1 s later (agent-do-qmx, P2 finding from the
+  # pre-landing review). Bounded: at most ~1 s, and if `sleep` cannot spawn the loop simply stops waiting
+  # rather than hanging, which is the old behaviour and not a new failure mode.
+  if [ "$HAVE_PROC" = 1 ]; then
+    local waited=0
+    while [ "$waited" -lt 10 ] && session_members_exist; do
+      sleep 0.1
+      waited=$((waited + 1))
+    done
+  fi
   rm -rf "$TMP"
 }
 trap cleanup EXIT

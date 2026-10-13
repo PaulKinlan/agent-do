@@ -469,3 +469,49 @@ exit 0
     expect(stillAlive, 'the reaper needed its helpers: a descendant survived with pgrep/pkill failing').toBe(false);
   }, 30_000);
 });
+
+describe('tools/fast-gate.sh — teardown before the caller checks the slot', () => {
+  it('does not return while a killed descendant is still exiting', async () => {
+    // agent-do-qmx, P2 from the pre-landing review: fleet-heavy checks the slot holders the instant the job
+    // ends, and a descendant caught mid-exit there is reported as a leaked process (measured: one pid on a run
+    // whose own scan found nothing a second later). The gate now waits, bounded, for its sessions to empty
+    // before returning, so the check immediately after it returns must find nothing. No sleep in the assertion:
+    // the point is the instant the gate returns.
+    const fx = fixture();
+    const marker = `agent-do-gates-teardown-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-stubborn');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+# Ignores TERM, so only the KILL pass ends it — the case where teardown takes the longest.
+bash -c 'trap "" TERM; while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
+    });
+
+    expect(`${r.stdout ?? ''}${r.stderr ?? ''}`).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    const stillExiting = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+    if (stillExiting) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillExiting, 'a descendant was still exiting when the gate returned').toBe(false);
+  }, 30_000);
+});
