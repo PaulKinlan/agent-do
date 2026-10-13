@@ -217,6 +217,53 @@ describe('pickExecEnv (default allowlist)', () => {
     );
     expect(env).toEqual({});
   });
+
+  it('does not add the Windows platform set to a POSIX environment block', () => {
+    // agent-do-s8s: the platform set used to be merged in unconditionally, so a
+    // POSIX parent that happened to define APPDATA/COMSPEC/TEMP forwarded them
+    // into every command, which is wider than the documented policy.
+    const env = pickExecEnv({
+      PATH: '/usr/bin:/bin',
+      APPDATA: '/home/tester/.config-not-a-real-appdata',
+      LOCALAPPDATA: '/home/tester/.local-not-a-real-appdata',
+      COMSPEC: '/bin/not-a-real-cmd',
+      TEMP: '/tmp',
+      TMP: '/tmp',
+      USERPROFILE: '/home/tester',
+      SystemRoot: '/not-a-real-windows',
+      NUMBER_OF_PROCESSORS: '8',
+    });
+    expect(env.PATH).toBe('/usr/bin:/bin');
+    for (const name of [
+      'APPDATA',
+      'LOCALAPPDATA',
+      'COMSPEC',
+      'TEMP',
+      'TMP',
+      'USERPROFILE',
+      'SystemRoot',
+      'NUMBER_OF_PROCESSORS',
+    ]) {
+      expect(env).not.toHaveProperty(name);
+    }
+  });
+
+  it('adds the Windows platform set for a Windows environment block', () => {
+    // Same parent, declared as a Windows block: now the staples come along,
+    // matched case-insensitively (a lower-cased `appdata` counts as `APPDATA`).
+    const env = pickExecEnv(
+      {
+        Path: 'C:\\Windows\\System32',
+        appdata: 'C:\\Users\\tester\\AppData\\Roaming',
+        COMSPEC: 'C:\\Windows\\System32\\cmd.exe',
+      },
+      [],
+      true,
+    );
+    expect(env.Path).toBe('C:\\Windows\\System32');
+    expect(env.appdata).toBe('C:\\Users\\tester\\AppData\\Roaming');
+    expect(env.COMSPEC).toBe('C:\\Windows\\System32\\cmd.exe');
+  });
 });
 
 describe('createHostSandbox environment policy', () => {

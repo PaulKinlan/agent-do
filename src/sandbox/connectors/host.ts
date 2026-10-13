@@ -91,10 +91,12 @@ export const DEFAULT_ENV_ALLOWLIST: readonly string[] = [
  * and DLL resolution depend on system variables that POSIX doesn't have
  * (`cmd.exe` needs `SystemRoot`; `%TEMP%` is the scratch directory).
  *
- * Matching is case-insensitive there (see {@link pickExecEnv}) because
- * Windows environment names are, and the conventional spelling of the
- * search path is `Path`, not `PATH`. The names are inert on POSIX
- * because a POSIX parent simply doesn't have them.
+ * Only added when the child environment is a Windows environment block
+ * — i.e. when {@link pickExecEnv}'s `caseInsensitive` flag is set, which
+ * defaults to `process.platform === 'win32'`. A POSIX parent can define
+ * these names (they are not inherently absent there), so forwarding them
+ * unconditionally would widen the default environment beyond the policy
+ * documented in docs/sandbox.md (agent-do-s8s).
  */
 export const DEFAULT_ENV_ALLOWLIST_WINDOWS: readonly string[] = [
   'SystemRoot',
@@ -131,10 +133,12 @@ export const DEFAULT_ENV_PREFIX_ALLOWLIST: readonly string[] = ['LC_'];
  * @param parent the environment to read from (`process.env` in
  *   production).
  * @param extra additional **exact** variable names to forward.
- * @param caseInsensitive compare names ignoring case. Defaults to
- *   `process.platform === 'win32'`, matching the platform: Windows
- *   environment blocks are case-insensitive and spell the search path
- *   `Path`, while POSIX names are case-sensitive and stay that way.
+ * @param caseInsensitive the child environment is a Windows environment
+ *   block: names are compared ignoring case (Windows blocks are, and the
+ *   search path is spelled `Path`) and the Windows platform set
+ *   ({@link DEFAULT_ENV_ALLOWLIST_WINDOWS}) applies. Defaults to
+ *   `process.platform === 'win32'`, so a POSIX child never receives the
+ *   Windows-only names even when the parent happens to define them.
  */
 export function pickExecEnv(
   parent: Record<string, string | undefined>,
@@ -146,7 +150,7 @@ export function pickExecEnv(
   const exact = new Set<string>(
     [
       ...DEFAULT_ENV_ALLOWLIST,
-      ...DEFAULT_ENV_ALLOWLIST_WINDOWS,
+      ...(caseInsensitive ? DEFAULT_ENV_ALLOWLIST_WINDOWS : []),
       ...extra,
     ].map(normalize),
   );
