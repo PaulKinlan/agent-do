@@ -859,6 +859,9 @@ const agent = createAgent({
 tool (default name `bash`) wired to a `SandboxApi`. Defaults to
 `createHostSandbox()` when no sandbox is supplied; for real
 isolation, pass `createJustBashSandbox()` or your own connector.
+The default host sandbox forwards only an allowlisted environment
+(`PATH`, `HOME`, locale, …) to commands — not the parent's provider
+keys; see [docs/sandbox.md](docs/sandbox.md#environment-policy-host-connector).
 
 ```ts
 import { createAgent, createShellTool, createJustBashSandbox } from 'agent-do';
@@ -1663,7 +1666,7 @@ const result = await runEvals(suite, { output: 'silent' });
 | `streamAgentLoop` | `(config, task, context?) => AsyncGenerator<ProgressEvent>` | Stream the loop directly (lower-level) |
 | `createShellTool` | `(sandbox?, opts?) => ToolSet` | A single shell tool (default name `bash`) whose execute calls `sandbox.exec`. Defaults to host when no sandbox is supplied. ([docs/sandbox.md](docs/sandbox.md)) |
 | `SandboxBackedMemoryStore` | class | Adapt a `SandboxApi` into a `MemoryStore` |
-| `createHostSandbox` | `(opts?) => SandboxApi` | Direct passthrough to the host — **not a security boundary** |
+| `createHostSandbox` | `(opts?) => SandboxApi` | Direct passthrough to the host — **not a security boundary**. Commands get an allowlisted env, not the parent's; `inheritEnv: true` opts out. |
 | `createJustBashSandbox` | `(opts?) => Promise<SandboxApi>` | Wrap a [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash) `Sandbox` |
 | `wrapJustBashSandbox` | `(instance) => SandboxApi` | Wrap an externally-constructed just-bash instance |
 | `createSkillTools` | `(store: SkillStore) => ToolSet` | Create skill management tools |

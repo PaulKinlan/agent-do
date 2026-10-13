@@ -353,7 +353,7 @@ The agent's private scratchpad, backed by any `MemoryStore`. Pass an `InMemoryMe
 
 ### `createShellTool(sandbox?: SandboxApi, opts?: CreateShellToolOptions): ToolSet`
 
-A single shell-exec tool wired to a `SandboxApi`. Defaults to `createHostSandbox()` when no sandbox is supplied (host shell, **not** isolation).
+A single shell-exec tool wired to a `SandboxApi`. Defaults to `createHostSandbox()` when no sandbox is supplied (host shell, **not** isolation). The default host sandbox forwards an allowlisted environment rather than the parent's (`inheritEnv: true` opts out) — see [sandbox.md](sandbox.md#environment-policy-host-connector).
 
 **Options:**
 - `name` — override the model-facing tool name (default `bash`)
