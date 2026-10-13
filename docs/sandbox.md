@@ -107,6 +107,20 @@ either. `NODE_OPTIONS`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `LD_PRELOAD`
 and `DYLD_*` are excluded deliberately — forwarding them would let the
 parent environment inject code into every command.
 
+On Windows the names are matched case-insensitively (the platform's
+environment blocks are, and the search path is spelled `Path`), and a
+small platform set is added on top — `SystemRoot`, `SystemDrive`,
+`windir`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`, `TEMP`,
+`TMP` — because process creation and DLL resolution need them there.
+
+**This closes the inheritance path, not the process table.** Commands
+still run as the same user in the same PID namespace, so on Linux
+`cat /proc/$PPID/environ` still reads the parent Node process's
+environment. `createHostSandbox` is transparent about not being a
+security boundary; when a credential must be unreachable by the model
+rather than merely uninherited, use an isolating connector
+(`createJustBashSandbox`, a container/VM connector of your own) instead.
+
 Two knobs, both explicit:
 
 ```ts

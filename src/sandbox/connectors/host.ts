@@ -27,6 +27,14 @@
  * default. `inheritEnv: true` restores the old whole-environment
  * behaviour and is an explicit, documented opt-out — see
  * {@link HostSandboxOptions}.
+ *
+ * This closes the *inheritance* path, which is the one a tool call
+ * reaches by default. It does not turn the host connector into a
+ * security boundary: the command still runs as the same user in the
+ * same PID namespace, so on Linux it can read the parent's environment
+ * through the process table (`cat /proc/$PPID/environ`). Only real
+ * isolation (a container/VM connector, or {@link createJustBashSandbox})
+ * changes that.
  */
 
 import * as fsp from 'node:fs/promises';
@@ -79,6 +87,33 @@ export const DEFAULT_ENV_ALLOWLIST: readonly string[] = [
 ];
 
 /**
+ * Additional names forwarded on Windows hosts, where process creation
+ * and DLL resolution depend on system variables that POSIX doesn't have
+ * (`cmd.exe` needs `SystemRoot`; `%TEMP%` is the scratch directory).
+ *
+ * Matching is case-insensitive there (see {@link pickExecEnv}) because
+ * Windows environment names are, and the conventional spelling of the
+ * search path is `Path`, not `PATH`. The names are inert on POSIX
+ * because a POSIX parent simply doesn't have them.
+ */
+export const DEFAULT_ENV_ALLOWLIST_WINDOWS: readonly string[] = [
+  'SystemRoot',
+  'SystemDrive',
+  'windir',
+  'COMSPEC',
+  'PATHEXT',
+  'USERPROFILE',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'TEMP',
+  'TMP',
+  'NUMBER_OF_PROCESSORS',
+  'PROCESSOR_ARCHITECTURE',
+];
+
+/**
  * Name prefixes forwarded by default, so the rest of the locale family
  * (`LC_CTYPE`, `LC_MESSAGES`, …) comes along with `LC_ALL`. Prefix
  * matching is intentionally limited to this list — a user-supplied
@@ -96,19 +131,31 @@ export const DEFAULT_ENV_PREFIX_ALLOWLIST: readonly string[] = ['LC_'];
  * @param parent the environment to read from (`process.env` in
  *   production).
  * @param extra additional **exact** variable names to forward.
+ * @param caseInsensitive compare names ignoring case. Defaults to
+ *   `process.platform === 'win32'`, matching the platform: Windows
+ *   environment blocks are case-insensitive and spell the search path
+ *   `Path`, while POSIX names are case-sensitive and stay that way.
  */
 export function pickExecEnv(
   parent: Record<string, string | undefined>,
   extra: readonly string[] = [],
+  caseInsensitive = process.platform === 'win32',
 ): Record<string, string> {
-  const exact = new Set<string>([...DEFAULT_ENV_ALLOWLIST, ...extra]);
+  const normalize = (name: string) =>
+    caseInsensitive ? name.toUpperCase() : name;
+  const exact = new Set<string>(
+    [
+      ...DEFAULT_ENV_ALLOWLIST,
+      ...DEFAULT_ENV_ALLOWLIST_WINDOWS,
+      ...extra,
+    ].map(normalize),
+  );
+  const prefixes = DEFAULT_ENV_PREFIX_ALLOWLIST.map(normalize);
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(parent)) {
     if (value === undefined) continue;
-    if (
-      exact.has(name) ||
-      DEFAULT_ENV_PREFIX_ALLOWLIST.some((prefix) => name.startsWith(prefix))
-    ) {
+    const key = normalize(name);
+    if (exact.has(key) || prefixes.some((prefix) => key.startsWith(prefix))) {
       out[name] = value;
     }
   }

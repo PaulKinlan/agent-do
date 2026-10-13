@@ -190,6 +190,33 @@ describe('pickExecEnv (default allowlist)', () => {
     // An extra entry is a name, so the prefix form matches nothing.
     expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
   });
+
+  it('matches Windows names case-insensitively and keeps the system staples', () => {
+    // Windows env blocks are case-insensitive and spell the search path
+    // `Path`; process creation needs the SystemRoot family.
+    const windowsParent: Record<string, string | undefined> = {
+      Path: 'C:\\Windows\\System32',
+      SystemRoot: 'C:\\Windows',
+      TEMP: 'C:\\Temp',
+      USERPROFILE: 'C:\\Users\\tester',
+      ANTHROPIC_API_KEY: 'sk-ant-not-a-real-key',
+    };
+    const env = pickExecEnv(windowsParent, [], true);
+    expect(env.Path).toBe('C:\\Windows\\System32');
+    expect(env.SystemRoot).toBe('C:\\Windows');
+    expect(env.TEMP).toBe('C:\\Temp');
+    expect(env.USERPROFILE).toBe('C:\\Users\\tester');
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
+  it('keeps POSIX name matching case-sensitive', () => {
+    const env = pickExecEnv(
+      { Path: '/usr/bin', ANTHROPIC_API_KEY: 'sk-ant-not-a-real-key' },
+      [],
+      false,
+    );
+    expect(env).toEqual({});
+  });
 });
 
 describe('createHostSandbox environment policy', () => {
