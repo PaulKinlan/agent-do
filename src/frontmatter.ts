@@ -22,13 +22,24 @@
  *    lines immediately after it skipped (again, the old `\s*\n`).
  *  - an opening fence with no closing fence → `null` (no frontmatter).
  *
- * One deliberate difference: two adjacent fences (`---\n---\nrest`) return an
- * empty `frontmatter` and `rest` as the body. The old skills/routines regex
- * could not match that shape — the opening fence consumes the only newline
- * before `---` — so those callers saw the whole document as the body, while
- * policies and shellm already behaved the new way. Uniform semantics wins:
- * every caller YAML-parses the frontmatter, so the only visible difference is
- * "this document has an empty metadata block".
+ * One deliberate difference, and it is the same mechanism seen from two sides:
+ * **the scanner closes on the first `---`-only line after the opening fence;
+ * the old skills/routines regex could only close on a `---` line that still had
+ * an unconsumed `\n` in front of it**, because the opening `\s*\n` may eat
+ * blank lines and the newline that precedes that fence. So:
+ *  - two adjacent fences (`---\n---\nrest`): the scanner returns an empty
+ *    frontmatter and `rest` as the body; the regex consumed the only newline
+ *    before the second fence, so it found no closing fence at all and the
+ *    callers saw the whole document as the body.
+ *  - blank lines before the first content fence
+ *    (`---\n\n---\nline 1\n---\nline 2`): the scanner closes at the second
+ *    fence (empty frontmatter, body `line 1\n---\nline 2`); the regex skipped
+ *    that fence and closed on the third, reporting frontmatter `---\nline 1`
+ *    and body `line 2`.
+ * policies and shellm already behaved the scanner's way; skills and routines
+ * are now uniform with them. It is not observable beyond "where does the empty
+ * or multiple-fence metadata block end": every caller YAML-parses the
+ * frontmatter and trims the body.
  *
  * A second, unobservable difference: a frontmatter block that is *entirely*
  * whitespace (`---\n \n---\nbody`) comes back as `''` rather than as that

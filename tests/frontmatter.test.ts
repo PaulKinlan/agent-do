@@ -105,6 +105,22 @@ describe('splitFrontmatter', () => {
     });
   });
 
+  it('normalisation: blank lines before the first content fence close there, not later', () => {
+    // Same mechanism as the adjacent-fence case, one blank line out: the old
+    // regex skipped the second fence (its preceding newline was consumed by
+    // the opening `\s*\n`) and closed on the third instead, reporting a
+    // frontmatter that started with a `---` line. The scanner stops at the
+    // first `---` line it finds.
+    expect(PREVIOUS_REGEX.exec('---\n\n---\nline 1\n---\nline 2')!.slice(1)).toEqual([
+      '---\nline 1',
+      'line 2',
+    ]);
+    expect(splitFrontmatter('---\n\n---\nline 1\n---\nline 2')).toEqual({
+      frontmatter: '',
+      body: 'line 1\n---\nline 2',
+    });
+  });
+
   it('documented difference: a whitespace-only frontmatter collapses to an empty string', () => {
     // Unobservable: every caller YAML-parses the frontmatter, and
     // `YAML.parse(' ')` and `YAML.parse('')` are both "no metadata". The old
