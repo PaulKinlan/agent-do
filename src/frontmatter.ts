@@ -38,9 +38,20 @@
  *  - a frontmatter block that is *entirely* whitespace (`---\n \n---\nbody`)
  *    comes back as `''` rather than as that whitespace run.
  *
- * Both are unobservable beyond "this document has an empty metadata block":
- * every caller YAML-parses the frontmatter and trims the body, and
- * `YAML.parse(' ')` and `YAML.parse('')` are both "no metadata".
+ * Two differences remain, and they differ in visibility:
+ *  - **Observable, and a deliberate body change**: for a document whose only
+ *    fences are adjacent or separated by blank lines (`---\n---\nrest`,
+ *    `---\n\n---\nrest`) the scan reports an empty frontmatter and `rest` as the
+ *    body, where the old skills/routines regex matched nothing and callers kept
+ *    the whole document — fence lines included — as the body. That affects a
+ *    document which is nothing but an empty metadata block plus content: the
+ *    block was metadata-free either way, so no metadata is lost, but the body
+ *    no longer carries those fence lines. policies and shellm already behaved
+ *    the scanner's way, and skills and routines are now uniform with them.
+ *  - **Not observable**: a frontmatter block that is *entirely* whitespace
+ *    (`---\n \n---\nbody`) comes back as `''` rather than as that whitespace
+ *    run, and every caller YAML-parses the frontmatter, where `YAML.parse(' ')`
+ *    and `YAML.parse('')` are both "no metadata".
  */
 
 export interface FrontmatterSplit {

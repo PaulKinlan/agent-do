@@ -123,9 +123,11 @@ describe('splitFrontmatter', () => {
   });
 
   it('normalisation: two adjacent fences with no later fence give an empty frontmatter', () => {
-    // The one remaining difference: the regex found no closing fence here at
-    // all, so callers saw the whole document as the body (policies/shellm
-    // already behaved the scanner's way).
+    // The one remaining *observable* difference, and it is a body change: the
+    // regex found no closing fence here at all, so callers kept the whole
+    // document — fence lines included — as the body, while the scan returns an
+    // empty frontmatter and `rest` as the body. `parsePolicyMd` and `.shellm`
+    // already behaved the scanner's way.
     expect(PREVIOUS_REGEX.exec('---\n---\nrest')).toBeNull();
     expect(splitFrontmatter('---\n---\nrest')).toEqual({
       frontmatter: '',
