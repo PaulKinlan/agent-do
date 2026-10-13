@@ -447,19 +447,41 @@ export interface PathApi {
  */
 export const POSIX_PATH_API: PathApi = {
   join(base, ...parts) {
-    let out = stripTrailingSlash(base);
-    for (const part of parts) {
-      if (!part) continue;
-      out = out === '' ? part : `${out}/${part}`;
+    // Concatenate then normalise, which is what node:path.posix does - a
+    // segment that is itself absolute does not reset the prefix, it just
+    // contributes its own empty leading component. `tests/path-resolution.test.ts`
+    // checks all four of these against node:path.posix, because hand-rolled
+    // arithmetic is exactly where these edge cases live.
+    const joined = [base, ...parts].filter((part) => part !== '').join('/');
+    const absolute = joined.startsWith('/');
+    const segments: string[] = [];
+    for (const segment of joined.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') {
+        if (segments.length && segments[segments.length - 1] !== '..') segments.pop();
+        else if (!absolute) segments.push('..');
+        continue;
+      }
+      segments.push(segment);
     }
-    return out === '' ? '/' : out;
+    const body = segments.join('/');
+    return absolute ? `/${body}` : body || '.';
   },
-  dirname: parentDir,
+  dirname(p) {
+    if (p === '/') return '/';
+    const s = stripTrailingSlash(p);
+    const i = s.lastIndexOf('/');
+    if (i < 0) return '.';
+    return i === 0 ? '/' : s.slice(0, i);
+  },
   relative(from, to) {
-    const f = stripTrailingSlash(from);
-    const t = stripTrailingSlash(to);
-    if (t === f) return '.';
-    return t.startsWith(`${f}/`) ? t.slice(f.length + 1) : t;
+    const split = (p: string) => p.split('/').filter((s) => s && s !== '.');
+    const f = split(from);
+    const t = split(to);
+    let i = 0;
+    while (i < f.length && i < t.length && f[i] === t[i]) i += 1;
+    const parts = [...Array(f.length - i).fill('..'), ...t.slice(i)];
+    return parts.join('/'); // node:path.posix.relative returns '' for equal paths
   },
   isAbsolute(p) {
     return p.startsWith('/');
@@ -471,28 +493,31 @@ export async function realpathSafe(
   p: string,
   pathApi: PathApi,
 ): Promise<ResolvedPath> {
-  if (!sandbox.realpath) {
-    // No canonicaliser. A substrate that can still see symlinks cannot attest
-    // any path, because components it cannot expand could reach anywhere; a
-    // substrate with no symlink support at all has nothing to resolve.
-    return sandbox.readlink ? UNRESOLVED : { ok: true, path: p };
-  }
+  // There is deliberately no capability shortcut here. A connector without
+  // `realpath` can still *report* a symlink - just-bash does, via `[ -L ]` in its
+  // stat - so the walk runs either way and the presence of a primitive decides
+  // only how the walk ends, never whether it happens. Short-circuiting on
+  // `!realpath` handed an alias back unchanged for exactly such a connector, and
+  // `alias -> .env` leaked (agent-do-34f).
+  const canRealpath = typeof sandbox.realpath === 'function';
   let parts: string[] = [];
   let current = p;
   let hops = 0;
   for (;;) {
     // 1. Does this path exist? If so, realpath is a positive attestation.
-    let canonical: string | undefined;
-    let absent = false;
-    try {
-      canonical = await sandbox.realpath(current);
-    } catch (err) {
-      if (classifyError(err) === 'unattestable') return UNRESOLVED;
-      absent = true;
-    }
-    if (!absent) {
-      if (typeof canonical !== 'string') return UNRESOLVED; // a connector that does not answer in strings
-      return { ok: true, path: parts.length ? pathApi.join(canonical, ...parts) : canonical };
+    if (canRealpath) {
+      let canonical: string | undefined;
+      let absent = false;
+      try {
+        canonical = await sandbox.realpath!(current);
+      } catch (err) {
+        if (classifyError(err) === 'unattestable') return UNRESOLVED;
+        absent = true;
+      }
+      if (!absent) {
+        if (typeof canonical !== 'string') return UNRESOLVED; // a connector that does not answer in strings
+        return { ok: true, path: parts.length ? pathApi.join(canonical, ...parts) : canonical };
+      }
     }
 
     // 2. Inspect this component before stepping past it. realpath reports ENOENT
@@ -533,8 +558,12 @@ export async function realpathSafe(
     // 4. Not a link, and not there: step towards the root.
     const parent = pathApi.dirname(current);
     if (parent === current) {
-      // The root did not resolve either, so nothing about this path is attested.
-      return UNRESOLVED;
+      // Reaching the root means every component was inspected and none was an
+      // unresolved link. With a canonicaliser this only happens when the root
+      // itself did not resolve, which is unattested. Without one, this is the
+      // answer: the path rebuilt from the components that were walked.
+      if (canRealpath) return UNRESOLVED;
+      return { ok: true, path: parts.length ? pathApi.join(current, ...parts) : current };
     }
     parts.unshift(pathApi.relative(parent, current));
     current = parent;

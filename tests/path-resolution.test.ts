@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { POSIX_PATH_API, realpathSafe, type ResolvedPath } from '../src/stores/sandbox.js';
 import type { SandboxApi } from '../src/sandbox/types.js';
+import * as nodePath from 'node:path';
 
 /**
  * The complete error-mode matrix for path resolution (agent-do-vn9).
@@ -156,6 +157,31 @@ describe('realpathSafe error matrix (agent-do-vn9)', () => {
     expect: 'refused',
   });
 
+  // ---- the shipped connectors' shapes (agent-do-34f) ----
+  rows.push({
+    name: 'a connector that reports links but has no primitives refuses them (just-bash shape)',
+    // wrapJustBashSandbox detects symlinks via [ -L ] in stat, yet exposes neither
+    // realpath nor readlink. The absence of both must not be read as "no symlinks".
+    sandbox: fake({ stat: isLink }),
+    expect: 'refused',
+  });
+  rows.push({
+    name: 'the same connector still resolves an ordinary path (no-primitive control)',
+    sandbox: fake({ stat: notALink }),
+    expect: 'resolved',
+    resolvedTo: MISSING,
+  });
+  rows.push({
+    name: 'the same connector refuses a symlinked directory component',
+    // The link is an ancestor, not the leaf: every component must be inspected,
+    // not just the one the caller named.
+    sandbox: fake({
+      stat: (async (p: string) => ({ isSymbolicLink: p === '/ws/alias' })) as never,
+    }),
+    path: '/ws/alias/hooks/planted',
+    expect: 'refused',
+  });
+
   // ---- bounds ----
   rows.push({
     name: 'an unresolvable root refuses',
@@ -184,5 +210,43 @@ describe('realpathSafe error matrix (agent-do-vn9)', () => {
       POSIX_PATH_API,
     );
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('POSIX_PATH_API matches node:path.posix on the shapes the resolver uses', () => {
+  // The adapter is hand-written because this module deliberately has no Node
+  // import, so it is checked against the reference implementation rather than
+  // against my reasoning. Hand-rolled path arithmetic produces exactly the edge
+  // cases that bit the resolver at the root during agent-do-vn9.
+  const paths = ['/', '/ws', '/ws/a', '/ws/a/b.txt', 'ws', 'ws/a', '.', '', '/ws/../etc', 'a/./b'];
+
+  it('join', () => {
+    for (const a of paths) {
+      for (const b of ['', 'x', '/y', '..', '../z', 'ws/a']) {
+        expect(POSIX_PATH_API.join(a, b), `join(${JSON.stringify(a)}, ${JSON.stringify(b)})`).toBe(
+          nodePath.posix.join(a, b),
+        );
+      }
+    }
+  });
+
+  it('dirname', () => {
+    for (const a of paths) {
+      expect(POSIX_PATH_API.dirname(a), `dirname(${JSON.stringify(a)})`).toBe(nodePath.posix.dirname(a));
+    }
+  });
+
+  it('relative', () => {
+    for (const a of ['/', '/ws', '/ws/a', '/a/b']) {
+      for (const b of ['/', '/ws', '/ws/a', '/ws/a/b.txt', '/etc/x', '/a/c']) {
+        expect(POSIX_PATH_API.relative(a, b), `relative(${a}, ${b})`).toBe(nodePath.posix.relative(a, b));
+      }
+    }
+  });
+
+  it('isAbsolute', () => {
+    for (const a of paths) {
+      expect(POSIX_PATH_API.isAbsolute(a)).toBe(nodePath.posix.isAbsolute(a));
+    }
   });
 });
