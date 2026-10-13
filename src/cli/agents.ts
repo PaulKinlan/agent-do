@@ -270,6 +270,35 @@ function printable(value: string): string {
 }
 
 /**
+ * As {@link printable}, but keeps newlines and tabs so a multi-line diagnostic
+ * (a list of schema issues, say) stays readable.
+ */
+function printableBlock(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    if (ch === '\n' || ch === '\t') {
+      out += ch;
+      continue;
+    }
+    const code = ch.codePointAt(0)!;
+    out += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? '?' : ch;
+  }
+  return out;
+}
+
+/**
+ * Write a diagnostic to stderr with its untrusted parts neutralised. Every
+ * interpolation below comes from disk — a filename, an fs error message that
+ * quotes the path, or a Zod issue that quotes the received value — so it all
+ * goes through {@link printableBlock}: a planted file must not be able to drive
+ * the operator's terminal through the diagnostics path either, not just through
+ * the listing (agent-do-2ey).
+ */
+function writeDiagnostic(text: string): void {
+  process.stderr.write(printableBlock(text));
+}
+
+/**
  * Try to load a saved agent config by name.
  *
  * Walks up the directory tree from cwd — closest ancestor wins (like
@@ -308,9 +337,7 @@ async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> 
     content = await fs.promises.readFile(filePath, 'utf-8');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[agent-do] Could not read agent file ${filePath}: ${msg}\n`,
-    );
+    writeDiagnostic(`[agent-do] Could not read agent file ${filePath}: ${msg}\n`);
     return null;
   }
   let raw: unknown;
@@ -318,9 +345,7 @@ async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> 
     raw = safeJsonParse(content);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[agent-do] Ignoring malformed agent file ${filePath}: ${msg}\n`,
-    );
+    writeDiagnostic(`[agent-do] Ignoring malformed agent file ${filePath}: ${msg}\n`);
     return null;
   }
   const parsed = SavedAgentSchema.safeParse(raw);
@@ -328,7 +353,7 @@ async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> 
     const issues = parsed.error.issues
       .map((i) => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
       .join('\n');
-    process.stderr.write(
+    writeDiagnostic(
       `[agent-do] Ignoring invalid agent file ${filePath}:\n${issues}\n`,
     );
     return null;

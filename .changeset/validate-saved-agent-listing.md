@@ -12,4 +12,6 @@ unknown keys and bounds every field — and reports `(invalid config)` for a fil
 reason written to stderr rather than swallowed.
 
 Fields taken from a file are also stripped of control characters before printing, so a planted file (or a
-planted filename) can no longer put terminal escape sequences into `agent-do list` output.
+planted filename) can no longer put terminal escape sequences into `agent-do list` output. The same
+sanitisation covers the diagnostics written to stderr when a file is unreadable, malformed or invalid — the
+path, the fs error message that quotes it, and the Zod issues that quote received values all come from disk.

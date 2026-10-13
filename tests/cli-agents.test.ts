@@ -356,6 +356,29 @@ describe('saved agents', () => {
       expect(text).toContain('google/gemini-2.5-flash');
     });
 
+    it('does not let a filename inject escapes through the stderr diagnostics either', async () => {
+      // agent-do-2ey: the listing sanitised stdout, but the diagnostics that
+      // `readSavedAgentFile` writes interpolate the file path (and an fs error
+      // message that quotes it, and Zod issues that quote received values) raw.
+      const evilName = 'bad\u001b[31m';
+      await writeAgentFile(`${evilName}.json`, '{not json');
+
+      const { stderr } = await captureListing();
+      expect(stderr).toContain('Ignoring malformed agent file'); // still explains itself
+      expect(stderr).not.toContain('\u001b');
+      expect(stderr).toContain('bad?[31m.json');
+
+      // The same filename shape failing validation instead of JSON parsing: the
+      // Zod issues quote the received value, which is attacker-controlled too.
+      await writeAgentFile(
+        `${evilName}2.json`,
+        JSON.stringify({ ...validConfig, provider: 'e\u001b[32mvil' }),
+      );
+      const second = await captureListing();
+      expect(second.stderr).toContain('Ignoring invalid agent file');
+      expect(second.stderr).not.toContain('\u001b');
+    });
+
     it('prefers the closest ancestor when a name exists at two levels', async () => {
       await writeAgentFile('dup.json', JSON.stringify({ ...validConfig, name: 'dup', model: 'parent-model' }));
 
