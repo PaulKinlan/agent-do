@@ -3,16 +3,27 @@
 What the workspace tools guarantee, and what they do not. `docs/sandbox.md` covers the connector mechanics; this
 document is about the boundary an operator is relying on.
 
-## Two layers, only one of which is a boundary
+## Two layers, and one surface that ignores both
 
 `FilesystemMemoryStore`'s `readOnly` / `onBeforeWrite` hooks and the workspace **deny list** (`.env`, `*.pem`,
-`.ssh/**`, `.git/**`, and anything from `--exclude`) are **policy**: they decide which operations the agent's tools
-will perform. The **sandbox connector** is the boundary: when stores and the shell run through
-`SandboxBackedMemoryStore` or an isolating connector, no path inside the agent reaches the host filesystem without
-passing through it.
+`.ssh/**`, `.git/**`, and anything from `--exclude`) are **policy**: they decide which operations the workspace
+**file tools** will perform. The **sandbox connector** is the boundary: it decides what the agent can reach at all
+when stores and the shell run through it.
 
-Policy is what the model is allowed to *ask for*; isolation is what it can *reach*. A defect in policy is a bug
-with a fix; a defect in the boundary is a compromise.
+Policy is what the model is allowed to *ask for* through the file tools; isolation is what it can *reach*. A defect
+in policy is a bug with a fix; a defect in the boundary is a compromise.
+
+**The shell tool is not covered by the deny list.** `createShellTool` runs whatever command it is given in the
+sandbox, and the guard above the file tools is not in that path. Measured on a workspace containing `.env`:
+
+```text
+read_file('.env')   ->  Blocked by deny list: .env
+bash: cat .env      ->  SECRET=...
+```
+
+So the deny list protects the **file-tool surface** — which matters, because that is the surface an agent has by
+default — and not the agent's reach. If you grant shell execution, treat every file in the workspace as readable by
+the model, deny list or not, and do not rely on the rules to hide anything from it.
 
 ## The deny list is a path policy, and a path cannot answer every question
 
@@ -32,10 +43,16 @@ path at all:
 
 ## What to do about it
 
-- If you need **strict confidentiality of files inside the workspace**, do not rely on path policy for it. Use an
-  isolating substrate (a container connector, or just-bash), so the inode is not reachable under another name inside
-  the agent's view - or do not grant shell execution that can create hard links. Hard links cannot cross
-  filesystems, so the substrate's own boundary is what actually holds here.
+A file **inside the workspace** cannot be kept from a model that has shell execution in that workspace. That is not
+a defect to be fixed; it is what shell execution in a directory means, and the honest guidance follows from it:
+
+- Keep secrets out of the workspace, or use `--no-tools` for a directory that contains them — the README's own
+  advice. The deny list is not a substitute for this, and no path rule can be.
+- Do not grant the shell tool unless you accept the workspace's contents as readable by the model.
+- Use an isolating substrate (a container connector, or just-bash) to bound what the agent can reach **beyond** the
+  workspace: the host filesystem, the network, other tenants. Isolation protects host data that is not mounted or
+  seeded into the workspace. It does not make the workspace's own contents confidential from a shell running inside
+  it.
 - Do not treat `--include-sensitive` as a safety valve: it deliberately allows paths that resolve outside the
   workspace, and exists for operators who have decided the boundary is elsewhere.
 - A connector that can *see* a symlink but cannot read it is refused rather than permitted, so a substrate with

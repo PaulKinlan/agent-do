@@ -22,7 +22,8 @@ secrets you don't want exposed, use `--no-tools` instead.
 Hiding individual files is a **path policy**, not a boundary: the deny
 list (`.env`, `*.pem`, `.ssh/**`, `.git/**`) matches the resolved path,
 so a hard link to a denied file — a second name for the same inode — is
-not matched by the rules. [`docs/security.md`](docs/security.md) states
+not matched by the rules, and a shell tool (`createShellTool`) does not
+consult the deny list at all. [`docs/security.md`](docs/security.md) states
 that boundary, what shell access means for it, and what to use instead
 when strict confidentiality matters (an isolating sandbox substrate, or
 `--no-tools`).

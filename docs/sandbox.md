@@ -255,6 +255,11 @@ A path that is inside the workspace lexically but resolves outside it through a 
 `outside-workspace`, unless the operator passes `--include-sensitive`. A symlink whose target is inside the
 workspace is still allowed, including a dangling one: the policy blocks the target, not the link.
 
+**Not covered: shell execution.** These rules govern the workspace **file tools**. A shell tool
+(`createShellTool`) runs the command it is given in the sandbox and does not consult the deny list, so `cat .env`
+returns the file that `read_file('.env')` blocks. Granting shell execution means treating everything in the workspace
+as readable by the model.
+
 **Not covered: hard links.** Rules match path patterns, so a second directory entry for a deny-listed inode is not
 matched by them. With `fs.link('.env', 'notes/readme.txt')` the contents of `.env` are readable as
 `notes/readme.txt`, because the name matches no rule and there is nothing for resolution to canonicalise — a
