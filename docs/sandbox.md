@@ -240,6 +240,9 @@ What it resolves, and what happens when it cannot:
 - A connector offering neither `realpath` nor `readlink` — both are optional on the contract, for substrates with no
   symlinks — falls back to the lexically normalised path. The store's containment check stays authoritative there,
   as it does for any path that escapes the workspace lexically (`Path traversal via symlink not allowed`).
+- A connector that has `realpath` but not `readlink` is a narrower case, and it fails **closed**: `stat()` (lstat
+  semantics) still reports that an entry is a symlink, so the resolver knows there is a target it cannot read, and
+  refuses rather than judging the link's own name.
 
 A path that is inside the workspace lexically but resolves outside it through a symlink is blocked as
 `outside-workspace`, unless the operator passes `--include-sensitive`. A symlink whose target is inside the

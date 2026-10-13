@@ -460,23 +460,29 @@ export async function realpathSafe(
     // realpath cannot report a symlink whose target is missing: it fails with
     // ENOENT for the link, exactly as if it were absent. Inspect the component
     // before walking past it, or the link's own name survives into the answer.
-    if (sandbox.readlink) {
-      try {
-        const stat = await sandbox.stat(current);
-        if (stat.isSymbolicLink) {
-          hops += 1;
-          if (hops > MAX_SYMLINK_HOPS) return { ok: false, reason: 'symlink-chain' };
-          const link = await sandbox.readlink(current);
-          const target = pathApi.isAbsolute(link)
-            ? link
-            : pathApi.join(pathApi.dirname(current), link);
-          current = parts.length ? pathApi.join(target, ...parts) : target;
-          parts = [];
-          continue;
-        }
-      } catch {
-        // Genuinely absent, or a substrate without stat/readlink: walk up.
+    // `stat()` is lstat semantics on this contract, so a symlink is detectable
+    // even by a connector that cannot read one. If the entry is a symlink and the
+    // substrate cannot report its target, the path cannot be attested - refuse,
+    // rather than fall through and let the caller judge the link's own name
+    // (the fail-open shape all of agent-do-qhn's predecessors shared). A
+    // substrate with no symlinks reports isSymbolicLink false and never reaches
+    // this, which is why the contract may leave `readlink` optional.
+    try {
+      const stat = await sandbox.stat(current);
+      if (stat.isSymbolicLink) {
+        if (!sandbox.readlink) return { ok: false, reason: 'symlink-chain' };
+        hops += 1;
+        if (hops > MAX_SYMLINK_HOPS) return { ok: false, reason: 'symlink-chain' };
+        const link = await sandbox.readlink(current);
+        const target = pathApi.isAbsolute(link)
+          ? link
+          : pathApi.join(pathApi.dirname(current), link);
+        current = parts.length ? pathApi.join(target, ...parts) : target;
+        parts = [];
+        continue;
       }
+    } catch {
+      // Genuinely absent, or a substrate whose stat cannot see it: walk up.
     }
 
     const parent = pathApi.dirname(current);

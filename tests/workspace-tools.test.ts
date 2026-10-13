@@ -442,6 +442,43 @@ describe('dangling symlinks resolve to their target before policy runs (agent-do
     expect(raw.data?.blocked).toBe(true);
   });
 
+  it('refuses a symlink when the connector has no readlink (unattested target)', async () => {
+    // realpath-only connector: stat (lstat semantics) still reports the symlink,
+    // so the resolver knows there is a target it cannot read. Judging the link's
+    // own name instead is the fail-open shape this whole chain has been about.
+    await fs.promises.symlink('.git/hooks/planted', path.join(dir, 'planted-noread'));
+    const physical = dir;
+    const virtualRoot = '/virtual-noread-workspace';
+    const toPhysical = (p: string) => path.join(physical, path.relative(virtualRoot, p));
+    const toVirtual = (p: string) =>
+      path.posix.join(virtualRoot, path.relative(physical, p).split(path.sep).join('/'));
+    const sandbox = {
+      readFile: (p: string) => fs.promises.readFile(toPhysical(p), 'utf8'),
+      readFileBuffer: async (p: string) => new Uint8Array(await fs.promises.readFile(toPhysical(p))),
+      writeFile: (p: string, content: string | Uint8Array) => fs.promises.writeFile(toPhysical(p), content),
+      stat: async (p: string) => {
+        const st = await fs.promises.lstat(toPhysical(p));
+        return {
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          isSymbolicLink: st.isSymbolicLink(),
+          size: st.size,
+          mtime: st.mtime,
+        };
+      },
+      readdir: (p: string) => fs.promises.readdir(toPhysical(p)),
+      exists: async (p: string) => fs.promises.access(toPhysical(p)).then(() => true, () => false),
+      mkdir: async (p: string, o?: { recursive?: boolean }) => { await fs.promises.mkdir(toPhysical(p), o); },
+      rm: async (p: string) => { await fs.promises.rm(toPhysical(p)); },
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      realpath: async (p: string) => toVirtual(await fs.promises.realpath(toPhysical(p))),
+      // deliberately no readlink
+    } as unknown as SandboxApi;
+    const out = await run('write_file', { path: 'planted-noread', content: 'x' }, sandbox, virtualRoot);
+    expect(out).toContain('Blocked by deny list');
+    expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'planted'))).toBe(false);
+  });
+
   // ---- positive: a dangling link that stays inside the workspace still works ----
   it('allows a fresh write on a dangling symlink whose target is inside the workspace', async () => {
     // The policy resolves it to notes/todo.md, which is inside the workspace, so
