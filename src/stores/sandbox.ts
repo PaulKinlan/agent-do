@@ -525,7 +525,14 @@ export async function realpathSafe(
     // so a link's own name survives into the answer without this (agent-do-5ww).
     let isLink = false;
     try {
-      isLink = (await sandbox.stat(current)).isSymbolicLink;
+      // The resolver consumes exactly one field, so that is what it validates.
+      // An incomplete record is not "probably not a symlink": `{}` does not
+      // throw, its `isSymbolicLink` is undefined and therefore falsy, and the
+      // path would be attested on the strength of a field that is not there
+      // (agent-do-a10). Anything other than a boolean refuses.
+      const entry = await sandbox.stat(current);
+      if (typeof entry?.isSymbolicLink !== 'boolean') return UNRESOLVED;
+      isLink = entry.isSymbolicLink;
     } catch (err) {
       // An error we cannot classify means we do not know what is here.
       if (classifyError(err) === 'unattestable') return UNRESOLVED;

@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { POSIX_PATH_API, realpathSafe, type ResolvedPath } from '../src/stores/sandbox.js';
 import type { SandboxApi } from '../src/sandbox/types.js';
 import * as nodePath from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import { createHostSandbox } from '../src/sandbox/connectors/host.js';
 
 /**
  * The complete error-mode matrix for path resolution (agent-do-vn9).
@@ -182,6 +185,24 @@ describe('realpathSafe error matrix (agent-do-vn9)', () => {
     expect: 'refused',
   });
 
+  // ---- malformed stat records (agent-do-a10) ----
+  rows.push({
+    name: 'an incomplete stat record refuses rather than attesting on a missing field',
+    // {} does not throw: isSymbolicLink is undefined, falsy, and the path passed.
+    sandbox: fake({ realpath: realpathUpTo(ROOT), stat: (async () => ({})) as never }),
+    expect: 'refused',
+  });
+  rows.push({
+    name: 'a non-boolean isSymbolicLink refuses',
+    sandbox: fake({ realpath: realpathUpTo(ROOT), stat: (async () => ({ isSymbolicLink: 'yes' })) as never }),
+    expect: 'refused',
+  });
+  rows.push({
+    name: 'a null stat record refuses',
+    sandbox: fake({ realpath: realpathUpTo(ROOT), stat: (async () => null) as never }),
+    expect: 'refused',
+  });
+
   // ---- bounds ----
   rows.push({
     name: 'an unresolvable root refuses',
@@ -247,6 +268,76 @@ describe('POSIX_PATH_API matches node:path.posix on the shapes the resolver uses
   it('isAbsolute', () => {
     for (const a of paths) {
       expect(POSIX_PATH_API.isAbsolute(a)).toBe(nodePath.posix.isAbsolute(a));
+    }
+  });
+});
+
+describe('realpathSafe agrees with fs.realpath on a host sandbox (resolution oracle)', () => {
+  // The error matrix pins how failures are classified; nothing pinned the walk's
+  // *resolution* semantics, which is the last hand-rolled logic here without a
+  // reference. This is that reference: on a real filesystem the answer must be
+  // whatever fs.realpath says, wherever fs.realpath has an answer, and where it
+  // does not (a dangling link) the answer must be the target the link names -
+  // never the link's own name, which is what every finding in this area was.
+  let dir: string;
+  const p = (...parts: string[]) => nodePath.join(dir, ...parts);
+
+  beforeEach(async () => {
+    dir = await fs.promises.realpath(await fs.promises.mkdtemp(nodePath.join(os.tmpdir(), 'agent-do-oracle-')));
+    await fs.promises.mkdir(p('a', 'b', 'c'), { recursive: true });
+    await fs.promises.writeFile(p('a', 'b', 'c', 'file.txt'), 'x');
+    await fs.promises.mkdir(p('.git', 'hooks'), { recursive: true });
+    await fs.promises.symlink(p('a', 'b', 'c', 'file.txt'), p('link-file'));
+    await fs.promises.symlink('a', p('link-dir'));
+    await fs.promises.symlink('a/b/c/missing.txt', p('dangling'));
+    await fs.promises.symlink('link-file', p('chain1'));
+    await fs.promises.symlink('.git/hooks/planted', p('to-git'));
+    await fs.promises.symlink('../../elsewhere', p('a', 'up'));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(dir, { recursive: true, force: true });
+  });
+
+  const sandbox = () => createHostSandbox({ cwd: dir }) as unknown as SandboxApi;
+
+  it('matches fs.realpath wherever realpath has an answer', async () => {
+    for (const candidate of ['a', 'a/b/c/file.txt', 'link-file', 'link-dir', 'link-dir/b/c/file.txt', 'chain1', '.git/hooks']) {
+      const target = p(...candidate.split('/'));
+      let expected: string | undefined;
+      try {
+        expected = await fs.promises.realpath(target);
+      } catch {
+        expected = undefined;
+      }
+      if (expected === undefined) continue;
+      const result = await realpathSafe(sandbox(), target, nodePath);
+      expect(result.ok, candidate).toBe(true);
+      expect((result as Extract<ResolvedPath, { ok: true }>).path, candidate).toBe(expected);
+    }
+  });
+
+  it('names the target of a dangling link rather than the link', async () => {
+    // fs.realpath cannot answer here at all, so the oracle is the link's target.
+    const result = await realpathSafe(sandbox(), p('dangling'), nodePath);
+    expect(result.ok).toBe(true);
+    expect((result as Extract<ResolvedPath, { ok: true }>).path).toBe(p('a', 'b', 'c', 'missing.txt'));
+  });
+
+  it('resolves a dangling link through the git directory to the path it would write', async () => {
+    const result = await realpathSafe(sandbox(), p('to-git'), nodePath);
+    expect(result.ok).toBe(true);
+    expect((result as Extract<ResolvedPath, { ok: true }>).path).toBe(p('.git', 'hooks', 'planted'));
+  });
+
+  it('refuses a link that escapes the tree, naming nothing of its own', async () => {
+    const result = await realpathSafe(sandbox(), p('a', 'up'), nodePath);
+    // It resolves (the target need not exist), but it must never be the alias.
+    if (result.ok) {
+      expect(result.path).not.toBe(p('a', 'up'));
+      expect(result.path).toBe(nodePath.resolve(p('a', '..'), '../elsewhere'));
+    } else {
+      expect(result.reason).toBe('unresolved-path');
     }
   });
 });
