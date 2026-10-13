@@ -73,9 +73,13 @@ const agent = createAgent({
 });
 ```
 
-### Shell tool — `createShellTool(sandbox?)`
+### Shell tool — `createShellTool(sandbox)`
 
-A single shell-exec tool wired to a `SandboxApi`. See
+A single shell-exec tool wired to a `SandboxApi`. The sandbox is
+required — pass an isolating connector for untrusted input, or
+`createHostSandbox()` explicitly for host execution (not isolation).
+Model-visible output is wrapped in `<tool_output>` markers with
+injection-marker redaction. See
 [`docs/sandbox.md`](../sandbox.md).
 
 ```typescript

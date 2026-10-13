@@ -58,8 +58,9 @@ export type { Policy, PolicyStore } from './types.js';
 // - createWorkspaceTools — real project files (read_file/write_file/...)
 //   with a deny-list. Optional `sandbox` option swaps the internal
 //   store for a SandboxBackedMemoryStore.
-// - createShellTool — a single shell-exec tool wired to a SandboxApi
-//   (defaults to host).
+// - createShellTool — a single shell-exec tool; the SandboxApi is
+//   required, so host execution is opted into explicitly with
+//   createHostSandbox().
 //
 // `createFileTools` is the raw primitive that workspace-tools is
 // built on; it's intentionally not exported here. Reach for

@@ -30,7 +30,7 @@
 
 - `createMemoryTools(store: MemoryStore, agentId: string): ToolSet` — agent's private scratchpad (memory_read/write/list/delete/search). Pass any MemoryStore.
 - `createWorkspaceTools(workingDir: string, opts?): ToolSet` — project files (read_file/write_file/edit_file/list_directory/delete_file/grep_file/find_files) rooted at workingDir, with a sensible deny-list (.env/.ssh/**/...). `opts.sandbox?: SandboxApi` swaps the internal store for SandboxBackedMemoryStore.
-- `createShellTool(sandbox?: SandboxApi, opts?): ToolSet` — single shell tool (default model name `bash`) wired to a SandboxApi. Defaults to createHostSandbox() if undefined.
+- `createShellTool(sandbox: SandboxApi, opts?): ToolSet` — single shell tool (default model name `bash`) wired to a SandboxApi. The sandbox is required: pass an isolating connector, or `createHostSandbox()` explicitly for host execution (not isolation). Output is returned inside `<tool_output>` markers with injection-marker redaction.
 
 ## Memory Stores
 

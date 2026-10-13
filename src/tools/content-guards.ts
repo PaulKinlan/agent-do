@@ -44,14 +44,22 @@ export const DEFAULT_MAX_GREP_LINE_BYTES = 4 * 1024;
 export const INJECTION_MARKER_REGEX =
   /(?:ignore|disregard)(?:\s+(?:all|the|any|these|those))?\s+(?:prior|previous|above|preceding)\s+instructions|<\/?system>|<<\s*system\s*>>|^---\s*(?:system|instruction|override)/gim;
 
-export interface WrapOptions {
-  /** Tool that produced the content (read_file, memory_read, etc.). */
+export type WrapOptions = WrapOrigin & {
+  /** Tool that produced the content (read_file, memory_read, bash, etc.). */
   tool: string;
-  /** Path the content came from — echoed in the boundary marker attributes. */
-  path: string;
   /** Optional cap override, defaults to {@link DEFAULT_MAX_READ_BYTES}. */
   maxBytes?: number;
-}
+};
+
+/**
+ * Where the wrapped content came from — echoed in the boundary marker
+ * attributes. A file/memory read gives a `path`; a command runner (the
+ * shell tool) gives a `command`. At least one is required, so a marker
+ * always names its origin.
+ */
+export type WrapOrigin =
+  | { path: string; command?: string }
+  | { path?: string; command: string };
 
 // Portable UTF-8 helpers. agent-do runs in browsers as well as Node, so we
 // use the WHATWG TextEncoder / TextDecoder rather than `Buffer`. Both are
@@ -60,6 +68,30 @@ export interface WrapOptions {
 
 const utf8Encoder = /*#__PURE__*/ new TextEncoder();
 const utf8Decoder = /*#__PURE__*/ new TextDecoder('utf-8', { fatal: false });
+
+/**
+ * Wrapper delimiters that must never appear verbatim inside a wrapped body.
+ *
+ * A file or a command can emit a literal `</tool_output>`, which would close
+ * the block early and leave everything after it as top-level text — exactly
+ * the injection the marker exists to prevent. Open and close forms are both
+ * matched.
+ */
+export const BOUNDARY_TAG_REGEX = /<\/?tool_output\b[^>]*>/gi;
+
+/**
+ * HTML-escape boundary tags in `body` so they stay visible to the model (and
+ * to an operator reading the transcript) without acting as delimiters.
+ * Returns the count so callers can report what was altered.
+ */
+function neutraliseBoundaryTags(body: string): { body: string; count: number } {
+  let count = 0;
+  const neutralised = body.replace(BOUNDARY_TAG_REGEX, (tag) => {
+    count++;
+    return tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  });
+  return { body: neutralised, count };
+}
 
 /** Length of a string in UTF-8 bytes. */
 export function utf8ByteLength(s: string): number {
@@ -89,14 +121,23 @@ export interface WrappedContent {
   totalBytes: number;
   /** Count of injection markers we redacted in the included slice. */
   redactedMarkerCount: number;
+  /**
+   * Count of `<tool_output>` boundary tags found in the body and escaped so
+   * content cannot close its own frame. Separate from
+   * {@link WrappedContent.redactedMarkerCount}, which counts injection
+   * phrases.
+   */
+  neutralisedDelimiterCount: number;
 }
 
 /**
- * Produce the model-facing string for a file / memory read.
+ * Produce the model-facing string for a file / memory / tool read.
  *
- * Wraps the content in `<tool_output tool="…" path="…">…</tool_output>`,
- * applies the size cap, and replaces obvious injection markers. Returns
- * enough metadata for the caller to populate `ToolResult.data`.
+ * Wraps the content in `<tool_output tool="…" path="…">…</tool_output>`
+ * (or `command="…"` for command output), applies the size cap, replaces
+ * obvious injection markers, and escapes any `<tool_output>` tag in the body
+ * so content cannot close the frame it was placed in. Returns enough metadata
+ * for the caller to populate `ToolResult.data`.
  */
 export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const cap = opts.maxBytes ?? DEFAULT_MAX_READ_BYTES;
@@ -104,8 +145,11 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const truncated = totalBytes > cap;
   const clipped = truncated ? truncateUtf8ByBytes(body, cap) : body;
 
+  const { body: neutralised, count: neutralisedDelimiterCount } =
+    neutraliseBoundaryTags(clipped);
+
   let redactedMarkerCount = 0;
-  const redacted = clipped.replace(INJECTION_MARKER_REGEX, () => {
+  const redacted = neutralised.replace(INJECTION_MARKER_REGEX, () => {
     redactedMarkerCount++;
     return '[redacted prompt-injection marker]';
   });
@@ -114,8 +158,16 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
     ? `\n... [truncated at ${cap} bytes of ${totalBytes}]`
     : '';
 
+  const attrs = [`tool="${escapeAttr(opts.tool)}"`];
+  if (opts.path !== undefined) {
+    attrs.push(`path="${escapeAttr(opts.path)}"`);
+  }
+  if (opts.command !== undefined) {
+    attrs.push(`command="${escapeAttr(opts.command)}"`);
+  }
+
   const content = [
-    `<tool_output tool="${escapeAttr(opts.tool)}" path="${escapeAttr(opts.path)}">`,
+    `<tool_output ${attrs.join(' ')}>`,
     redacted + trailer,
     `</tool_output>`,
   ].join('\n');
@@ -126,6 +178,7 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
     includedBytes: utf8ByteLength(clipped),
     totalBytes,
     redactedMarkerCount,
+    neutralisedDelimiterCount,
   };
 }
 

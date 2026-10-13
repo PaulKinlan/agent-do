@@ -351,9 +351,9 @@ The agent's private scratchpad, backed by any `MemoryStore`. Pass an `InMemoryMe
 
 **Returns tools:** `memory_read`, `memory_write`, `memory_list`, `memory_delete`, `memory_search`.
 
-### `createShellTool(sandbox?: SandboxApi, opts?: CreateShellToolOptions): ToolSet`
+### `createShellTool(sandbox: SandboxApi, opts?: CreateShellToolOptions): ToolSet`
 
-A single shell-exec tool wired to a `SandboxApi`. Defaults to `createHostSandbox()` when no sandbox is supplied (host shell, **not** isolation). The default host sandbox forwards an allowlisted environment rather than the parent's (`inheritEnv: true` opts out) — see [sandbox.md](sandbox.md#environment-policy-host-connector).
+A single shell-exec tool wired to a `SandboxApi`. The sandbox is required: pass an isolating connector, or `createHostSandbox()` explicitly to run on the host (**not** isolation). Calling it with no sandbox throws rather than silently using the host. Model-visible stdout/stderr is framed in `<tool_output>` markers and passed through the same injection-marker redaction as the file and memory tools. The host sandbox forwards an allowlisted environment rather than the parent's (`inheritEnv: true` opts out) — see [sandbox.md](sandbox.md#environment-policy-host-connector).
 
 **Options:**
 - `name` — override the model-facing tool name (default `bash`)
