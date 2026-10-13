@@ -1,8 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { once } from 'node:events';
 import { afterAll, describe, expect, it } from 'vitest';
 
 /**
@@ -20,8 +21,197 @@ import { afterAll, describe, expect, it } from 'vitest';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOTS: string[] = [];
 
+/**
+ * Fixture teardown has to stop processes as well as delete directories, and it has to do it before the
+ * directory goes away: the path IS the handle. The probe below is bounded on purpose - a fix for leaks
+ * must not become the next leak, so the test never depends on the code under test to end it.
+ */
+describe('fixture teardown', () => {
+  it('kills a process still running out of the fixture root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
+    ROOTS.push(root);
+    const marker = join(root, 'probe');
+    const child = spawn('bash', ['-c', 'while :; do sleep 1; done', marker]);
+    try {
+      await once(child, 'spawn');
+      await new Promise((done) => setTimeout(done, 250));
+      const pids = () => spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim();
+      expect(pids(), 'the probe must be visible to the same match teardown uses').not.toBe('');
+
+      expect(reapFixtureProcesses(root)).toBeGreaterThan(0);
+      expect(pids(), 'teardown must leave nothing matching the fixture root').toBe('');
+      const exited = await Promise.race([
+        once(child, 'exit').then(() => true),
+        new Promise((done) => setTimeout(() => done(false), 2000)),
+      ]);
+      expect(exited, 'the probe itself must be gone, not merely detached').toBe(true);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
+
+  it('reaps a descendant that does not carry the fixture root in its argv', async () => {
+    // agent-do-63t: the pattern match sees processes that MENTION the root, and a child like `sleep 5` does
+    // not - `bash -c 'sleep 5'` would exec into sleep and lose the marker entirely, which is why the probe
+    // below keeps a shell alive and backgrounds the child inside it. The probe is bounded at five seconds
+    // on purpose: if the walk regresses, the test fails and nothing is left running for long.
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
+    ROOTS.push(root);
+    const childPidFile = join(root, 'child.pid');
+    const child = spawn('bash', ['-c', 'sleep 5 & echo $! > "$1"; wait', join(root, 'probe'), childPidFile]);
+    try {
+      await once(child, 'spawn');
+      const deadline = Date.now() + 3000;
+      while (!existsSync(childPidFile) && Date.now() < deadline) sleepSync(50);
+      const grandchild = readFileSync(childPidFile, 'utf8').trim();
+      const alive = () => spawnSync('kill', ['-0', grandchild]).status === 0;
+      expect(grandchild, 'the probe must record its rootless child').toMatch(/^\d+$/);
+      expect(alive(), 'the rootless child must be running before teardown').toBe(true);
+
+      expect(reapFixtureProcesses(root), 'both the matched process and its descendant').toBeGreaterThan(1);
+      const gone = Date.now() + 2000;
+      while (alive() && Date.now() < gone) sleepSync(25);
+      expect(alive(), 'a cmdline match alone would leave this child behind').toBe(false);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
+
+  it('reaps a child that a TERM handler spawns after the snapshot', async () => {
+    // agent-do-51j, filed by rev-58: the process is matched and alive, and it forks only once TERM arrives,
+    // so the child exists after any single snapshot. Its cwd is the fixture root, which is how teardown can
+    // still find it if the parent is already gone by then. Bounded at five seconds like the other probe.
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
+    ROOTS.push(root);
+    const lateChildPidFile = join(root, 'term-child.pid');
+    const child = spawn(
+      'bash',
+      [
+        '-c',
+        'trap \'sleep 5 & echo $! > "$1"\' TERM; while :; do sleep 1; done',
+        join(root, 'probe'),
+        lateChildPidFile,
+      ],
+      { cwd: root },
+    );
+    try {
+      await once(child, 'spawn');
+      await new Promise((done) => setTimeout(done, 300));
+      expect(
+        spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim(),
+        'the probe must be matched before teardown',
+      ).not.toBe('');
+
+      expect(reapFixtureProcesses(root)).toBeGreaterThan(1);
+      expect(existsSync(lateChildPidFile), 'the TERM handler must have run').toBe(true);
+      const late = readFileSync(lateChildPidFile, 'utf8').trim();
+      expect(late, 'the handler must record a pid').toMatch(/^\d+$/);
+      const alive = () => spawnSync('kill', ['-0', late]).status === 0;
+      const gone = Date.now() + 2000;
+      while (alive() && Date.now() < gone) sleepSync(25);
+      expect(alive(), 'a snapshot taken before TERM cannot see this child').toBe(false);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
+});
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Kill anything still running out of a fixture root, while the path is still there to match on.
+ *
+ * WHY this exists: a bound-kill case deliberately starts a gate that will not stop on its own. While the
+ * suite is exercising a revision that does NOT reap (that is the behaviour under test when the case is
+ * written against an older tip), the gate can outlive the assertion, and today's leak showed what that
+ * costs: five orphaned fixture gates, stuck for two hours in the static step, each one invisible to the
+ * reaper because its argv contains no marker-shaped name. Cleanup that only removes the directory is not
+ * cleanup - it leaves the process running against a path that no longer exists, which nothing can then
+ * find. The pattern carries the trailing separator so a sibling fixture (or a longer mkdtemp name) can
+ * never match, and it is applied BEFORE the removal for the same reason it is applied at all.
+ *
+ * Reach is two stages, because a cmdline match cannot see everything: the pattern finds the processes that
+ * mention the root, and then their descendants are walked and taken as well. A child such as `sleep 30`
+ * carries no root in its argv, so matching alone would leave it behind - agent-do-63t. The walk runs before
+ * any signal is sent: a dead parent reparents its children and the link that made them findable is gone,
+ * and `pgrep -P` cannot see a process that has already been reparented. The remaining limit is exactly
+ * that: a process whose root-carrying ancestor died before teardown is already unfindable.
+ *
+ * Two further reaches, from the same lesson that a single snapshot is not a guarantee. Processes whose
+ * WORKING DIRECTORY is inside the fixture are matched too: the suite runs its fixture commands with the
+ * fixture repo as cwd, a child inherits it, and a reparented child is otherwise unfindable - agent-do-51j.
+ * And the grace period re-collects on every pass rather than trusting the first snapshot, because a process
+ * is free to spawn work while it handles the TERM just delivered to it. What stays out of reach is named
+ * rather than assumed away: a TERM handler that also changes directory and carries no root in argv, and
+ * another user's process, whose /proc entry cannot be read at all.
+ */
+function reapFixtureProcesses(root: string): number {
+  const pattern = `${root}/`;
+  const list = (args: string[]) =>
+    spawnSync('pgrep', args, { encoding: 'utf8' })
+      .stdout.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  const alive = (pid: string) => spawnSync('kill', ['-0', pid]).status === 0;
+
+  // A child that inherits the fixture as its working directory is findable even after its parent is gone,
+  // which is the case a walk cannot reach. This runs on EVERY pass, including passes where the argv match is
+  // empty, and that is deliberate rather than an oversight: by the second pass the parent is usually gone,
+  // so an empty argv match is exactly the situation where cwd is the only handle left on a reparented child.
+  // Guarding this on a non-empty argv match would silently reintroduce agent-do-51j. The cost is one /proc
+  // scan only while a fixture has actually leaked something, and another user's process reads as an error
+  // and is skipped.
+  const byWorkingDirectory = () => {
+    if (!existsSync('/proc')) return [];
+    const found: string[] = [];
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const cwd = readlinkSync(`/proc/${entry}/cwd`);
+        if (cwd === root || cwd.startsWith(pattern)) found.push(entry);
+      } catch {
+        // Exited between the listing and the read, or not ours to inspect.
+      }
+    }
+    return found;
+  };
+
+  const targets = new Set<string>();
+  const collect = () => {
+    const queue = [...list(['-f', '--', pattern]), ...byWorkingDirectory()];
+    while (queue.length > 0) {
+      const pid = queue.pop() as string;
+      if (targets.has(pid)) continue;
+      targets.add(pid);
+      queue.push(...list(['-P', pid]));
+    }
+  };
+
+  collect();
+  if (targets.size === 0) return 0;
+  spawnSync('kill', ['-TERM', ...targets]);
+  // A gate wedged behind a foreground child ignores TERM until that child exits - the exact bug this file
+  // pins - so the wait is short and the KILL is what actually ends it. The loop re-collects instead of
+  // trusting one snapshot, because a process may spawn more work while handling the TERM it was just sent,
+  // and that child exists only after any snapshot taken beforehand (agent-do-51j). The early exit still has
+  // to consider descendants and not just pattern matches: a TERM-killed parent leaves the pattern while its
+  // rootless child is running, and returning there would skip the KILL that child needs.
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    sleepSync(50);
+    collect();
+    if ([...targets].every((pid) => !alive(pid))) return targets.size;
+  }
+  collect();
+  spawnSync('kill', ['-KILL', ...targets]);
+  return targets.size;
+}
+
 afterAll(() => {
-  for (const dir of ROOTS) rmSync(dir, { recursive: true, force: true });
+  for (const dir of ROOTS) {
+    reapFixtureProcesses(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
