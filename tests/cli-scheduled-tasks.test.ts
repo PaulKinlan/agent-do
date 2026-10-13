@@ -3,6 +3,13 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from '../src/cli/args.js';
+// Imported statically on purpose: the `run` cases used to `await import()` this
+// module inside the first test case, so that case paid the cold transform +
+// module init for the whole CLI graph. Under fleet CPU contention that alone
+// exceeded vitest's default 5s test timeout and turned unrelated lanes' gates
+// red (agent-do-512). Module evaluation has no side effects that depend on the
+// per-test env stub below, so hoisting is behaviour-preserving.
+import { runScheduledTasksMode } from '../src/cli/scheduled-tasks-cmd.js';
 
 // ── args parsing for the new subcommand ─────────────────────────────────
 
@@ -54,7 +61,7 @@ describe('parseArgs — scheduled-tasks subcommand', () => {
 
 // ── runScheduledTasksMode — the run path ────────────────────────────────
 
-describe('runScheduledTasksMode — run', () => {
+describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
   let dir: string;
   let tasksFile: string;
   let savedEnv: string | undefined;
@@ -72,7 +79,6 @@ describe('runScheduledTasksMode — run', () => {
   });
 
   it('throws clearly when the tasks file is missing', async () => {
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'run', 'x', '--tasks', tasksFile]);
     await expect(runScheduledTasksMode(args)).rejects.toThrow(/No scheduled-tasks file/);
   });
@@ -81,7 +87,6 @@ describe('runScheduledTasksMode — run', () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'known', cron: '* * * * *', payload: 'hi' },
     ]));
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'run', 'missing', '--tasks', tasksFile, '--memory', dir]);
     await expect(runScheduledTasksMode(args)).rejects.toThrow(/No scheduled task "missing"/);
   });
@@ -90,7 +95,6 @@ describe('runScheduledTasksMode — run', () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'bad', cron: '* * *', payload: 'hi' }, // 3 fields
     ]));
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'list', '--tasks', tasksFile]);
     await expect(runScheduledTasksMode(args)).rejects.toThrow(/expected 5 fields/);
   });
@@ -100,7 +104,6 @@ describe('runScheduledTasksMode — run', () => {
       { id: 'sweep', cron: '*/15 * * * *', payload: 'triage', description: 'inbox' },
       { id: 'daily', cron: '0 2 * * *', payload: 'prep' },
     ]));
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'list', '--tasks', tasksFile]);
     const out = captureStdout(() => runScheduledTasksMode(args));
     const text = await out;
@@ -114,7 +117,6 @@ describe('runScheduledTasksMode — run', () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },
     ]));
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'install', '--tasks', tasksFile, '--memory', dir]);
     const text = await captureStdout(() => runScheduledTasksMode(args));
     expect(text).toMatch(/\/15 \* \* \* \* .* scheduled-tasks run sweep/);
@@ -130,7 +132,6 @@ describe('runScheduledTasksMode — run', () => {
     await writeFile(join(dir, 'scheduler-status.json'), JSON.stringify({
       sweep: { runCount: 7, lastRunAt: '2026-06-19T09:30:00.000Z', lastOutcome: 'ok' },
     }));
-    const { runScheduledTasksMode } = await import('../src/cli/scheduled-tasks-cmd.js');
     const args = parseArgs(['scheduled-tasks', 'status', '--tasks', tasksFile, '--memory', dir]);
     const text = await captureStdout(() => runScheduledTasksMode(args));
     expect(text).toContain('sweep');
