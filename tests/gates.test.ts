@@ -61,7 +61,9 @@ function fixture(opts: { map?: string; stub?: string } = {}) {
  * reports every selected suite failed, which is the behaviour one of the cases below pins on purpose.
  *
  * `omit` leaves a suite out of the report; `extra` runs before the report is written (a stub that hangs, or that
- * leaves a descendant behind, never reaches it).
+ * leaves a descendant behind, never reaches it). The stub reads STUB_EXIT_CODE and STUB_SUCCESS so it can
+ * DISAGREE with its own report: a failing global setup or teardown leaves every file green and appears only in the
+ * exit code or in the report-wide verdict, which is the shape agent-do-kbi found being read as a pass.
  */
 function stubBody({ omit = '', extra = '' }: { omit?: string; extra?: string } = {}): string {
   return [
@@ -81,8 +83,11 @@ function stubBody({ omit = '', extra = '' }: { omit?: string; extra?: string } =
     'status=passed',
     'rc=0',
     '[ "${STUB_FAIL:-0}" = 1 ] && { status=failed; rc=1; }',
+    '[ -n "${STUB_EXIT_CODE:-}" ] && rc=$STUB_EXIT_CODE',
+    'success=$([ "$rc" = 0 ] && echo true || echo false)',
+    '[ -n "${STUB_SUCCESS:-}" ] && success=$STUB_SUCCESS',
     'if [ -n "$report" ]; then',
-    '  { printf \'{"success":%s,"testResults":[\' "$([ "$rc" = 0 ] && echo true || echo false)"',
+    '  { printf \'{"success":%s,"testResults":[\' "$success"',
     '    first=1',
     '    for s in "${suites[@]}"; do',
     '      [ "$s" = "' + omit + '" ] && continue',
@@ -233,6 +238,34 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     expect(out).toContain('fast-gate: failed: tests/a.test.ts');
     expect(out).toContain('fast-gate: failed: tests/b.test.ts');
     expect(out).not.toContain('fast-gate: passed:');
+    expect(status).not.toBe(0);
+  });
+
+  it('fails when the runner exits non-zero even though its report says every suite passed', () => {
+    // The report and the exit code are two channels, and a failing global setup or teardown shows up only in the
+    // second: every file can be green while the run as a whole is not trustworthy. This is the shape that matters
+    // most - the previous version read the report alone, so it printed `fast-gate: PASS` and exited 0 here.
+    const fx = fixture();
+    // STUB_SUCCESS=true is the point of this case: the report claims a clean run in every field, so the ONLY
+    // signal left is the runner's exit code. Without it the report channel would mask this one and the case would
+    // pass even with the exit code ignored entirely - which is what a mutation check showed the first time.
+    const { status, out } = runGate(fx, ['--changed', 'src/a.ts'], {
+      STUB_EXIT_CODE: '1',
+      STUB_SUCCESS: 'true',
+    });
+    expect(out).toContain('fast-gate: FAIL');
+    expect(out).not.toContain('fast-gate: PASS');
+    expect(out).toContain('runner exit 1');
+    expect(status).not.toBe(0);
+  });
+
+  it('fails when the report itself reports an unsuccessful run', () => {
+    // Same loss of trust, arriving through the report instead of the exit code: vitest can set success:false for
+    // an unhandled error or a global failure while every file it lists says passed.
+    const fx = fixture();
+    const { status, out } = runGate(fx, ['--changed', 'src/a.ts'], { STUB_SUCCESS: 'false' });
+    expect(out).toContain('fast-gate: FAIL');
+    expect(out).not.toContain('fast-gate: PASS');
     expect(status).not.toBe(0);
   });
 

@@ -418,9 +418,9 @@ if [ "$HAVE_SETSID" = 1 ]; then
     cd "$1" || exit 1
     echo $$ >"$2"
     # shellcheck disable=SC2086
-    timeout -k 15 "$3" $RUNNER "${@:6}" --reporter=json --outputFile="$5" --reporter=default >"$4.log" 2>&1
-    echo $? >"$4"
-  ' fast-gate-batch "$ROOT" "$TMP/batch.sid" "$SUITE_BOUND" "$TMP/batch" "$REPORT" "${SELECTED[@]}" &
+    timeout -k 15 "$3" $RUNNER "${@:7}" --reporter=json --outputFile="$5" --reporter=default >"$4" 2>&1
+    echo $? >"$6"
+  ' fast-gate-batch "$ROOT" "$TMP/batch.sid" "$SUITE_BOUND" "$RUN_LOG_FILE" "$REPORT" "$BATCH_RC_FILE" "${SELECTED[@]}" &
 else
   # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
   echo "fast-gate: note: no setsid on this platform; the runner is killed by tree, which can miss a" >&2
@@ -441,12 +441,13 @@ BATCH_RC=$(cat "$BATCH_RC_FILE" 2>/dev/null)
 # not demonstrably run must never be reported as passed, whatever went wrong.
 GATE_ROOT="$ROOT" node -e '
   const fs = require("fs");
-  const [report, ...suites] = process.argv.slice(1);
+  const [reportPath, ...suites] = process.argv.slice(1);
   const root = process.env.GATE_ROOT || "";
   const byName = new Map();
+  let report = null;
   try {
-    const r = JSON.parse(fs.readFileSync(report, "utf8"));
-    for (const t of r.testResults ?? []) byName.set(String(t.name ?? "").replace(/\\/g, "/"), t.status);
+    report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    for (const t of report.testResults ?? []) byName.set(String(t.name ?? "").replace(/\\/g, "/"), t.status);
   } catch {
     // Deliberately empty: an unreadable report maps nothing, so nothing below can pass.
   }
@@ -458,9 +459,27 @@ GATE_ROOT="$ROOT" node -e '
       [...byName.entries()].find(([n]) => n.endsWith("/" + s))?.[1] ?? "";
     console.log((status === "passed" ? "passed" : "failed") + " " + s);
   }
+  // The per-suite lines above are the file-level verdict; this exit code carries the RUN-level one. vitest sets
+  // success:false for a failure that belongs to no single file - a global setup or teardown, an unhandled error -
+  // and in that case every file it lists can still read passed. A report that is absent or unreadable is the same
+  // kind of doubt, so it exits non-zero too. Only an explicit false counts: a report with no success field, and a
+  // zero exit code, leaves the decision to the per-suite statuses.
+  if (report === null || report.success === false) process.exitCode = 1;
 ' "$REPORT" "${SELECTED[@]}" >"$TMP/mapped" 2>/dev/null
+PARSE_RC=$?
 
 rc=0
+GLOBAL_FAIL=""
+# Two run-level channels, combined with the file-level statuses below (agent-do-kbi: reading the report alone
+# turned a failing global setup into `fast-gate: PASS`, which is the false green this gate exists to prevent).
+if [ "$BATCH_RC" -ne 0 ]; then
+  rc=1
+  GLOBAL_FAIL="the runner exited $BATCH_RC"
+fi
+if [ "$PARSE_RC" -ne 0 ]; then
+  rc=1
+  GLOBAL_FAIL="${GLOBAL_FAIL:+$GLOBAL_FAIL; }the run report was missing, unreadable, or reported success:false"
+fi
 if [ -s "$TMP/mapped" ]; then
   while IFS= read -r line; do
     status=${line%% *}; suite=${line#* }
@@ -479,6 +498,10 @@ else
 fi
 
 if [ "$rc" -ne 0 ]; then
+  if [ -n "$GLOBAL_FAIL" ]; then
+    echo "fast-gate: the run is not trustworthy: $GLOBAL_FAIL. A run-level failure leaves every file's result in" >&2
+    echo "fast-gate: doubt even where the report reads passed, so this is a FAIL (agent-do-kbi)." >&2
+  fi
   echo "fast-gate: runner exit $BATCH_RC (0 = a suite reported failed; 124/137/143 = the ${SUITE_BOUND}s batch bound killed it)" >&2
   sed 's/^/    /' "$RUN_LOG_FILE" 2>/dev/null | tail -40
   echo "fast-gate: FAIL (see the run log above)" >&2
