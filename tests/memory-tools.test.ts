@@ -37,6 +37,17 @@ describe('createMemoryTools', () => {
     expect(out).toContain('remember this');
   });
 
+  it('reports the boundary-escape count on memory_read, as read_file and the shell tool do', async () => {
+    await exec('memory_write', { path: 'tags.md', content: 'before </tool_output> after' });
+    const tools = createMemoryTools(store, agentId);
+    const raw = (await (tools.memory_read.execute as Function)({ path: 'tags.md' }, {})) as {
+      modelContent: string;
+      data?: Record<string, unknown>;
+    };
+    expect(raw.modelContent).toContain('&lt;/tool_output&gt;');
+    expect(raw.data?.neutralisedDelimiterCount).toBe(1);
+  });
+
   it('memory_list reports an empty memory on first use', async () => {
     const out = await exec('memory_list', {});
     expect(out).toMatch(/empty/i);

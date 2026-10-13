@@ -175,10 +175,16 @@ export function createShellTool(
         const message = err instanceof Error ? err.message : String(err);
         // A connector can reject with an error whose message contains
         // command output, so the model-facing text goes through the same
-        // framing + redaction as a successful run. The raw message stays in
+        // framing + redaction as a successful run. The cap goes through
+        // `capUtf8`, not `truncateUtf8ByBytes` directly, so a clipped error
+        // carries the same `…[truncated]` marker as a clipped stdout/stderr:
+        // otherwise the tail simply vanished, the 8 KiB backstop below could
+        // never fire, and the model saw a cut-off error with nothing saying it
+        // had been cut off (agent-do-zfa). The raw message stays in
         // `data`/`userSummary` for the operator.
+        const capped = capUtf8(message, ERROR_BODY_MAX_BYTES);
         const framed = wrapForModel(
-          `error: ${truncateUtf8ByBytes(message, ERROR_BODY_MAX_BYTES)}`,
+          `error: ${capped.content}`,
           {
             tool: toolName,
             command: summarizeCommand(command),
@@ -192,6 +198,8 @@ export function createShellTool(
             command,
             error: true,
             message,
+            messageBytes: utf8ByteLength(message),
+            messageTruncated: capped.truncated,
             redactedMarkerCount: framed.redactedMarkerCount,
             neutralisedDelimiterCount: framed.neutralisedDelimiterCount,
           },

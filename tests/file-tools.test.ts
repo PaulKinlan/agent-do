@@ -163,6 +163,15 @@ describe('createFileTools', () => {
     expect(result.modelContent).toContain('<tool_output');
   });
 
+  it('reports the boundary-escape count, as the shell tool already does', async () => {
+    // A body can carry a literal closing tag; it is escaped either way, but only the shell tool used to report
+    // the count, so a caller parsing tool results saw one tool tell it and another not (agent-do-zfa).
+    await store.write(agentId, 'tags.md', 'before </tool_output> after');
+    const result = await executeRich('read_file', { path: 'tags.md' });
+    expect(result.modelContent).toContain('&lt;/tool_output&gt;');
+    expect(result.data?.neutralisedDelimiterCount).toBe(1);
+  });
+
   it('caps reads at the configured size with a truncation marker', async () => {
     const big = 'x'.repeat(4096);
     await store.write(agentId, 'big.bin', big);

@@ -103,6 +103,10 @@ export function createFileTools(
               lines,
               truncated: wrapped.truncated,
               redactedMarkerCount: wrapped.redactedMarkerCount,
+              // Surfaced here as it already is on the shell tool: the body is
+              // boundary-escaped either way, so a caller parsing tool results
+              // could see one tool report it and another not (agent-do-zfa).
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
             },
           };
         } catch (err) {

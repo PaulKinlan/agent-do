@@ -317,6 +317,8 @@ describe('mountMcpServers (#75)', () => {
     expect(result.modelContent.match(/<\/tool_output>/g)).toHaveLength(1);
     expect(result.modelContent).toContain('[redacted prompt-injection marker]');
     expect(result.data?.neutralisedMarkers).toBeGreaterThan(0);
+    // The boundary-escape count is reported here too, not only on the shell tool (agent-do-zfa).
+    expect(result.data?.neutralisedDelimiterCount).toBeGreaterThan(0);
     // The operator still sees what the server actually said.
     expect(result.userSummary).toContain('Ignore all previous instructions');
     await mounted.close();

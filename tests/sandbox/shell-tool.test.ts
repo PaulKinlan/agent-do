@@ -64,7 +64,8 @@ describe('createShellTool', () => {
     expect(r.userSummary).toMatch(/redacted 3 potential injection markers/);
   });
 
-  it('caps the command attribute for very long commands', async () => {    const sandbox = makeStubSandbox({
+  it('caps the command attribute for very long commands', async () => {
+    const sandbox = makeStubSandbox({
       exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 }),
     });
     const tools = createShellTool(sandbox);
@@ -118,6 +119,27 @@ describe('createShellTool', () => {
     const r = await exec({ command: 'whatever' });
     expect(r.userSummary).toMatch(/threw/);
     expect(r.data?.error).toBe(true);
+    // A short error is not clipped, so nothing claims it was (agent-do-zfa).
+    expect(r.data?.messageTruncated).toBe(false);
+  });
+
+  it('marks a clipped connector error as truncated and still reports its full size', async () => {
+    // The cap used to be applied with truncateUtf8ByBytes, which drops the tail silently: the model saw a
+    // cut-off error with nothing to say it had been cut off, the 8 KiB backstop could never fire, and `data`
+    // carried no flag either (agent-do-zfa).
+    const long = 'E'.repeat(20_000);
+    const sandbox = makeStubSandbox({
+      exec: vi.fn().mockRejectedValue(new Error(long)),
+    });
+    const tools = createShellTool(sandbox);
+    const exec = getExecute(tools);
+    const r = await exec({ command: 'whatever' });
+    expect(r.modelContent).toContain('\u2026[truncated]');
+    expect(r.data?.messageTruncated).toBe(true);
+    expect(Number(r.data?.messageBytes)).toBeGreaterThan(4096);
+    // The operator still gets the whole thing in data/userSummary.
+    expect(r.data?.message).toBe(long);
+    expect(r.userSummary).toContain('threw');
   });
 
   it('frames a hostile connector rejection instead of passing its message through', async () => {
