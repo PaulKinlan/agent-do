@@ -34,7 +34,7 @@ number above is an upper bound for an 8-vCPU VM, not a lower one.
 | tier | what it is | where it lives | who pays |
 |---|---|---|---|
 | **static** (`STATIC_CMD` = `npm run build`) | `tsc` over `src/`, `tests/`, `evals/`, emitting `dist/` | the same command in **both** gates (R8: never twice) | every gate |
-| **unit** (`FAST_GATE_RUNNER` = `npx vitest run`, one file per process) | vitest suites; a test file is the unit of parallelism | `tests/**/*.test.ts` | the fast gate selects the affected ones; the full gate runs all 46 |
+| **unit** (`FAST_GATE_RUNNER` = `npx vitest run`, one invocation, test files parallelised inside it) | vitest suites; a test file is the unit of parallelism | `tests/**/*.test.ts` | the fast gate selects the affected ones; the full gate runs all 46 |
 | **eval** (`npm run eval`, inside `FULL_TIER_CMD`) | the credential-free mock tier of `evals/` | `evals/` | the full gate only (it is one command, so affected-only selection cannot reach inside it) |
 
 Two consequences worth stating out loud:
@@ -126,7 +126,7 @@ R6/R7 (smaller central surfaces) if the widest rows keep growing.
 
 The full gate's own split (41.5 s): static 13.8 s, vitest 21.0 s (46 files / 870 tests), evals 1.4 s. The
 bounds in `tools/check.conf` (600 s / 180 s) are kill windows ~11× and ~3× the measurements: a bound that
-fires means the gate wedged, not that it was slow. The fast gate's *per-suite* bound (`SUITE_BOUND`, 120 s)
+fires means the gate wedged, not that it was slow. The fast gate's *batch* bound (`SUITE_BOUND`, 120 s; it bounds the single runner invocation, so a wedge is reported against every suite it selected rather than one)
 is deliberately below the outer 180 s window: it has to be the one that fires, so a hung suite is reported as
 `fast-gate: failed: <suite>` with its log tail, instead of the outer kill recording the whole gate as
 `unknown` and losing which suite wedged. `tests/gates.test.ts` asserts the relationship against

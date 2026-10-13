@@ -25,10 +25,11 @@ afterAll(() => {
 });
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
-function fixture(opts: { map?: string } = {}) {
+function fixture(opts: { map?: string; stub?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
   ROOTS.push(root);
   const repo = join(root, 'repo');
+  // Stubs are written below, after the repo exists (they are launched with it as their cwd).
   mkdirSync(join(repo, 'src'), { recursive: true });
   mkdirSync(join(repo, 'tests'), { recursive: true });
   mkdirSync(join(repo, 'docs'), { recursive: true });
@@ -45,15 +46,56 @@ function fixture(opts: { map?: string } = {}) {
   writeFileSync(join(repo, 'README.md'), '# fixture\n');
   writeFileSync(join(repo, 'docs', 'guide.md'), '# fixture\n');
 
-  // Stub runner: record every suite it was asked for, then exit 0 — or 1 when STUB_FAIL=1.
+  // Stub runner: records every suite it was asked for and writes the report the gate expects, or claims failure
+  // when STUB_FAIL=1. See stubBody() for why it must write a report at all.
   const log = join(root, 'run.log');
   const stub = join(root, 'stub-runner');
-  writeFileSync(
-    stub,
-    `#!/usr/bin/env bash\necho "$1" >> "$RUN_LOG"\n[ "\${STUB_FAIL:-0}" = 1 ] && exit 1\nexit 0\n`,
-    { mode: 0o755 },
-  );
+  writeFileSync(stub, opts.stub ?? stubBody(), { mode: 0o755 });
   return { root, repo, log, stub };
+}
+
+/**
+ * The stub runner's body. The gate invokes the runner ONCE with every selected suite plus
+ * `--reporter=json --outputFile=<path>`, so a stub must record the suites (the file arguments, never the flags)
+ * and write the report the gate maps back onto them. A stub that writes no report is not "fine": the gate then
+ * reports every selected suite failed, which is the behaviour one of the cases below pins on purpose.
+ *
+ * `omit` leaves a suite out of the report; `extra` runs before the report is written (a stub that hangs, or that
+ * leaves a descendant behind, never reaches it).
+ */
+function stubBody({ omit = '', extra = '' }: { omit?: string; extra?: string } = {}): string {
+  return [
+    '#!/usr/bin/env bash',
+    'report=""',
+    'suites=()',
+    'while [ $# -gt 0 ]; do',
+    '  case "$1" in',
+    '    --outputFile=*) report="${1#--outputFile=}" ;;',
+    '    --*) ;;',
+    '    *) suites+=("$1") ;;',
+    '  esac',
+    '  shift',
+    'done',
+    'printf \'%s\\n\' "${suites[@]}" >> "$RUN_LOG"',
+    extra,
+    'status=passed',
+    'rc=0',
+    '[ "${STUB_FAIL:-0}" = 1 ] && { status=failed; rc=1; }',
+    'if [ -n "$report" ]; then',
+    '  { printf \'{"success":%s,"testResults":[\' "$([ "$rc" = 0 ] && echo true || echo false)"',
+    '    first=1',
+    '    for s in "${suites[@]}"; do',
+    '      [ "$s" = "' + omit + '" ] && continue',
+    '      [ "$first" = 1 ] || printf \',\'',
+    '      first=0',
+    '      printf \'{"name":"%s/%s","status":"%s","assertionResults":[{"status":"%s"}]}\' "$PWD" "$s" "$status" "$status"',
+    '    done',
+    '    printf \']}\'',
+    '  } >"$report"',
+    'fi',
+    'exit $rc',
+    '',
+  ].join('\n');
 }
 
 type Run = { status: number | null; out: string };
@@ -151,6 +193,46 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     const { status, out } = runGate(fx, ['--changed', 'tests/a.test.ts'], { STUB_FAIL: '1' });
     expect(out).toContain('fast-gate: failed: tests/a.test.ts');
     expect(out).not.toContain('fast-gate: passed: tests/a.test.ts');
+    expect(status).not.toBe(0);
+  });
+
+  it('never reports a suite as passed when the runner report does not mention it', () => {
+    // The direction that has to stay pessimistic (fleet-1n0z). A report that covers only part of the selection
+    // is exactly what a crashed or truncated run looks like, and a suite the report never named was not
+    // demonstrated to have run, so it cannot be reported passed.
+    const fx = fixture({ stub: stubBody({ omit: 'tests/b.test.ts' }) });
+    const { status, out } = runGate(fx, ['--changed', 'src/a.ts']);
+    expect(out).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(out).toContain('fast-gate: failed: tests/b.test.ts');
+    expect(out).not.toContain('fast-gate: passed: tests/b.test.ts');
+    expect(status).not.toBe(0);
+  });
+
+  it('reports every selected suite failed when the runner produces no report at all', () => {
+    // No report, no node, an unreadable file, a batch killed before it wrote one: in every case nothing is
+    // proven, so nothing is green.
+    const fx = fixture({ stub: '#!/usr/bin/env bash\nexit 0\n' });
+    const { status, out } = runGate(fx, ['--changed', 'src/a.ts']);
+    expect(out).toContain('fast-gate: failed: tests/a.test.ts');
+    expect(out).toContain('fast-gate: failed: tests/b.test.ts');
+    expect(out).not.toContain('fast-gate: passed:');
+    expect(status).not.toBe(0);
+  });
+
+  it('reports every selected suite failed when the parse step produces nothing at all', () => {
+    // The last line of defence. node parses the report; if that step yields no mapping - node missing or broken,
+    // or a report nothing will read - the fallback reports every selected suite failed. A fallback that reported
+    // passed would turn "the thing that reads the verdict is broken" into a green for every lane at once, so this
+    // arm needs its own case: the two cases above never reach it, because the parser itself reports failed for a
+    // suite its report does not name.
+    const fx = fixture();
+    const bin = join(fx.root, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'node'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+    const { status, out } = runGate(fx, ['--changed', 'src/a.ts'], { PATH: `${bin}:${process.env.PATH ?? ''}` });
+    expect(out).toContain('fast-gate: failed: tests/a.test.ts');
+    expect(out).toContain('fast-gate: failed: tests/b.test.ts');
+    expect(out).not.toContain('fast-gate: passed:');
     expect(status).not.toBe(0);
   });
 
@@ -287,13 +369,14 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', () => {
     // replaces the command line and would drop the marker, making the assertion below match nothing at all.
     writeFileSync(
       stub,
-      `#!/usr/bin/env bash
-echo "$1" >> "$RUN_LOG"
-echo "$$" >> "$PID_FILE"
-bash -c 'while :; do sleep 5; done' "$MARKER" &
-echo "$!" >> "$PID_FILE"
-wait
-`,
+      stubBody({
+        extra: [
+          'echo "$$" >> "$PID_FILE"',
+          'bash -c \'while :; do sleep 5; done\' "$MARKER" &',
+          'echo "$!" >> "$PID_FILE"',
+          'wait',
+        ].join('\n'),
+      }),
       { mode: 0o755 },
     );
 
@@ -364,12 +447,10 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', () => {
     const stub = join(fx.root, 'stub-leaky');
     writeFileSync(
       stub,
-      `#!/usr/bin/env bash
-echo "$1" >> "$RUN_LOG"
-# Not a single simple command: bash -c with one command would exec and drop the marker.
-bash -c 'while :; do sleep 5; done' "$MARKER" &
-exit 0
-`,
+      stubBody({
+        // Not a single simple command: bash -c with one command would exec and drop the marker.
+        extra: 'bash -c \'while :; do sleep 5; done\' "$MARKER" &',
+      }),
       { mode: 0o755 },
     );
 
@@ -425,11 +506,9 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', (
     const stub = join(fx.root, 'stub-leaky-nofork');
     writeFileSync(
       stub,
-      `#!/usr/bin/env bash
-echo "$1" >> "$RUN_LOG"
-bash -c 'while :; do sleep 5; done' "$MARKER" &
-exit 0
-`,
+      stubBody({
+        extra: 'bash -c \'while :; do sleep 5; done\' "$MARKER" &',
+      }),
       { mode: 0o755 },
     );
 
@@ -482,12 +561,10 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', ()
     const stub = join(fx.root, 'stub-stubborn');
     writeFileSync(
       stub,
-      `#!/usr/bin/env bash
-echo "$1" >> "$RUN_LOG"
-# Ignores TERM, so only the KILL pass ends it — the case where teardown takes the longest.
-bash -c 'trap "" TERM; while :; do sleep 5; done' "$MARKER" &
-exit 0
-`,
+      stubBody({
+        // Ignores TERM, so only the KILL pass ends it — the case where teardown takes the longest.
+        extra: 'bash -c \'trap "" TERM; while :; do sleep 5; done\' "$MARKER" &',
+      }),
       { mode: 0o755 },
     );
 

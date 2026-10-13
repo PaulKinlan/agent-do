@@ -6,9 +6,11 @@
 #   * R2: the fast gate is the implementer's gate and must be a STRICT SUBSET of the full gate. Here that is
 #     exactly true: fast = STATIC_CMD + the affected suites; full = STATIC_CMD + every suite (+ the eval
 #     tier). Nothing runs in the fast tier that the full tier does not run.
-#   * R5: selection is affected-only and "the map fails loudly on an unmapped file"; independent suites run
-#     in PARALLEL PROCESSES, because a test file is the unit of parallelism. A run that imports every test
-#     into one process pays every test of wall time.
+#   * R5: selection is affected-only and "the map fails loudly on an unmapped file"; the affected suites run in
+#     ONE runner invocation, because a test file is still the unit of parallelism (vitest parallelises files
+#     inside the process) while process START-UP is per invocation. Starting one process per suite paid that
+#     start-up 37 times for a hub-module change (agent-do-00f, measured: 54 s to run 37 of 50 suites, slower
+#     than the full gate, which starts one process for all of them).
 #   * R8: no step runs twice, and the static check is the same command in both tiers.
 #   * R14: a repo whose fast gate has unmapped changed files is guessing.
 #   * fleet-1n0z / roles/lessons.md: an affected-only gate is a false-green generator with two failure modes.
@@ -20,8 +22,11 @@
 # Output contract — these exact lines are parsed by ~/fleet/remote/check-coverage.py, which is what puts
 # `suites`/`unmapped`/`omitted` into the cached ~/.fleet/checks/<tree>.fast.json record a reviewer reads:
 #   fast-gate: running: <suite>
-#   fast-gate: passed: <suite>            (positive marker: this suite really executed)
-#   fast-gate: failed: <suite>
+#   fast-gate: passed: <suite>            (positive marker: this suite really executed - the runner's report
+#                                          named this file and its status was passed)
+#   fast-gate: failed: <suite>            (the suite failed, was ABSENT from the runner's report, or the batch
+#                                          produced no report at all. A suite the report does not mention was
+#                                          not demonstrated to run, so it is not reported passed.)
 #   fast-gate: unmapped: <path>           (the fail-loud case, and the process exits 1)
 #   fast-gate: unknown: <reason>          (a step before the suites failed, or the outer bound killed this
 #                                          script before a verdict: nothing was measured either way)
@@ -87,8 +92,9 @@ _ENV_STATIC=${STATIC_CMD-}
 FAST_GATE_RUNNER=${FAST_GATE_RUNNER:-npx vitest run}
 STATIC_CMD=${STATIC_CMD:-true}
 JOBS=${FAST_GATE_JOBS:-4}
-# Per-suite kill window. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf, 180 s):
-# the per-suite bound exists so that a hung suite is reported as `fast-gate: failed: <suite>` together with
+# Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
+# 180 s): the batch bound exists so that a wedged run is reported as `fast-gate: failed: <suite>` - for every
+# selected suite, since a batch that never produced a report proves nothing about any of them - together with
 # its log tail. If the outer window fires first it is reported as `unknown` in the cached record instead —
 # the same value in both places made that a race, not a decision. 120 s + the 15 s SIGKILL grace the runner
 # is given below + the static step (~14 s on a 2-vCPU VM) fits inside 180 s with room to spare.
@@ -384,7 +390,7 @@ if [ "$STATIC_RC" -ne 0 ]; then
   exit 1
 fi
 
-# --- run the suites, one process per suite, bounded parallelism ----------------------------------------
+# --- run the suites: ONE invocation, its per-file report mapped back onto the suites we asked for ---------
 
 MISSING=()
 for s in "${SELECTED[@]}"; do [ -f "$ROOT/$s" ] || MISSING+=("$s"); done
@@ -396,47 +402,88 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
 fi
 
 printf 'fast-gate: running: %s\n' "${SELECTED[@]}"
-n=0
-for s in "${SELECTED[@]}"; do
-  key=$(printf '%s' "$s" | tr '/.' '__')
-  if [ "$HAVE_SETSID" = 1 ]; then
-    # Own session per suite (see reap): `setsid` execs in place, so `$!` and the pid the inner shell records are
-    # the session id. RUNNER goes through the environment because it may carry arguments (`npx vitest run`),
-    # which must keep splitting.
-    RUNNER=$FAST_GATE_RUNNER setsid bash -c '
-      cd "$1" || exit 1
-      echo $$ >"$6"
-      # shellcheck disable=SC2086
-      timeout -k 15 "$2" $RUNNER "$3" >"$4" 2>&1
-      echo $? >"$5"
-    ' fast-gate-suite "$ROOT" "$SUITE_BOUND" "$s" "$TMP/$key.log" "$TMP/$key.rc" "$TMP/$key.sid" &
-  else
-    # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
-    echo "fast-gate: note: no setsid on this platform; suite processes are killed by tree, which can miss a" >&2
-    echo "fast-gate: note: runner's reparented orphans after the suite has reported." >&2
-    ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
-  fi
-  CHILD_PIDS+=("$!")
-  n=$((n + 1))
-  if [ "$n" -ge "$JOBS" ]; then wait -n; n=$((n - 1)); fi
-done
+
+# The report the runner writes, the log it writes alongside it, and the file its exit code lands in. The log
+# matters as much as the report: it is the tail printed on failure, and --reporter=default is what keeps it
+# human-readable rather than a wall of JSON.
+REPORT="$TMP/results.json"
+RUN_LOG_FILE="$TMP/batch.log"
+BATCH_RC_FILE="$TMP/batch.rc"
+
+if [ "$HAVE_SETSID" = 1 ]; then
+  # Own session for the batch (see reap): `setsid` execs in place, so `$!` and the pid the inner shell records
+  # are the session id. RUNNER goes through the environment because it may carry arguments (`npx vitest run`),
+  # which must keep splitting. Suites are passed last so the fixed paths above can be named positionally.
+  RUNNER=$FAST_GATE_RUNNER setsid bash -c '
+    cd "$1" || exit 1
+    echo $$ >"$2"
+    # shellcheck disable=SC2086
+    timeout -k 15 "$3" $RUNNER "${@:6}" --reporter=json --outputFile="$5" --reporter=default >"$4.log" 2>&1
+    echo $? >"$4"
+  ' fast-gate-batch "$ROOT" "$TMP/batch.sid" "$SUITE_BOUND" "$TMP/batch" "$REPORT" "${SELECTED[@]}" &
+else
+  # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
+  echo "fast-gate: note: no setsid on this platform; the runner is killed by tree, which can miss a" >&2
+  echo "fast-gate: note: reparented orphan after the batch has reported." >&2
+  ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "${SELECTED[@]}" \
+      --reporter=json --outputFile="$REPORT" --reporter=default >"$RUN_LOG_FILE" 2>&1; echo $? >"$BATCH_RC_FILE" ) &
+fi
+CHILD_PIDS+=("$!")
 wait
 
+BATCH_RC=$(cat "$BATCH_RC_FILE" 2>/dev/null)
+[ -n "$BATCH_RC" ] || BATCH_RC=124   # no exit code recorded at all: killed, or never started. Never a pass.
+
+# Map the per-file report back onto the suites we asked for, printing "<status> <suite>" per suite. node is used
+# rather than jq because this is a node repo and jq is not guaranteed to exist; if this produces nothing - no
+# node, no report, a report that will not parse, a batch killed before it wrote one - then NOTHING is mapped and
+# every selected suite is reported failed below. That direction is the whole point (fleet-1n0z): a suite that did
+# not demonstrably run must never be reported as passed, whatever went wrong.
+GATE_ROOT="$ROOT" node -e '
+  const fs = require("fs");
+  const [report, ...suites] = process.argv.slice(1);
+  const root = process.env.GATE_ROOT || "";
+  const byName = new Map();
+  try {
+    const r = JSON.parse(fs.readFileSync(report, "utf8"));
+    for (const t of r.testResults ?? []) byName.set(String(t.name ?? "").replace(/\\/g, "/"), t.status);
+  } catch {
+    // Deliberately empty: an unreadable report maps nothing, so nothing below can pass.
+  }
+  for (const s of suites) {
+    // vitest reports absolute paths; match exactly first, then by suffix, because the runner root may be a
+    // resolved symlink of ours and a path that merely ENDS in the suite name is still that suite in this repo.
+    const status =
+      byName.get(root + "/" + s) ?? byName.get(s) ??
+      [...byName.entries()].find(([n]) => n.endsWith("/" + s))?.[1] ?? "";
+    console.log((status === "passed" ? "passed" : "failed") + " " + s);
+  }
+' "$REPORT" "${SELECTED[@]}" >"$TMP/mapped" 2>/dev/null
+
 rc=0
-for s in "${SELECTED[@]}"; do
-  key=$(printf '%s' "$s" | tr '/.' '__')
-  if [ "$(cat "$TMP/$key.rc" 2>/dev/null)" = 0 ]; then
-    echo "fast-gate: passed: $s"
-  else
-    echo "fast-gate: failed: $s"
-    sed 's/^/    /' "$TMP/$key.log" 2>/dev/null | tail -40
-    rc=1
-  fi
-done
-if [ "$rc" -eq 0 ]; then
-  echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))"
+if [ -s "$TMP/mapped" ]; then
+  while IFS= read -r line; do
+    status=${line%% *}; suite=${line#* }
+    [ -n "$suite" ] || continue
+    if [ "$status" = passed ]; then
+      echo "fast-gate: passed: $suite"
+    else
+      echo "fast-gate: failed: $suite"
+      rc=1
+    fi
+  done <"$TMP/mapped"
 else
-  echo "fast-gate: FAIL (see the suite logs above)" >&2
+  # No mapping was produced at all: every selected suite is unproven, so every one is reported failed.
+  printf 'fast-gate: failed: %s\n' "${SELECTED[@]}"
+  rc=1
+fi
+
+if [ "$rc" -ne 0 ]; then
+  echo "fast-gate: runner exit $BATCH_RC (0 = a suite reported failed; 124/137/143 = the ${SUITE_BOUND}s batch bound killed it)" >&2
+  sed 's/^/    /' "$RUN_LOG_FILE" 2>/dev/null | tail -40
+  echo "fast-gate: FAIL (see the run log above)" >&2
+else
+  echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))"
 fi
 # A verdict is out: a TERM arriving now must not add a second, contradictory one (agent-do-wot).
 VERDICT_EMITTED=1
