@@ -370,37 +370,68 @@ const MAX_SYMLINK_HOPS = 32;
 /**
  * A resolved path, or the reason the resolver could not attest one.
  *
- * The `ok: false` case exists so that a caller can never mistake "could not
- * resolve" for "resolved to something harmless": returning the input unchanged
- * is what made the earlier bypasses work, because a deny list then judged the
- * alias rather than the file the I/O would touch.
+ * `ok: false` means "refuse this path". A caller must never fall back to the
+ * input, which is how every bypass in this area worked: an unattested path was
+ * handed back unchanged, and the deny list then judged an innocent-looking name.
+ * `reason` is the rule the deny list reports. Every cause maps to the same rule
+ * because from a caller's view they are equivalent - in all of them we do not
+ * know which file the I/O would reach.
  */
-export type ResolvedPath = { ok: true; path: string } | { ok: false; reason: 'symlink-chain' };
+export type ResolvedPath = { ok: true; path: string } | { ok: false; reason: 'unresolved-path' };
+
+const UNRESOLVED: ResolvedPath = { ok: false, reason: 'unresolved-path' };
+
+/**
+ * The one place that decides whether a filesystem error means "this component is
+ * not there yet, so the walk can step past it" or "I cannot tell where this path
+ * goes, so refuse".
+ *
+ * ONLY ENOENT is `absent`. Everything else - EACCES, EPERM, ELOOP, EIO, ENOTDIR,
+ * a connector's own thrown value, a thrown non-Error - is `unattestable`, even
+ * where a platform might consider it benign. Being strict is what makes the
+ * invariant hold, and refusing a path is always safe.
+ *
+ * This exists because six of the seven findings in this area were one sentence:
+ * a catch swallowed a failure it could not classify and the walk continued as if
+ * the component had been attested. There are no bare catches in the resolver for
+ * that reason - each one either classifies or refuses.
+ */
+function classifyError(err: unknown): 'absent' | 'unattestable' {
+  // Checked inline rather than via isNotFoundError, which also treats ENOTDIR as
+  // absent for the store's own "File not found" messages. Here that would be
+  // wrong: "there is a file where a directory belongs" still says nothing about
+  // what a symlink above it pointed at, so it is unattested.
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 'ENOENT' ? 'absent' : 'unattestable';
+}
 
 /**
  * `sandbox.realpath()` requires the path to exist (matching Node's
  * `fs.realpath`). This walks up to the deepest existing ancestor, canonicalises
- * that, and re-appends the unresolved remainder — so a fresh write is judged as
+ * that, and re-appends the unresolved remainder - so a fresh write is judged as
  * the file it would land on.
  *
- * Two different bounds are kept deliberately apart:
+ * THE INVARIANT: `ok: true` iff every component of the returned path was
+ * positively attested - canonicalised by `realpath`, or observed not to be a
+ * symlink, or observed to be a symlink whose target was read and followed within
+ * budget. Every other outcome is `ok: false`. Nothing here returns a path it
+ * could not attest, so a deny list never judges an alias instead of a file.
  *
- *  - walking up to the nearest existing ancestor is bounded only by the path's
- *    own depth, terminating at the root;
- *  - expanding a symlink needs its own budget, because a chain (or a cycle) can
- *    be arbitrarily long.
+ * Two bounds are kept deliberately apart: walking up to the nearest existing
+ * ancestor is bounded only by the path's own depth (it terminates at the root),
+ * while expanding symlinks needs its own budget, because a chain or a cycle can
+ * be arbitrarily long. Counting them together was a bypass in itself
+ * (agent-do-qhn): more missing levels than the budget exhausted it before
+ * reaching the link, and exhaustion then returned the input unchanged.
  *
- * Counting them together was a bypass in its own right (agent-do-qhn): a path
- * with more missing directory levels than the budget exhausted it *before*
- * reaching the symlink, and exhaustion returned the input unchanged — permitted.
- * So exhaustion now fails closed, and so does any error that leaves the path
- * unattested. `ResolvedPath.ok === false` means the caller must refuse.
+ * `stat()` is lstat semantics on this contract, so a connector can *see* a
+ * symlink without being able to follow it. That is unattested, not harmless: a
+ * link we can identify but not read is refused (agent-do-ajs, agent-do-vn9).
  *
- * A symlink whose target does not exist yet is followed through `stat()` (lstat
- * semantics on this contract) and `readlink()`, which is what closes
- * agent-do-5ww. A substrate offering neither `realpath` nor `readlink` reports
- * "no symlinks to resolve" by returning the input, as the contract states, and
- * the caller's own containment check remains authoritative.
+ * A connector with neither `realpath` nor `readlink` reports "nothing to
+ * resolve" by getting its input back; as the contract states, omitting both
+ * declares that the substrate has no symlinks. The store's own normalisation is
+ * authoritative there.
  */
 export interface PathApi {
   join(base: string, ...parts: string[]): string;
@@ -441,64 +472,69 @@ export async function realpathSafe(
   pathApi: PathApi,
 ): Promise<ResolvedPath> {
   if (!sandbox.realpath) {
-    // No canonicaliser. A substrate that can see symlinks (`readlink` present)
-    // still has components this function cannot expand or attest, so returning
-    // the input would let the caller judge a path that may reach anywhere -
-    // agent-do-ajs; the same fail-open shape as the rest of this chain. Refuse
-    // instead. A substrate with no symlinks at all omits `readlink` too, and
-    // keeps the documented lexical fallback: there is nothing to resolve, and
-    // the store's own normalisation is authoritative there.
-    return sandbox.readlink ? { ok: false, reason: 'symlink-chain' } : { ok: true, path: p };
+    // No canonicaliser. A substrate that can still see symlinks cannot attest
+    // any path, because components it cannot expand could reach anywhere; a
+    // substrate with no symlink support at all has nothing to resolve.
+    return sandbox.readlink ? UNRESOLVED : { ok: true, path: p };
   }
   let parts: string[] = [];
   let current = p;
   let hops = 0;
   for (;;) {
+    // 1. Does this path exist? If so, realpath is a positive attestation.
+    let canonical: string | undefined;
+    let absent = false;
     try {
-      const canonical = await sandbox.realpath(current);
-      return { ok: true, path: parts.length ? pathApi.join(canonical, ...parts) : canonical };
+      canonical = await sandbox.realpath(current);
     } catch (err) {
-      if (!isNotFoundError(err)) {
-        // The path exists but cannot be resolved (EACCES, ELOOP, a connector
-        // error). Handing it back uncanonicalised would let a deny list judge
-        // the wrong name, so refuse instead.
-        return { ok: false, reason: 'symlink-chain' };
-      }
+      if (classifyError(err) === 'unattestable') return UNRESOLVED;
+      absent = true;
+    }
+    if (!absent) {
+      if (typeof canonical !== 'string') return UNRESOLVED; // a connector that does not answer in strings
+      return { ok: true, path: parts.length ? pathApi.join(canonical, ...parts) : canonical };
     }
 
-    // realpath cannot report a symlink whose target is missing: it fails with
-    // ENOENT for the link, exactly as if it were absent. Inspect the component
-    // before walking past it, or the link's own name survives into the answer.
-    // `stat()` is lstat semantics on this contract, so a symlink is detectable
-    // even by a connector that cannot read one. If the entry is a symlink and the
-    // substrate cannot report its target, the path cannot be attested - refuse,
-    // rather than fall through and let the caller judge the link's own name
-    // (the fail-open shape all of agent-do-qhn's predecessors shared). A
-    // substrate with no symlinks reports isSymbolicLink false and never reaches
-    // this, which is why the contract may leave `readlink` optional.
+    // 2. Inspect this component before stepping past it. realpath reports ENOENT
+    // for a symlink whose target is missing, exactly as if the link were absent,
+    // so a link's own name survives into the answer without this (agent-do-5ww).
+    let isLink = false;
     try {
-      const stat = await sandbox.stat(current);
-      if (stat.isSymbolicLink) {
-        if (!sandbox.readlink) return { ok: false, reason: 'symlink-chain' };
-        hops += 1;
-        if (hops > MAX_SYMLINK_HOPS) return { ok: false, reason: 'symlink-chain' };
-        const link = await sandbox.readlink(current);
-        const target = pathApi.isAbsolute(link)
-          ? link
-          : pathApi.join(pathApi.dirname(current), link);
-        current = parts.length ? pathApi.join(target, ...parts) : target;
-        parts = [];
-        continue;
-      }
-    } catch {
-      // Genuinely absent, or a substrate whose stat cannot see it: walk up.
+      isLink = (await sandbox.stat(current)).isSymbolicLink;
+    } catch (err) {
+      // An error we cannot classify means we do not know what is here.
+      if (classifyError(err) === 'unattestable') return UNRESOLVED;
     }
 
+    // 3. Follow it. A link identified but not readable is unattested: judging
+    // the link's own name is precisely the bypass (agent-do-vn9).
+    if (isLink) {
+      if (!sandbox.readlink) return UNRESOLVED;
+      hops += 1;
+      if (hops > MAX_SYMLINK_HOPS) return UNRESOLVED;
+      let link: string;
+      try {
+        link = await sandbox.readlink(current);
+      } catch {
+        // Unconditional on purpose: whatever the failure is, a link whose target
+        // cannot be read leaves the path unattested, so there is nothing to
+        // classify and no branch that continues.
+        return UNRESOLVED;
+      }
+      if (typeof link !== 'string') return UNRESOLVED;
+      const target = pathApi.isAbsolute(link)
+        ? link
+        : pathApi.join(pathApi.dirname(current), link);
+      current = parts.length ? pathApi.join(target, ...parts) : target;
+      parts = [];
+      continue;
+    }
+
+    // 4. Not a link, and not there: step towards the root.
     const parent = pathApi.dirname(current);
     if (parent === current) {
-      // Reached the filesystem root and it did not resolve either: nothing about
-      // this path can be attested, so refuse rather than hand back the input.
-      return { ok: false, reason: 'symlink-chain' };
+      // The root did not resolve either, so nothing about this path is attested.
+      return UNRESOLVED;
     }
     parts.unshift(pathApi.relative(parent, current));
     current = parent;

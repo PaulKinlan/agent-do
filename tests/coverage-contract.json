@@ -304,6 +304,7 @@
   "src/sandbox/types.ts": [
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/host.test.ts",
     "tests/sandbox/just-bash.test.ts",
     "tests/sandbox/shell-tool.test.ts",
@@ -403,6 +404,7 @@
     "tests/filesystem-store.test.ts",
     "tests/in-memory-store.test.ts",
     "tests/memory-tools.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/store.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -414,6 +416,7 @@
     "tests/deny-list.test.ts",
     "tests/file-lock.test.ts",
     "tests/filesystem-store.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/store.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -477,6 +480,7 @@
   "src/stores/sandbox.ts": [
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/store.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
@@ -491,6 +495,7 @@
     "tests/filesystem-store.test.ts",
     "tests/in-memory-store.test.ts",
     "tests/memory-tools.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/store.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
