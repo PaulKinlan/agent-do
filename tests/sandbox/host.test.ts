@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, rm, symlink, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
+import { createHostSandbox, pickExecEnv } from '../../src/sandbox/connectors/host.js';
 import { runSandboxApiContract } from './contract.js';
 
 runSandboxApiContract('host', async () => {
@@ -94,5 +94,174 @@ describe('createHostSandbox specifics', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Read a variable as the child shell sees it, via a builtin expansion
+ * that doesn't depend on `PATH` (otherwise a test for "PATH is
+ * forwarded" would be circular).
+ */
+function printVar(name: string): string {
+  return `printf '%s' "\${${name}-unset}"`;
+}
+
+async function readVar(sandbox: ReturnType<typeof createHostSandbox>, name: string) {
+  const r = await sandbox.exec(printVar(name));
+  expect(r.exitCode).toBe(0);
+  return r.stdout.trim();
+}
+
+/** Set parent env vars for the duration of `fn`, then restore them. */
+async function withParentEnv(
+  vars: Record<string, string>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const saved = new Map<string, string | undefined>();
+  for (const [name, value] of Object.entries(vars)) {
+    saved.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+describe('pickExecEnv (default allowlist)', () => {
+  // Fictional names throughout: this describes the default only, so it
+  // must not depend on — or leak — the test runner's real environment.
+  const parent: Record<string, string | undefined> = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/home/tester',
+    LANG: 'en_GB.UTF-8',
+    LC_CTYPE: 'UTF-8',
+    TZ: 'UTC',
+    TERM: 'xterm-256color',
+    NODE_ENV: 'test',
+    ANTHROPIC_API_KEY: 'sk-ant-not-a-real-key',
+    OPENAI_API_KEY: 'sk-not-a-real-key',
+    AWS_SECRET_ACCESS_KEY: 'not-a-real-aws-key',
+    GITHUB_TOKEN: 'ghp_not_a_real_token',
+    HTTPS_PROXY: 'http://user:password@proxy.example',
+    NODE_OPTIONS: '--require ./not-a-real-file.js',
+    LD_PRELOAD: '/tmp/not-a-real-lib.so',
+    SSH_AUTH_SOCK: '/tmp/not-a-real-agent.sock',
+    GIT_AUTHOR_NAME: 'Tester',
+    UNDEFINED_ONE: undefined,
+  };
+
+  it('forwards the useful non-secret names', () => {
+    const env = pickExecEnv(parent);
+    expect(env.PATH).toBe('/usr/bin:/bin');
+    expect(env.HOME).toBe('/home/tester');
+    expect(env.LANG).toBe('en_GB.UTF-8');
+    expect(env.LC_CTYPE).toBe('UTF-8'); // prefix allowlist
+    expect(env.TZ).toBe('UTC');
+    expect(env.TERM).toBe('xterm-256color');
+    expect(env.NODE_ENV).toBe('test');
+  });
+
+  it('drops credentials, code-injection hooks and unlisted names', () => {
+    const env = pickExecEnv(parent);
+    for (const name of [
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'AWS_SECRET_ACCESS_KEY',
+      'GITHUB_TOKEN',
+      'HTTPS_PROXY',
+      'NODE_OPTIONS',
+      'LD_PRELOAD',
+      'SSH_AUTH_SOCK',
+      'GIT_AUTHOR_NAME',
+      'UNDEFINED_ONE',
+    ]) {
+      expect(env).not.toHaveProperty(name);
+    }
+  });
+
+  it('adds extra names as exact matches, not patterns', () => {
+    const env = pickExecEnv(parent, ['GIT_AUTHOR_NAME', 'AWS_']);
+    expect(env.GIT_AUTHOR_NAME).toBe('Tester');
+    // An extra entry is a name, so the prefix form matches nothing.
+    expect(env).not.toHaveProperty('AWS_SECRET_ACCESS_KEY');
+  });
+
+  it('matches Windows names case-insensitively and keeps the system staples', () => {
+    // Windows env blocks are case-insensitive and spell the search path
+    // `Path`; process creation needs the SystemRoot family.
+    const windowsParent: Record<string, string | undefined> = {
+      Path: 'C:\\Windows\\System32',
+      SystemRoot: 'C:\\Windows',
+      TEMP: 'C:\\Temp',
+      USERPROFILE: 'C:\\Users\\tester',
+      ANTHROPIC_API_KEY: 'sk-ant-not-a-real-key',
+    };
+    const env = pickExecEnv(windowsParent, [], true);
+    expect(env.Path).toBe('C:\\Windows\\System32');
+    expect(env.SystemRoot).toBe('C:\\Windows');
+    expect(env.TEMP).toBe('C:\\Temp');
+    expect(env.USERPROFILE).toBe('C:\\Users\\tester');
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY');
+  });
+
+  it('keeps POSIX name matching case-sensitive', () => {
+    const env = pickExecEnv(
+      { Path: '/usr/bin', ANTHROPIC_API_KEY: 'sk-ant-not-a-real-key' },
+      [],
+      false,
+    );
+    expect(env).toEqual({});
+  });
+});
+
+describe('createHostSandbox environment policy', () => {
+  it('forwards an allowlisted var but not an arbitrary parent var', async () => {
+    await withParentEnv(
+      { AGENT_DO_LEAK_PROBE: 'provider-key-material' },
+      async () => {
+        const sandbox = createHostSandbox();
+        expect(await readVar(sandbox, 'PATH')).not.toBe('unset');
+        expect(await readVar(sandbox, 'AGENT_DO_LEAK_PROBE')).toBe('unset');
+      },
+    );
+  });
+
+  it('forwards names listed in envPassthrough', async () => {
+    await withParentEnv(
+      { AGENT_DO_PASSTHROUGH_PROBE: 'opted-in-value' },
+      async () => {
+        const sandbox = createHostSandbox({
+          envPassthrough: ['AGENT_DO_PASSTHROUGH_PROBE'],
+        });
+        expect(await readVar(sandbox, 'AGENT_DO_PASSTHROUGH_PROBE')).toBe(
+          'opted-in-value',
+        );
+      },
+    );
+  });
+
+  it('forwards the whole parent env under inheritEnv: true', async () => {
+    await withParentEnv(
+      { AGENT_DO_INHERIT_PROBE: 'inherited-value' },
+      async () => {
+        const sandbox = createHostSandbox({ inheritEnv: true });
+        expect(await readVar(sandbox, 'AGENT_DO_INHERIT_PROBE')).toBe(
+          'inherited-value',
+        );
+      },
+    );
+  });
+
+  it('applies opts.env on top of the default and lets it win', async () => {
+    const sandbox = createHostSandbox();
+    const r = await sandbox.exec(printVar('AGENT_DO_CALL_ENV'), {
+      env: { AGENT_DO_CALL_ENV: 'per-call' },
+    });
+    expect(r.stdout.trim()).toBe('per-call');
   });
 });

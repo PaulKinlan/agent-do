@@ -63,7 +63,7 @@ convention.
 
 | Factory | Backend | Network model | Notes |
 |---|---|---|---|
-| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Default fallback for `createShellTool()`. **Not a security boundary.** |
+| `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Default fallback for `createShellTool()`. **Not a security boundary.** Commands get an allowlisted environment, not the parent's (see below). |
 | `createJustBashSandbox(opts?)` | [vercel-labs/just-bash][just-bash] virtual fs + interpreter | `allowNet` fetch hook inside the interpreter | Optional peer dep — install `just-bash` to use. |
 | `wrapJustBashSandbox(instance)` | as above | as above | For callers that construct the underlying just-bash `Sandbox` themselves. |
 
@@ -88,6 +88,55 @@ a method that only some connectors implement would tempt callers to
 assume it exists. TypeScript interfaces are open, so a future
 `SandboxApiWithFetch extends SandboxApi` can land non-breakingly if
 the use case appears.
+
+## Environment policy (host connector)
+
+The host connector **does not hand the parent process environment to
+commands by default**. `exec()` forwards only a small allowlist —
+`PATH`, `HOME`, the locale names (`LANG`, `LANGUAGE`, `LC_*`),
+`TMPDIR`, `TZ`, `TERM`, `SHELL`, `USER`, `LOGNAME`, `NODE_ENV` — plus
+whatever the caller passes as `ExecOptions.env`.
+
+Before 0.8 the whole environment was inherited, which meant a
+model-controlled `bash` call could `printenv` or read
+`/proc/self/environ` and pick up the provider credentials the host
+process needed (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`AWS_SECRET_ACCESS_KEY`, …). The allowlist is fail-closed: an unlisted
+name is not passed, so a secret under an unusual name cannot leak
+either. `NODE_OPTIONS`, `BASH_ENV`, `ENV`, `SHELLOPTS`, `LD_PRELOAD`
+and `DYLD_*` are excluded deliberately — forwarding them would let the
+parent environment inject code into every command.
+
+On Windows the names are matched case-insensitively (the platform's
+environment blocks are, and the search path is spelled `Path`), and a
+small platform set is added on top — `SystemRoot`, `SystemDrive`,
+`windir`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`, `TEMP`,
+`TMP` — because process creation and DLL resolution need them there.
+
+**This closes the inheritance path, not the process table.** Commands
+still run as the same user in the same PID namespace, so on Linux
+`cat /proc/$PPID/environ` still reads the parent Node process's
+environment. `createHostSandbox` is transparent about not being a
+security boundary; when a credential must be unreachable by the model
+rather than merely uninherited, use an isolating connector
+(`createJustBashSandbox`, a container/VM connector of your own) instead.
+
+Two knobs, both explicit:
+
+```ts
+// Forward specific extra names (exact names, never patterns):
+const sandbox = createHostSandbox({ envPassthrough: ['GIT_AUTHOR_NAME'] });
+
+// Opt back into the whole parent environment (pre-0.8 behaviour).
+// Only do this when the commands genuinely need it and you accept that
+// the model can read every credential the parent process holds.
+const trusted = createHostSandbox({ inheritEnv: true });
+```
+
+`ExecOptions.env` is caller-supplied library code rather than model
+input, so it always applies and wins over both the allowlist and
+`inheritEnv`. Other connectors are unaffected: just-bash runs in-process
+with its own virtual environment and never sees the host's.
 
 ## When does a `MemoryStore` go through the sandbox?
 
