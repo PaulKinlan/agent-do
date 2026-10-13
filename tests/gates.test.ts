@@ -266,3 +266,83 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * agent-do-qmx: when the outer window (CHECK_FAST_TIMEOUT) kills the gate, the run used to end with one
+ * `No such file or directory` shell error per suite and left the in-flight runners holding the heavy slot
+ * until fleet-heavy reaped them. These cases pin the cleanup: the scratch directory goes away only after
+ * the suite processes do, and a descendant of a runner cannot outlive the run.
+ */
+describe('tools/fast-gate.sh — cleanup when the run is killed', () => {
+  /** How long the run gets before the outer window fires; the stub below never finishes on its own. */
+  const OUTER_WINDOW_MS = 3_000;
+
+  it('kills the suite processes, takes their descendants with them, and does not race the scratch dir', async () => {
+    const fx = fixture();
+    const marker = `agent-do-gates-reap-${process.pid}-${Date.now()}`;
+    const pidFile = join(fx.root, 'pids.txt');
+    const stub = join(fx.root, 'stub-hanger');
+    // The runner records its own pid and then starts a descendant that carries the marker in its argv. The
+    // descendant must NOT be a single simple command: `bash -c 'sleep 300'` execs into `sleep`, which
+    // replaces the command line and would drop the marker, making the assertion below match nothing at all.
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+echo "$$" >> "$PID_FILE"
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+echo "$!" >> "$PID_FILE"
+wait
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: OUTER_WINDOW_MS,
+      env: {
+        ...process.env,
+        FAST_GATE_RUNNER: stub,
+        STATIC_CMD: 'true',
+        RUN_LOG: fx.log,
+        PID_FILE: pidFile,
+        MARKER: marker,
+        FAST_GATE_JOBS: '1',
+      },
+    });
+
+    // The run was killed by the bound rather than finishing. Post-fix that is the TERM trap exiting with
+    // 130; pre-fix bash dies from the signal and spawnSync reports no status at all. Both mean "killed".
+    expect(r.status).not.toBe(0);
+    expect(r.status === 130 || r.status === null || r.signal === 'SIGTERM').toBe(true);
+    expect(existsSync(pidFile)).toBe(true); // the stub really did start
+
+    const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+    // The old trap removed $TMP while the subshells were still writing their `.rc` files.
+    expect(output).not.toContain('No such file or directory');
+
+    // The runner's descendant must be gone: cleanup signals the process group, so a child of the runner (not
+    // of this script) dies with it. Without that, this is the leak fleet-heavy used to have to clean up.
+    const pids = readFileSync(pidFile, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map(Number);
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      // Do not leak the descendant out of a failing run: kill what the fix failed to kill.
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
+  }, 30_000);
+});

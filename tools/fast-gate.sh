@@ -174,7 +174,58 @@ if ! ( cd "$ROOT" && eval "$STATIC_CMD" ); then
 fi
 
 # --- run the suites, one process per suite, bounded parallelism ----------------------------------------
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d)
+CHILD_PIDS=()
+CLEANED=0
+
+# Signal a process and everything below it, children first. A process-group signal is not enough here:
+# `timeout` moves its child into a new process group (so that it can kill the command's own tree itself),
+# so `kill -TERM -$pid` reaches the runner and misses the runner's children — measured on this fleet, and
+# exactly the leak agent-do-qmx is about. Walking down the tree before signalling the parent means nothing is
+# reparented and missed in the gap between the two signals.
+kill_tree() { # $1 = signal name, $2 = pid
+  local child
+  for child in $(pgrep -P "$2" 2>/dev/null); do
+    kill_tree "$1" "$child"
+  done
+  kill "-$1" "$2" 2>/dev/null || true
+}
+
+# Reap the suite processes BEFORE removing the scratch directory (agent-do-qmx). The old EXIT-only trap did
+# neither part: when the outer window (CHECK_FAST_TIMEOUT in tools/check.conf) killed this script, the
+# in-flight runners and their descendants kept holding the heavy slot until fleet-heavy killed ~15 leftover
+# processes, and `rm -rf "$TMP"` landed while the subshells were still writing their `.rc` files, so the run
+# ended with one `No such file or directory` shell error per suite instead of a verdict.
+cleanup() {
+  [ "$CLEANED" = 1 ] && return 0
+  CLEANED=1
+  trap - EXIT INT TERM
+  local pid any=0
+  for pid in "${CHILD_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    kill -0 "$pid" 2>/dev/null && any=1
+  done
+  if [ "$any" = 1 ]; then
+    # TERM the trees, give them a moment, then KILL whatever is left. Bounded, so a wedged runner cannot hold
+    # the slot here the way it did before this branch.
+    for pid in "${CHILD_PIDS[@]:-}"; do
+      [ -n "$pid" ] || continue
+      kill_tree TERM "$pid"
+    done
+    sleep 0.3
+    for pid in "${CHILD_PIDS[@]:-}"; do
+      [ -n "$pid" ] || continue
+      kill_tree KILL "$pid"
+    done
+  fi
+  wait 2>/dev/null || true
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+# SIGTERM/SIGINT must run the cleanup too: without these traps bash dies straight away on the bound kill and
+# the EXIT trap never fires, which is how the orphans happened.
+trap 'cleanup; exit 130' INT TERM
+
 MISSING=()
 for s in "${SELECTED[@]}"; do [ -f "$ROOT/$s" ] || MISSING+=("$s"); done
 if [ "${#MISSING[@]}" -gt 0 ]; then
@@ -188,7 +239,10 @@ printf 'fast-gate: running: %s\n' "${SELECTED[@]}"
 n=0
 for s in "${SELECTED[@]}"; do
   key=$(printf '%s' "$s" | tr '/.' '__')
+  # Each suite runs in its own subshell under the per-suite bound; its pid is what cleanup walks (kill_tree)
+  # so the runner, `timeout` and every test worker go down with it.
   ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
+  CHILD_PIDS+=("$!")
   n=$((n + 1))
   if [ "$n" -ge "$JOBS" ]; then wait -n; n=$((n - 1)); fi
 done
