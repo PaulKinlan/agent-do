@@ -36,6 +36,12 @@ export interface ToolResult {
    *   write_file -> { path, bytes, created }
    *   grep_file  -> { pattern, matchCount, fileCount }
    *   *blocked*  -> { blocked: true, reason, rule }
+   *   *error*    -> { error: true, redactedMarkerCount, neutralisedDelimiterCount,
+   *                   truncated, totalBytes }  (every MCP error path)
+   *
+   * The two redaction counts are not synonyms and both are canonical:
+   * `redactedMarkerCount` counts injection phrases redacted,
+   * `neutralisedDelimiterCount` counts `<tool_output>` boundary tags escaped.
    */
   data?: Record<string, unknown>;
 
