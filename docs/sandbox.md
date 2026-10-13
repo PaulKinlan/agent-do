@@ -109,9 +109,14 @@ parent environment inject code into every command.
 
 On Windows the names are matched case-insensitively (the platform's
 environment blocks are, and the search path is spelled `Path`), and a
-small platform set is added on top — `SystemRoot`, `SystemDrive`,
-`windir`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`, `TEMP`,
-`TMP` — because process creation and DLL resolution need them there.
+platform set is added on top — `SystemRoot`, `SystemDrive`, `windir`,
+`COMSPEC`, `PATHEXT`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`,
+`LOCALAPPDATA`, `TEMP`, `TMP`, `NUMBER_OF_PROCESSORS` and
+`PROCESSOR_ARCHITECTURE` — because process creation and DLL resolution need
+them there. `DEFAULT_ENV_ALLOWLIST_WINDOWS` in
+`src/sandbox/connectors/host.ts` is the source of truth for that set: an
+audit of exactly what a command can see should read the constant, and if the
+two ever disagree the constant wins.
 
 **This closes the inheritance path, not the process table.** Commands
 still run as the same user in the same PID namespace, so on Linux
