@@ -288,6 +288,7 @@
   "src/sandbox/connectors/host.ts": [
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
+    "tests/path-resolution.test.ts",
     "tests/sandbox/host.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
