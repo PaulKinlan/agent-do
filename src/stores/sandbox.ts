@@ -440,7 +440,16 @@ export async function realpathSafe(
   p: string,
   pathApi: PathApi,
 ): Promise<ResolvedPath> {
-  if (!sandbox.realpath) return { ok: true, path: p };
+  if (!sandbox.realpath) {
+    // No canonicaliser. A substrate that can see symlinks (`readlink` present)
+    // still has components this function cannot expand or attest, so returning
+    // the input would let the caller judge a path that may reach anywhere -
+    // agent-do-ajs; the same fail-open shape as the rest of this chain. Refuse
+    // instead. A substrate with no symlinks at all omits `readlink` too, and
+    // keeps the documented lexical fallback: there is nothing to resolve, and
+    // the store's own normalisation is authoritative there.
+    return sandbox.readlink ? { ok: false, reason: 'symlink-chain' } : { ok: true, path: p };
+  }
   let parts: string[] = [];
   let current = p;
   let hops = 0;
@@ -486,7 +495,11 @@ export async function realpathSafe(
     }
 
     const parent = pathApi.dirname(current);
-    if (parent === current) return { ok: true, path: p }; // reached the root
+    if (parent === current) {
+      // Reached the filesystem root and it did not resolve either: nothing about
+      // this path can be attested, so refuse rather than hand back the input.
+      return { ok: false, reason: 'symlink-chain' };
+    }
     parts.unshift(pathApi.relative(parent, current));
     current = parent;
   }

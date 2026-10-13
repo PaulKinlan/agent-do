@@ -479,6 +479,101 @@ describe('dangling symlinks resolve to their target before policy runs (agent-do
     expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'planted'))).toBe(false);
   });
 
+  it('refuses every path on a connector that can see symlinks but cannot canonicalise', async () => {
+    // agent-do-ajs: readlink + stat but NO realpath. Returning the input here
+    // skipped the symlink inspection entirely, so a link into .git was judged by
+    // its own name. Such a substrate can see links it cannot expand, so no path
+    // on it can be attested.
+    await fs.promises.symlink('.git/hooks/planted', path.join(dir, 'planted-readonly'));
+    const physical = dir;
+    const virtualRoot = '/virtual-readlink-only';
+    const toPhysical = (p: string) => path.join(physical, path.relative(virtualRoot, p));
+    const sandbox = {
+      readFile: (p: string) => fs.promises.readFile(toPhysical(p), 'utf8'),
+      readFileBuffer: async (p: string) => new Uint8Array(await fs.promises.readFile(toPhysical(p))),
+      writeFile: (p: string, content: string | Uint8Array) => fs.promises.writeFile(toPhysical(p), content),
+      stat: async (p: string) => {
+        const st = await fs.promises.lstat(toPhysical(p));
+        return {
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          isSymbolicLink: st.isSymbolicLink(),
+          size: st.size,
+          mtime: st.mtime,
+        };
+      },
+      readdir: (p: string) => fs.promises.readdir(toPhysical(p)),
+      exists: async (p: string) => fs.promises.access(toPhysical(p)).then(() => true, () => false),
+      mkdir: async (p: string, o?: { recursive?: boolean }) => { await fs.promises.mkdir(toPhysical(p), o); },
+      rm: async (p: string) => { await fs.promises.rm(toPhysical(p)); },
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      readlink: (p: string) => fs.promises.readlink(toPhysical(p)),
+      // deliberately no realpath
+    } as unknown as SandboxApi;
+    const out = await run('write_file', { path: 'planted-readonly', content: 'x' }, sandbox, virtualRoot);
+    expect(out).toContain('Blocked by deny list');
+    expect(fs.existsSync(path.join(dir, '.git', 'hooks', 'planted'))).toBe(false);
+  });
+
+  it('still uses the lexical fallback when the connector has neither primitive', async () => {
+    // The control for the above: a substrate with no symlink support at all has
+    // nothing to resolve, so it keeps the documented fallback and ordinary reads
+    // are unaffected. Fail-closed must not swallow this case.
+    const physical = dir;
+    const virtualRoot = '/virtual-no-primitives';
+    const toPhysical = (p: string) => path.join(physical, path.relative(virtualRoot, p));
+    const sandbox = {
+      readFile: (p: string) => fs.promises.readFile(toPhysical(p), 'utf8'),
+      readFileBuffer: async (p: string) => new Uint8Array(await fs.promises.readFile(toPhysical(p))),
+      writeFile: (p: string, content: string | Uint8Array) => fs.promises.writeFile(toPhysical(p), content),
+      stat: async (p: string) => {
+        const st = await fs.promises.lstat(toPhysical(p));
+        return {
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          isSymbolicLink: false,
+          size: st.size,
+          mtime: st.mtime,
+        };
+      },
+      readdir: (p: string) => fs.promises.readdir(toPhysical(p)),
+      exists: async (p: string) => fs.promises.access(toPhysical(p)).then(() => true, () => false),
+      mkdir: async (p: string, o?: { recursive?: boolean }) => { await fs.promises.mkdir(toPhysical(p), o); },
+      rm: async (p: string) => { await fs.promises.rm(toPhysical(p)); },
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    } as unknown as SandboxApi;
+    const out = await run('write_file', { path: 'notes/todo.md', content: 'ok' }, sandbox, virtualRoot);
+    expect(out).not.toContain('Blocked by deny list');
+    expect(out).not.toContain('unresolved');
+    expect(fs.existsSync(path.join(dir, 'notes', 'todo.md'))).toBe(true);
+  });
+
+  it('refuses an unresolvable root rather than returning the input uncanonicalised', async () => {
+    // The sibling of agent-do-ajs: when the walk reaches the filesystem root and
+    // that did not resolve either, nothing about the path is attested. Returning
+    // the input there was the same fail-open shape.
+    const sandbox = {
+      readFile: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      readFileBuffer: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      writeFile: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      stat: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      readdir: async () => [],
+      exists: async () => false,
+      mkdir: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      rm: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+      exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+      // realpath exists but never resolves, and there is no readlink to inspect with
+      realpath: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+    } as unknown as SandboxApi;
+    const tools = createWorkspaceTools('/virtual-unresolvable', { sandbox });
+    const raw = (await (tools.read_file!.execute as Function)({ path: 'notes/todo.md' }, {})) as {
+      modelContent: string;
+      data?: Record<string, unknown>;
+    };
+    expect(raw.modelContent).toContain('Blocked by deny list');
+    expect(raw.data?.rule).toBe('unresolved-path');
+  });
+
   // ---- positive: a dangling link that stays inside the workspace still works ----
   it('allows a fresh write on a dangling symlink whose target is inside the workspace', async () => {
     // The policy resolves it to notes/todo.md, which is inside the workspace, so
