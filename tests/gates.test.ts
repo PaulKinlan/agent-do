@@ -49,6 +49,33 @@ describe('fixture teardown', () => {
       child.kill('SIGKILL');
     }
   });
+
+  it('reaps a descendant that does not carry the fixture root in its argv', async () => {
+    // agent-do-63t: the pattern match sees processes that MENTION the root, and a child like `sleep 5` does
+    // not - `bash -c 'sleep 5'` would exec into sleep and lose the marker entirely, which is why the probe
+    // below keeps a shell alive and backgrounds the child inside it. The probe is bounded at five seconds
+    // on purpose: if the walk regresses, the test fails and nothing is left running for long.
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
+    ROOTS.push(root);
+    const childPidFile = join(root, 'child.pid');
+    const child = spawn('bash', ['-c', 'sleep 5 & echo $! > "$1"; wait', join(root, 'probe'), childPidFile]);
+    try {
+      await once(child, 'spawn');
+      const deadline = Date.now() + 3000;
+      while (!existsSync(childPidFile) && Date.now() < deadline) sleepSync(50);
+      const grandchild = readFileSync(childPidFile, 'utf8').trim();
+      const alive = () => spawnSync('kill', ['-0', grandchild]).status === 0;
+      expect(grandchild, 'the probe must record its rootless child').toMatch(/^\d+$/);
+      expect(alive(), 'the rootless child must be running before teardown').toBe(true);
+
+      expect(reapFixtureProcesses(root), 'both the matched process and its descendant').toBeGreaterThan(1);
+      const gone = Date.now() + 2000;
+      while (alive() && Date.now() < gone) sleepSync(25);
+      expect(alive(), 'a cmdline match alone would leave this child behind').toBe(false);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
 });
 
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -64,23 +91,46 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
  * cleanup - it leaves the process running against a path that no longer exists, which nothing can then
  * find. The pattern carries the trailing separator so a sibling fixture (or a longer mkdtemp name) can
  * never match, and it is applied BEFORE the removal for the same reason it is applied at all.
+ *
+ * Reach is two stages, because a cmdline match cannot see everything: the pattern finds the processes that
+ * mention the root, and then their descendants are walked and taken as well. A child such as `sleep 30`
+ * carries no root in its argv, so matching alone would leave it behind - agent-do-63t. The walk runs before
+ * any signal is sent: a dead parent reparents its children and the link that made them findable is gone,
+ * and `pgrep -P` cannot see a process that has already been reparented. The remaining limit is exactly
+ * that: a process whose root-carrying ancestor died before teardown is already unfindable.
  */
 function reapFixtureProcesses(root: string): number {
   const pattern = `${root}/`;
-  const find = () =>
-    spawnSync('pgrep', ['-f', '--', pattern], { encoding: 'utf8' })
+  const list = (args: string[]) =>
+    spawnSync('pgrep', args, { encoding: 'utf8' })
       .stdout.split('\n')
       .map((line) => line.trim())
       .filter(Boolean);
+  const find = () => list(['-f', '--', pattern]);
+  const alive = (pid: string) => spawnSync('kill', ['-0', pid]).status === 0;
 
-  const pids = find();
-  if (pids.length === 0) return 0;
+  const matched = find();
+  if (matched.length === 0) return 0;
+
+  const targets = new Set(matched);
+  const queue = [...matched];
+  while (queue.length > 0) {
+    for (const child of list(['-P', queue.pop() as string])) {
+      if (!targets.has(child)) {
+        targets.add(child);
+        queue.push(child);
+      }
+    }
+  }
+  const pids = [...targets];
   spawnSync('kill', ['-TERM', ...pids]);
   // A gate wedged behind a foreground child ignores TERM until that child exits - the exact bug this file
-  // pins - so the wait is short and the KILL is what actually ends it.
+  // pins - so the wait is short and the KILL is what actually ends it. The early exit has to consider the
+  // descendants and not just the pattern matches: a TERM-killed parent disappears from the pattern while
+  // its rootless child is still running, and returning there would skip the KILL that child needs.
   const deadline = Date.now() + 1000;
   while (Date.now() < deadline) {
-    if (find().length === 0) return pids.length;
+    if (find().length === 0 && pids.every((pid) => !alive(pid))) return pids.length;
     sleepSync(50);
   }
   spawnSync('kill', ['-KILL', ...pids]);
