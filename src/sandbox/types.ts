@@ -70,4 +70,22 @@ export interface SandboxApi {
    * isolation against escape via symlink.
    */
   realpath?(path: string): Promise<string>;
+  /**
+   * Optional capability — read the **raw** target of the symlink at `path`
+   * (like `node:fs/promises.readlink`). The target may be relative to the
+   * link's own directory, and it may itself not exist: that second case is
+   * why this exists.
+   *
+   * `realpath()` cannot resolve a symlink whose target is missing. It fails
+   * with ENOENT for the *link*, indistinguishable from the path being absent,
+   * so a resolver that walks up to the nearest existing ancestor keeps the
+   * link's own name in its answer — and then a deny list judges the innocent
+   * alias while the I/O follows the link to wherever it really points
+   * (agent-do-5ww: `alias -> .git/hooks/planted`).
+   *
+   * Connectors whose substrate has no symlinks MAY omit this, and the resolver
+   * falls back to the nearest-existing-ancestor behaviour; `docs/sandbox.md`
+   * names that as the limitation it is.
+   */
+  readlink?(path: string): Promise<string>;
 }

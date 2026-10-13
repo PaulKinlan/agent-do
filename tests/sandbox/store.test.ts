@@ -145,6 +145,25 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(store.exists('bob', 'secret.txt')).resolves.toBe(false);
   });
 
+  it('rejects escape through a DANGLING symlink (agent-do-5ww)', async () => {
+    // The link's target does not exist yet, so realpath reports ENOENT for the
+    // *link*. A resolver that only walks up to the nearest existing ancestor
+    // keeps the innocent name and a write lands in bob/ regardless.
+    await mkdir(path.join(root, 'alice'), { recursive: true });
+    await mkdir(path.join(root, 'bob'), { recursive: true });
+    await symlink(path.join(root, 'bob', 'secret.txt'), path.join(root, 'alice', 'dangling'));
+
+    await expect(store.write('alice', 'dangling', 'pwned')).rejects.toThrow(/Path traversal via symlink/);
+    await expect(store.exists('bob', 'secret.txt')).resolves.toBe(false);
+  });
+
+  it('refuses a symlink cycle rather than returning an uncanonicalised path (agent-do-qhn)', async () => {
+    await mkdir(path.join(root, 'alice'), { recursive: true });
+    await symlink('loop-b', path.join(root, 'alice', 'loop-a'));
+    await symlink('loop-a', path.join(root, 'alice', 'loop-b'));
+    await expect(store.write('alice', 'loop-a', 'pwned')).rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('skips canonical containment check when the connector lacks realpath', async () => {
     // Connectors without `realpath` (e.g. just-bash's virtual fs) get
     // string-only path normalisation. Verify that no realpath-shaped

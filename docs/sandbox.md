@@ -215,3 +215,39 @@ through the connector.
 [#3]: https://github.com/PaulKinlan/agent-do/issues/3
 [flue]: https://github.com/withastro/flue/blob/main/docs/sandbox-connector-spec.md
 [just-bash]: https://github.com/vercel-labs/just-bash
+
+## Deny list and path canonicalisation
+
+Workspace tools build a deny-list guard (`src/tools/deny-list.ts`) above the store, and it decides on a
+**canonicalised** path rather than the string the model supplied. Every rule is workspace-relative, so judging the
+raw string let four shapes past — a legal `foo/../.env`, an in-workspace symlink to `.env`, a substrate-only
+symlink, and a fresh write through a symlinked directory (each found in review: `agent-do-cn2`, `agent-do-kov`,
+`agent-do-ro9`).
+
+There is now **one** resolver — `realpathSafe` (`src/stores/sandbox.ts`), shared with the store's containment check.
+The underlying defect was that the policy and the store each had their own and they disagreed, so the fix is one
+implementation rather than a third. It resolves through the same substrate the workspace lives on: for a
+sandbox-backed workspace that is the connector (a virtual root such as `/virtual-cn2-workspace` is invisible to
+host `realpath`), and for a host workspace it is a host substrate rather than a second host-specific resolver.
+
+What it resolves, and what happens when it cannot:
+
+- A path whose leaf does not exist yet — a fresh write — is resolved by canonicalising its **deepest existing
+  ancestor** and re-appending the rest, so `alias/hooks/new-test` is judged as the file it would land on.
+- A **dangling** symlink, whose target does not exist yet, is followed by `stat()` (lstat semantics on this
+  contract) and `readlink()`, so `alias -> .git/hooks/planted` is blocked as `.git/hooks/planted` instead of being
+  judged by the innocent alias. Chains are followed, bounded at 32 hops.
+- A connector offering neither `realpath` nor `readlink` — both are optional on the contract, for substrates with no
+  symlinks — falls back to the lexically normalised path. The store's containment check stays authoritative there,
+  as it does for any path that escapes the workspace lexically (`Path traversal via symlink not allowed`).
+- A connector that has `realpath` but not `readlink` is a narrower case, and it fails **closed**: `stat()` (lstat
+  semantics) still reports that an entry is a symlink, so the resolver knows there is a target it cannot read, and
+  refuses rather than judging the link's own name.
+
+A path that is inside the workspace lexically but resolves outside it through a symlink is blocked as
+`outside-workspace`, unless the operator passes `--include-sensitive`. A symlink whose target is inside the
+workspace is still allowed, including a dangling one: the policy blocks the target, not the link.
+
+`.agent-doignore` is still read from the **host** filesystem, so it is skipped for sandbox-backed workspaces
+(`skipAgentDoIgnore` is forced on): reading the host's file for a virtual root would find an unrelated file or
+none. The built-in defaults and any `--exclude` patterns still apply.

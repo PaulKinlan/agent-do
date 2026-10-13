@@ -118,6 +118,7 @@ export function createWorkspaceTools(
   const skipAgentDoIgnore =
     options.skipAgentDoIgnore ?? Boolean(options.sandbox);
   const guard = createDenyGuard(workingDir, {
+    sandbox: options.sandbox,
     extra: options.exclude,
     includeSensitive: options.includeSensitive,
     skipAgentDoIgnore,
@@ -166,10 +167,10 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
       execute: async (args: unknown, ctx: unknown): Promise<ToolResult> => {
         const p = (args as { path?: string } | undefined)?.path ?? '';
         if (p) {
-          const read = guard.checkRead(p);
+          const read = await guard.checkRead(p);
           if (read.blocked) return blockedByDenyList(toolName, p, read);
           if (op !== 'read') {
-            const write = guard.checkWrite(p);
+            const write = await guard.checkWrite(p);
             if (write.blocked) return blockedByDenyList(toolName, p, write);
           }
         }
@@ -189,7 +190,7 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
       execute: async (args: unknown, ctx: unknown): Promise<ToolResult> => {
         const p = (args as { path?: string } | undefined)?.path ?? '';
         if (p) {
-          const decision = guard.checkWrite(p);
+          const decision = await guard.checkWrite(p);
           if (decision.blocked) return blockedByDenyList(toolName, p, decision);
         }
         return (await (originalExecute as Function)(args, ctx)) as ToolResult;
@@ -228,7 +229,7 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
           // deny rules matching workspace-relative globs (`.ssh/**`,
           // `.git/objects/**`, etc.) actually match.
           const rel = joinForCheck(basePath, m[2]);
-          if (guard.checkRead(rel).blocked) {
+          if ((await guard.checkRead(rel)).blocked) {
             hidden++;
             continue;
           }
@@ -266,7 +267,7 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
         for (const line of lines) {
           const colonIndex = line.indexOf(':');
           const maybePath = colonIndex > 0 ? line.slice(0, colonIndex) : line;
-          if (guard.checkRead(maybePath).blocked) {
+          if ((await guard.checkRead(maybePath)).blocked) {
             hidden++;
             continue;
           }
