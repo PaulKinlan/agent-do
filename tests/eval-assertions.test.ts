@@ -380,3 +380,34 @@ describe('custom assertion', () => {
     expect(r.message).toContain('boom');
   });
 });
+
+describe('regex assertions (agent-do-030)', () => {
+  it('gives the same answer when a /g pattern is evaluated twice', async () => {
+    // The compiled pattern is cached now, but a /g or /y regex carries lastIndex across test() calls: caching one
+    // would make this second evaluation disagree with the first. That is the trap the memoisation must avoid.
+    const assertion: Assertion = { type: 'regex', pattern: 'foo', flags: 'g' };
+    const first = await evaluateAssertion(assertion, makeResult({ text: 'foo bar foo' }));
+    const second = await evaluateAssertion(assertion, makeResult({ text: 'foo bar foo' }));
+    expect(first.passed).toBe(true);
+    expect(second).toEqual(first);
+  });
+
+  it('caches a stateless pattern without changing what it reports', async () => {
+    const assertion: Assertion = { type: 'regex', pattern: '^a+$', flags: 'i' };
+    for (let i = 0; i < 5; i++) {
+      const r = await evaluateAssertion(assertion, makeResult({ text: 'AAA' }));
+      expect(r.passed).toBe(true);
+      expect(r.message).toContain('/^a+$/i');
+    }
+  });
+
+  it('reports an invalid pattern as a failure every time', async () => {
+    const assertion: Assertion = { type: 'regex', pattern: '(', flags: undefined };
+    const first = await evaluateAssertion(assertion, makeResult({ text: 'anything' }));
+    const second = await evaluateAssertion(assertion, makeResult({ text: 'anything' }));
+    expect(first.passed).toBe(false);
+    // A failed compile must never be stored as some other result.
+    expect(second).toEqual(first);
+  });
+});
+
