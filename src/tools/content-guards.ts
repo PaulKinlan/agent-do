@@ -34,6 +34,8 @@ export const DEFAULT_MAX_GREP_LINE_BYTES = 4 * 1024;
  *   - "ignore previous/prior/above instructions"
  *   - "disregard all prior instructions"
  *   - `<system>` / `</system>` / `<<system>>` tags
+ *   - the `<tool_output>` boundary itself, so content cannot close the
+ *     frame early and have the rest read as instructions from outside it
  *   - markdown rulers like `--- system` / `--- instruction` / `--- override`
  *
  * We match case-insensitively and multi-line. Hits are *replaced* with a
@@ -42,7 +44,7 @@ export const DEFAULT_MAX_GREP_LINE_BYTES = 4 * 1024;
  * `redactedMarkerCount` field on the `ToolResult`.
  */
 export const INJECTION_MARKER_REGEX =
-  /(?:ignore|disregard)(?:\s+(?:all|the|any|these|those))?\s+(?:prior|previous|above|preceding)\s+instructions|<\/?system>|<<\s*system\s*>>|^---\s*(?:system|instruction|override)/gim;
+  /(?:ignore|disregard)(?:\s+(?:all|the|any|these|those))?\s+(?:prior|previous|above|preceding)\s+instructions|<\/?system>|<<\s*system\s*>>|^---\s*(?:system|instruction|override)|<\/?tool_output\b[^>]*>/gim;
 
 export type WrapOptions = WrapOrigin & {
   /** Tool that produced the content (read_file, memory_read, bash, etc.). */
