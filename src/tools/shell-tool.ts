@@ -48,6 +48,14 @@ import {
 const MAX_COMMAND_ATTR_CHARS = 200;
 
 /**
+ * Cap on a connector's error message before it is framed for the model.
+ * A rejection message can carry command output (node's `exec` embeds it),
+ * so it goes through the same guard as stdout/stderr instead of being
+ * concatenated raw.
+ */
+const ERROR_BODY_MAX_BYTES = 4 * 1024;
+
+/**
  * Slack added on top of the two per-stream caps when sizing the whole
  * framed body, so the per-stream `…[truncated]` markers stay the only
  * truncation a caller sees.
@@ -165,10 +173,28 @@ export function createShellTool(
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // A connector can reject with an error whose message contains
+        // command output, so the model-facing text goes through the same
+        // framing + redaction as a successful run. The raw message stays in
+        // `data`/`userSummary` for the operator.
+        const framed = wrapForModel(
+          `error: ${truncateUtf8ByBytes(message, ERROR_BODY_MAX_BYTES)}`,
+          {
+            tool: toolName,
+            command: summarizeCommand(command),
+            maxBytes: ERROR_BODY_MAX_BYTES + FRAMED_BODY_SLACK_BYTES,
+          },
+        );
         return {
-          modelContent: `Error running command: ${message}`,
+          modelContent: framed.content,
           userSummary: `[${toolName}] threw — ${message}`,
-          data: { command, error: true, message },
+          data: {
+            command,
+            error: true,
+            message,
+            redactedMarkerCount: framed.redactedMarkerCount,
+            neutralisedDelimiterCount: framed.neutralisedDelimiterCount,
+          },
         };
       }
       const durationMs = Date.now() - startedAt;
@@ -184,14 +210,22 @@ export function createShellTool(
           maxBytes: maxOutputBytes * 2 + FRAMED_BODY_SLACK_BYTES,
         },
       );
-      const markerNote =
-        framed.redactedMarkerCount > 0
-          ? `, redacted ${framed.redactedMarkerCount} potential injection marker${framed.redactedMarkerCount === 1 ? '' : 's'}`
-          : '';
+      const notes: string[] = [];
+      if (framed.redactedMarkerCount > 0) {
+        notes.push(
+          `redacted ${framed.redactedMarkerCount} potential injection marker${framed.redactedMarkerCount === 1 ? '' : 's'}`,
+        );
+      }
+      if (framed.neutralisedDelimiterCount > 0) {
+        notes.push(
+          `neutralised ${framed.neutralisedDelimiterCount} boundary tag${framed.neutralisedDelimiterCount === 1 ? '' : 's'}`,
+        );
+      }
+      const noteText = notes.length > 0 ? `, ${notes.join(', ')}` : '';
       const summary =
         `[${toolName}] exit=${result.exitCode}, ` +
         `${utf8ByteLength(result.stdout)}B stdout, ` +
-        `${utf8ByteLength(result.stderr)}B stderr, ${durationMs}ms${markerNote}`;
+        `${utf8ByteLength(result.stderr)}B stderr, ${durationMs}ms${noteText}`;
       return {
         modelContent: framed.content,
         userSummary: summary,
@@ -204,6 +238,7 @@ export function createShellTool(
           stdoutTruncated: stdout.truncated,
           stderrTruncated: stderr.truncated,
           redactedMarkerCount: framed.redactedMarkerCount,
+          neutralisedDelimiterCount: framed.neutralisedDelimiterCount,
           durationMs,
         },
       };

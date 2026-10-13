@@ -9,4 +9,8 @@ how you opt into host execution: `createShellTool(createHostSandbox())` runs com
 wiring a model-facing tool to the host shell. Shell stdout/stderr is also returned inside
 `<tool_output tool="…" command="…">` markers with the same prompt-injection-marker redaction `read_file` and
 `memory_read` apply, so command output — a fetched page, a log line, a filename — no longer reaches the model
-as unframed text; `ToolResult.data.redactedMarkerCount` reports how many markers were stripped.
+as unframed text; `ToolResult.data.redactedMarkerCount` reports how many markers were stripped. A rejection
+from the connector is framed the same way rather than passed through as a bare error string (the raw message
+stays in `ToolResult.data.message` / the user summary), and wrapped content can no longer close its own frame:
+a literal `<tool_output>` tag in a body is escaped, with the count in
+`ToolResult.data.neutralisedDelimiterCount`.
