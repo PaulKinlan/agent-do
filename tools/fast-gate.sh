@@ -177,6 +177,15 @@ fi
 TMP=$(mktemp -d)
 CHILD_PIDS=()
 CLEANED=0
+HAVE_SETSID=0
+HAVE_SESSION_KILL=0
+command -v setsid >/dev/null 2>&1 && HAVE_SETSID=1
+if command -v pkill >/dev/null 2>&1 && pkill --help 2>/dev/null | grep -q -- '--session'; then
+  HAVE_SESSION_KILL=1
+fi
+# Our own session id, so a malformed or empty session file can never make the sweep signal the gate itself (and
+# with it fleet-check, fleet-heavy and the caller).
+SELF_SID=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ') || SELF_SID=0
 
 # Signal a process and everything below it, children first. A process-group signal is not enough here:
 # `timeout` moves its child into a new process group (so that it can kill the command's own tree itself),
@@ -191,6 +200,30 @@ kill_tree() { # $1 = signal name, $2 = pid
   kill "-$1" "$2" 2>/dev/null || true
 }
 
+# Signal everything the suites left behind. The tree walk covers a run that is still in flight; the session
+# sweep covers the harder half — a suite that has ALREADY reported, whose runner's descendants are still alive
+# (measured: a PASSING gate run left three vitest processes holding the heavy slot until fleet-heavy killed
+# them). Those are invisible to a pid or a `pgrep -P` walk from the recorded child, because the child has been
+# reaped and its orphans reparented; session membership is the link that survives, which is why each suite is
+# started with `setsid` and writes its own pid (== its session id) to $TMP/$key.sid.
+reap() { # $1 = signal name
+  local pid sid
+  for pid in "${CHILD_PIDS[@]:-}"; do
+    [ -n "$pid" ] || continue
+    kill_tree "$1" "$pid"
+  done
+  [ "$HAVE_SESSION_KILL" = 1 ] || return 0
+  for sid in $(cat "$TMP"/*.sid 2>/dev/null || true); do
+    case "$sid" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    # Never signal our own session: that would take the caller down with the gate.
+    [ "$sid" -gt 1 ] 2>/dev/null || continue
+    [ "$SELF_SID" != "$sid" ] || continue
+    pkill "-$1" -s "$sid" 2>/dev/null || true
+  done
+}
+
 # Reap the suite processes BEFORE removing the scratch directory (agent-do-qmx). The old EXIT-only trap did
 # neither part: when the outer window (CHECK_FAST_TIMEOUT in tools/check.conf) killed this script, the
 # in-flight runners and their descendants kept holding the heavy slot until fleet-heavy killed ~15 leftover
@@ -200,24 +233,11 @@ cleanup() {
   [ "$CLEANED" = 1 ] && return 0
   CLEANED=1
   trap - EXIT INT TERM
-  local pid any=0
-  for pid in "${CHILD_PIDS[@]:-}"; do
-    [ -n "$pid" ] || continue
-    kill -0 "$pid" 2>/dev/null && any=1
-  done
-  if [ "$any" = 1 ]; then
-    # TERM the trees, give them a moment, then KILL whatever is left. Bounded, so a wedged runner cannot hold
-    # the slot here the way it did before this branch.
-    for pid in "${CHILD_PIDS[@]:-}"; do
-      [ -n "$pid" ] || continue
-      kill_tree TERM "$pid"
-    done
-    sleep 0.3
-    for pid in "${CHILD_PIDS[@]:-}"; do
-      [ -n "$pid" ] || continue
-      kill_tree KILL "$pid"
-    done
-  fi
+  # Unconditional, and not gated on a recorded child still being alive: a successful suite can leave a worker
+  # behind after its own subshell has been reaped, and that case has to be swept too.
+  reap TERM
+  sleep 0.3
+  reap KILL
   wait 2>/dev/null || true
   rm -rf "$TMP"
 }
@@ -239,9 +259,23 @@ printf 'fast-gate: running: %s\n' "${SELECTED[@]}"
 n=0
 for s in "${SELECTED[@]}"; do
   key=$(printf '%s' "$s" | tr '/.' '__')
-  # Each suite runs in its own subshell under the per-suite bound; its pid is what cleanup walks (kill_tree)
-  # so the runner, `timeout` and every test worker go down with it.
-  ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
+  if [ "$HAVE_SETSID" = 1 ]; then
+    # Own session per suite (see reap): `setsid` execs in place, so `$!` and the pid the inner shell records are
+    # the session id. RUNNER goes through the environment because it may carry arguments (`npx vitest run`),
+    # which must keep splitting.
+    RUNNER=$FAST_GATE_RUNNER setsid bash -c '
+      cd "$1" || exit 1
+      echo $$ >"$6"
+      # shellcheck disable=SC2086
+      timeout -k 15 "$2" $RUNNER "$3" >"$4" 2>&1
+      echo $? >"$5"
+    ' fast-gate-suite "$ROOT" "$SUITE_BOUND" "$s" "$TMP/$key.log" "$TMP/$key.rc" "$TMP/$key.sid" &
+  else
+    # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
+    echo "fast-gate: note: no setsid on this platform; suite processes are killed by tree, which can miss a" >&2
+    echo "fast-gate: note: runner's reparented orphans after the suite has reported." >&2
+    ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "$s" >"$TMP/$key.log" 2>&1; echo $? >"$TMP/$key.rc" ) &
+  fi
   CHILD_PIDS+=("$!")
   n=$((n + 1))
   if [ "$n" -ge "$JOBS" ]; then wait -n; n=$((n - 1)); fi

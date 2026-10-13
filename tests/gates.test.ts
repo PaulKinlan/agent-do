@@ -346,3 +346,53 @@ wait
     expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
   }, 30_000);
 });
+
+describe('tools/fast-gate.sh — a suite that leaves a process behind', () => {
+  it('reaps a descendant of a runner that exited successfully, and still reports the verdict', async () => {
+    // This is the shape fleet-heavy caught on a PASSING run (agent-do-qmx): three vitest processes held the
+    // heavy slot after the job finished. The runner here exits 0 and leaves a descendant, which is the part the
+    // pid-based cleanup cannot see — the subshell is reaped, the descendant is reparented, and `timeout` put
+    // the runner in its own process group, so only session membership still links them.
+    const fx = fixture();
+    const marker = `agent-do-gates-leftover-${process.pid}-${Date.now()}`;
+    const stub = join(fx.root, 'stub-leaky');
+    writeFileSync(
+      stub,
+      `#!/usr/bin/env bash
+echo "$1" >> "$RUN_LOG"
+# Not a single simple command: bash -c with one command would exec and drop the marker.
+bash -c 'while :; do sleep 5; done' "$MARKER" &
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
+      cwd: fx.repo,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
+    });
+
+    // The gate must still deliver its verdict: the cleanup runs after the suites have reported.
+    expect(`${r.stdout ?? ''}${r.stderr ?? ''}`).toContain('fast-gate: passed: tests/a.test.ts');
+    expect(r.status).toBe(0);
+
+    let stillAlive = true;
+    for (let i = 0; i < 20 && stillAlive; i++) {
+      stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+    }
+    if (stillAlive) {
+      const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of leaked.split('\n').filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+    expect(stillAlive, 'a suite left a process behind after the gate reported its verdict').toBe(false);
+  }, 30_000);
+});
