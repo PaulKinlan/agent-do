@@ -291,6 +291,10 @@ export async function mountMcpServers(
                   error: true,
                   message: msg,
                   neutralisedMarkers: wrapped.redactedMarkerCount,
+                  // Additive, so it does not collide with agent-do-t3r's rename
+                  // of the field above: the boundary-escape count belongs
+                  // wherever the redaction count is reported (agent-do-zfa).
+                  neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
                 },
               };
             }

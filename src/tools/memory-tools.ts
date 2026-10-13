@@ -87,6 +87,9 @@ export function createMemoryTools(
               lines,
               truncated: wrapped.truncated,
               redactedMarkerCount: wrapped.redactedMarkerCount,
+              // See the read_file row: the count is reported wherever the
+              // redaction count already is (agent-do-zfa).
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
             },
           };
         } catch (err) {
