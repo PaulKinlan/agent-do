@@ -16,35 +16,30 @@
  *    whitespace-only lines after it are skipped (the old `\s*\n` did that
  *    too); other leading whitespace on the first content line is preserved.
  *  - **closing fence**: a later line whose content is exactly `---`, also
- *    terminated by a newline. A bare trailing `---` at EOF is not a fence.
+ *    terminated by a newline. A bare trailing `---` at EOF is not a fence. A
+ *    fence that would close an *empty* block (it sits immediately at the start
+ *    of the frontmatter) is skipped when a later fence exists — the regex
+ *    could not close there either, because its `\n---` needs a newline the
+ *    opening `\s*\n` had not already consumed. This matters in practice: in
+ *    `---\n\n---\nname: x\n---\nbody` that second fence is YAML's own document
+ *    marker, so the metadata after it must still be parsed instead of being
+ *    pushed into the body behind an empty block.
  *  - `frontmatter` is the text strictly between the fence lines; `body` is
  *    everything after the closing fence line, with blank/whitespace-only
  *    lines immediately after it skipped (again, the old `\s*\n`).
  *  - an opening fence with no closing fence → `null` (no frontmatter).
  *
- * One deliberate difference, and it is the same mechanism seen from two sides:
- * **the scanner closes on the first `---`-only line after the opening fence;
- * the old skills/routines regex could only close on a `---` line that still had
- * an unconsumed `\n` in front of it**, because the opening `\s*\n` may eat
- * blank lines and the newline that precedes that fence. So:
- *  - two adjacent fences (`---\n---\nrest`): the scanner returns an empty
- *    frontmatter and `rest` as the body; the regex consumed the only newline
- *    before the second fence, so it found no closing fence at all and the
- *    callers saw the whole document as the body.
- *  - blank lines before the first content fence
- *    (`---\n\n---\nline 1\n---\nline 2`): the scanner closes at the second
- *    fence (empty frontmatter, body `line 1\n---\nline 2`); the regex skipped
- *    that fence and closed on the third, reporting frontmatter `---\nline 1`
- *    and body `line 2`.
- * policies and shellm already behaved the scanner's way; skills and routines
- * are now uniform with them. It is not observable beyond "where does the empty
- * or multiple-fence metadata block end": every caller YAML-parses the
- * frontmatter and trims the body.
+ * Two differences remain, and they are the same case seen twice — a document
+ * whose first fence pair is adjacent, or separated by blank lines only:
+ *  - `---\n---\nrest` and `---\n\n---\nrest` return an empty frontmatter and
+ *    `rest` as the body; the regex found no closing fence at all and callers
+ *    saw the whole document as the body. policies and shellm already behaved
+ *    the scanner's way; skills and routines are now uniform with them.
+ *  - a frontmatter block that is *entirely* whitespace (`---\n \n---\nbody`)
+ *    comes back as `''` rather than as that whitespace run.
  *
- * A second, unobservable difference: a frontmatter block that is *entirely*
- * whitespace (`---\n \n---\nbody`) comes back as `''` rather than as that
- * whitespace run, because the scan commits to the maximal skip where the old
- * regex backtracked. Every caller YAML-parses the frontmatter, and
+ * Both are unobservable beyond "this document has an empty metadata block":
+ * every caller YAML-parses the frontmatter and trims the body, and
  * `YAML.parse(' ')` and `YAML.parse('')` are both "no metadata".
  */
 
@@ -70,6 +65,12 @@ export function splitFrontmatter(content: string): FrontmatterSplit | null {
   const afterOpen = afterFenceWhitespace(content, 3);
   if (afterOpen === -1) return null;
 
+  // A fence sitting immediately at the start of the frontmatter would close an
+  // empty block. Prefer a later fence when there is one (see the header
+  // comment); keep the empty block as the fallback for a document that has no
+  // other fence to close on.
+  let emptyCandidate: FrontmatterSplit | null = null;
+
   // Closing fence: the next `---`-only line. Linear scan, no backtracking.
   let lineStart = afterOpen;
   while (lineStart <= content.length) {
@@ -79,16 +80,17 @@ export function splitFrontmatter(content: string): FrontmatterSplit | null {
       // `---` line at [lineStart, lineEnd). It's a valid closing fence only
       // if followed by a line ending (the old `\n---\s*\n` requirement).
       if (lineEnd >= content.length) break; // bare trailing `---` → keep scanning → no match
-      const frontEnd = Math.max(afterOpen, lineStart - 1);
-      return {
-        frontmatter: content.slice(afterOpen, frontEnd),
+      const split: FrontmatterSplit = {
+        frontmatter: content.slice(afterOpen, Math.max(afterOpen, lineStart - 1)),
         body: content.slice(skipBlankLines(content, lineEnd + 1)),
       };
+      if (lineStart !== afterOpen) return split;
+      if (!emptyCandidate) emptyCandidate = split;
     }
     if (nextNl === -1) break;
     lineStart = nextNl + 1;
   }
-  return null;
+  return emptyCandidate;
 }
 
 /**

@@ -93,11 +93,39 @@ describe('splitFrontmatter', () => {
     });
   });
 
-  it('normalisation: two adjacent fences give an empty frontmatter', () => {
-    // Documented behaviour change: the old regex could not match this shape
-    // (the opening fence consumes the only newline before `---`), so callers
-    // saw the whole document as the body. policies/shellm already behaved the
-    // new way; skills/routines are now uniform with them.
+  it('skips an empty fence when a later fence closes the real frontmatter', () => {
+    // agent-do-432 (found by the round-2 review of this branch): the second
+    // fence here is YAML's own document marker, so closing on it would push the
+    // metadata into the body and parse nothing. The old regex could not close
+    // there either, and the scan now matches it exactly.
+    const doc = '---\n\n---\nname: valid\ndescription: enabled\n---\nbody';
+    expect(PREVIOUS_REGEX.exec(doc)!.slice(1)).toEqual([
+      '---\nname: valid\ndescription: enabled',
+      'body',
+    ]);
+    expect(splitFrontmatter(doc)).toEqual({
+      frontmatter: '---\nname: valid\ndescription: enabled',
+      body: 'body',
+    });
+  });
+
+  it('parses the metadata that follows a blank line and a fence (agent-do-432 end to end)', () => {
+    const doc = '---\n\n---\nname: valid\ndescription: enabled\n---\nbody';
+    const skill = parseSkillMd(doc, 'fallback-id');
+    expect(skill.name).toBe('valid');
+    expect(skill.description).toBe('enabled');
+    expect(skill.content).toBe('body');
+
+    const routine = parseRoutineMd(doc, 'fallback-id');
+    expect(routine.name).toBe('valid');
+    expect(routine.description).toBe('enabled');
+    expect(routine.body).toBe('body');
+  });
+
+  it('normalisation: two adjacent fences with no later fence give an empty frontmatter', () => {
+    // The one remaining difference: the regex found no closing fence here at
+    // all, so callers saw the whole document as the body (policies/shellm
+    // already behaved the scanner's way).
     expect(PREVIOUS_REGEX.exec('---\n---\nrest')).toBeNull();
     expect(splitFrontmatter('---\n---\nrest')).toEqual({
       frontmatter: '',
@@ -105,19 +133,16 @@ describe('splitFrontmatter', () => {
     });
   });
 
-  it('normalisation: blank lines before the first content fence close there, not later', () => {
-    // Same mechanism as the adjacent-fence case, one blank line out: the old
-    // regex skipped the second fence (its preceding newline was consumed by
-    // the opening `\s*\n`) and closed on the third instead, reporting a
-    // frontmatter that started with a `---` line. The scanner stops at the
-    // first `---` line it finds.
+  it('prefers a later fence after blank lines before the first content fence', () => {
+    // Same mechanism as the agent-do-432 case, one line further out, and here
+    // the scan and the regex agree exactly.
     expect(PREVIOUS_REGEX.exec('---\n\n---\nline 1\n---\nline 2')!.slice(1)).toEqual([
       '---\nline 1',
       'line 2',
     ]);
     expect(splitFrontmatter('---\n\n---\nline 1\n---\nline 2')).toEqual({
-      frontmatter: '',
-      body: 'line 1\n---\nline 2',
+      frontmatter: '---\nline 1',
+      body: 'line 2',
     });
   });
 
