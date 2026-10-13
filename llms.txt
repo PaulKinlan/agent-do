@@ -46,7 +46,7 @@
 - Sandboxing is **per-provider** — there is no `AgentConfig.sandbox` field. Each store/tool decides whether to route through one.
 - `SandboxApi` contract (Flue spec): readFile, readFileBuffer, writeFile, stat, readdir, exists, mkdir, rm, exec
 - Connectors:
-  - `createHostSandbox(opts?)` — direct host passthrough; **not a security boundary**
+  - `createHostSandbox(opts?)` — direct host passthrough; **not a security boundary**. `exec()` builds a fail-closed environment instead of inheriting the parent's: `PATH`, `HOME`, `LANG`, `LANGUAGE`, `LC_*`, `TMPDIR`, `TZ`, `TERM`, `SHELL`, `USER`, `LOGNAME`, `NODE_ENV`, plus the Windows platform set (`SystemRoot`, `COMSPEC`, `APPDATA`, `TEMP`, …) only on Windows. `opts.envPassthrough: string[]` forwards extra **exact** names (never patterns); `opts.inheritEnv: true` forwards the whole parent environment (pre-0.8 behaviour — only for commands that genuinely need it); `opts.cwd` sets the default working directory. `ExecOptions.env` is caller-supplied library code and wins over all three.
   - `createJustBashSandbox(opts?)` / `wrapJustBashSandbox(instance)` — vercel-labs/just-bash virtual fs + bash interpreter (optional peer dep)
 - How to route through a sandbox:
   - Memory: `createMemoryTools(new SandboxBackedMemoryStore(sandbox, '/memory'), agentId)`
