@@ -29,6 +29,12 @@
  * policies and shellm already behaved the new way. Uniform semantics wins:
  * every caller YAML-parses the frontmatter, so the only visible difference is
  * "this document has an empty metadata block".
+ *
+ * A second, unobservable difference: a frontmatter block that is *entirely*
+ * whitespace (`---\n \n---\nbody`) comes back as `''` rather than as that
+ * whitespace run, because the scan commits to the maximal skip where the old
+ * regex backtracked. Every caller YAML-parses the frontmatter, and
+ * `YAML.parse(' ')` and `YAML.parse('')` are both "no metadata".
  */
 
 export interface FrontmatterSplit {
@@ -43,8 +49,13 @@ export interface FrontmatterSplit {
  * there is no valid frontmatter fence.
  */
 export function splitFrontmatter(content: string): FrontmatterSplit | null {
-  // Opening fence: the first line must be `---` (+ optional horizontal ws)
-  // and must be terminated by a newline.
+  // Opening fence: the document itself must start with `---`. Whitespace and
+  // blank lines come after the dashes (`---\u00a0\n`, `---\n\nname: x`), never
+  // instead of them — without this check any 3-character first line would be
+  // treated as a fence.
+  if (content[0] !== '-' || content[1] !== '-' || content[2] !== '-') return null;
+  // The fence line must be terminated by a newline; blank lines after it are
+  // skipped (the old `\s*\n`).
   const afterOpen = afterFenceWhitespace(content, 3);
   if (afterOpen === -1) return null;
 
@@ -99,14 +110,17 @@ function skipBlankLines(content: string, from: number): number {
 
 /**
  * If the line starting at `start` is exactly `---` optionally followed by
- * trailing horizontal whitespace (` ` / `\t` / `\r`), return the index just
- * past the line's content (the position of the terminating `\n` or EOF).
- * Otherwise return -1.
+ * trailing whitespace, return the index just past the line's content (the
+ * position of the terminating `\n` or EOF). Otherwise return -1.
+ *
+ * The trailing set is any whitespace except a newline, because that is what
+ * the old `\n---\s*\n` accepted (`\s*` could hold tabs, `\r`, NBSP, `\ufeff`,
+ * … — the required `\n` is what closed the fence).
  */
 function fenceLineEnd(s: string, start: number): number {
   if (s[start] !== '-' || s[start + 1] !== '-' || s[start + 2] !== '-') return -1;
   let i = start + 3;
-  while (s[i] === ' ' || s[i] === '\t' || s[i] === '\r') i++;
+  while (i < s.length && s[i] !== '\n' && isWhitespace(s[i])) i++;
   return i;
 }
 

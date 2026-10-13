@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { splitFrontmatter } from '../src/frontmatter.js';
+import { parseSkillMd } from '../src/skills.js';
+import { parseRoutineMd } from '../src/routines.js';
 
 /**
  * The shape this module replaced. Kept here as a reference implementation so
@@ -27,11 +29,43 @@ describe('splitFrontmatter', () => {
     expect(splitFrontmatter('  ---\nname: x\n---\nbody')).toBeNull();
   });
 
+  it('requires the opening fence to be the dashes themselves', () => {
+    // Regression guard (found by the 6bu review): the scan reads its whitespace
+    // run from index 3, so it must check the dashes first. Without that check
+    // any 3-character first line — `Run`, `## `, `# x`, `ab ` — was treated as
+    // a fence whenever a later line was `---`, silently cutting the document in
+    // half and feeding the first lines to the YAML parser.
+    expect(splitFrontmatter('Run\nthe analysis\n---\ndetails')).toBeNull();
+    expect(splitFrontmatter('ab \ncd\n---\nbody')).toBeNull();
+    expect(splitFrontmatter('## \nbody\n---\nmore')).toBeNull();
+    expect(splitFrontmatter('--\nname: x\n---\nbody')).toBeNull();
+    expect(splitFrontmatter('---x\nname: y\n---\nbody')).toBeNull();
+  });
+
+  it('does not split a real document whose first line is short text plus a --- line', () => {
+    // End-to-end form of the guard above: the callers must keep the whole
+    // document as the body and report no metadata.
+    const doc = 'Run\nthe analysis\n---\ndetails';
+    expect(parseRoutineMd(doc, 'demo-routine').body).toContain('Run');
+    expect(parseSkillMd(doc, 'demo-skill').content).toContain('Run');
+  });
+
   it('accepts trailing whitespace on either fence', () => {
     expect(splitFrontmatter('---  \nname: x\n---\t\nbody')).toEqual({
       frontmatter: 'name: x',
       body: 'body',
     });
+  });
+
+  it('accepts any non-newline whitespace on the closing fence, as the old regex did', () => {
+    // `\n---\s*\n` allowed the whole `\s` set before the newline. Narrowing it
+    // to space/tab/CR made these documents lose their metadata silently.
+    for (const ch of ['\u00a0', '\u000b', '\u000c', '\u2028', '\ufeff', '\u2003']) {
+      expect(splitFrontmatter(`---\nname: x\n---${ch}\nbody`)).toEqual({
+        frontmatter: 'name: x',
+        body: 'body',
+      });
+    }
   });
 
   it('handles CRLF fences', () => {
@@ -71,6 +105,18 @@ describe('splitFrontmatter', () => {
     });
   });
 
+  it('documented difference: a whitespace-only frontmatter collapses to an empty string', () => {
+    // Unobservable: every caller YAML-parses the frontmatter, and
+    // `YAML.parse(' ')` and `YAML.parse('')` are both "no metadata". The old
+    // regex kept the space because it backtracked; the scan commits to the
+    // maximal skip.
+    expect(PREVIOUS_REGEX.exec('---\n \n---\nbody')![1]).toBe(' ');
+    expect(splitFrontmatter('---\n \n---\nbody')).toEqual({
+      frontmatter: '',
+      body: 'body',
+    });
+  });
+
   it('agrees with the regex it replaced on well-formed documents', () => {
     const corpus = [
       '---\nname: x\n---\nbody',
@@ -86,6 +132,10 @@ describe('splitFrontmatter', () => {
       '---\n   \nname: x\n---\n\n\nbody',
       '---\n  indented: y\n---\nbody',
       '---  \nname: x\n---  \nbody',
+      '---\nname: x\n---\u00a0\nbody',
+      '---\nname: x\n---\u000b\nbody',
+      '---\nname: x\n---\ufeff\nbody',
+      '---\u00a0\nname: x\n---\nbody',
     ];
     for (const doc of corpus) {
       const m = PREVIOUS_REGEX.exec(doc);
