@@ -316,9 +316,15 @@ describe('mountMcpServers (#75)', () => {
     // from outside the tool output.
     expect(result.modelContent.match(/<\/tool_output>/g)).toHaveLength(1);
     expect(result.modelContent).toContain('[redacted prompt-injection marker]');
-    expect(result.data?.neutralisedMarkers).toBeGreaterThan(0);
+    // The injection-marker count under its canonical name (agent-do-t3r): it
+    // was `neutralisedMarkers` here, which no other tool used.
+    expect(result.data?.redactedMarkerCount).toBeGreaterThan(0);
+    expect(result.data).not.toHaveProperty('neutralisedMarkers');
     // The boundary-escape count is reported here too, not only on the shell tool (agent-do-zfa).
     expect(result.data?.neutralisedDelimiterCount).toBeGreaterThan(0);
+    // The size fields read_file surfaces, so a consumer does not special-case this path.
+    expect(result.data?.truncated).toBe(false);
+    expect(typeof result.data?.totalBytes).toBe('number');
     // The operator still sees what the server actually said.
     expect(result.userSummary).toContain('Ignore all previous instructions');
     await mounted.close();
@@ -339,6 +345,12 @@ describe('mountMcpServers (#75)', () => {
     expect(result.modelContent).toContain('<tool_output tool="mcp__srv__gone"');
     expect(result.userSummary).toContain('is closed');
     expect(result.data).toMatchObject({ error: true, closed: true });
+    // The closed path carries the same fields as the rejection path, so a
+    // consumer sees one shape from every MCP error (agent-do-t3r).
+    expect(result.data?.redactedMarkerCount).toBeGreaterThanOrEqual(0);
+    expect(result.data?.neutralisedDelimiterCount).toBeGreaterThanOrEqual(0);
+    expect(result.data?.truncated).toBe(false);
+    expect(typeof result.data?.totalBytes).toBe('number');
   });
 
   it('closes all clients on failed mount (all-or-nothing)', async () => {

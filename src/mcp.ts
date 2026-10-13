@@ -240,13 +240,26 @@ export async function mountMcpServers(
             if (closed) {
               // Same framing contract as the paths below: the model never gets
               // a bare string from an MCP tool (agent-do-hvz).
+              const wrapped = wrapForModel(
+                `Error calling ${toolName}: MCP server "${config.name}" is closed.`,
+                { tool: toolName, path: `${config.name}:${mcpTool.name}` },
+              );
               return {
-                modelContent: wrapForModel(
-                  `Error calling ${toolName}: MCP server "${config.name}" is closed.`,
-                  { tool: toolName, path: `${config.name}:${mcpTool.name}` },
-                ).content,
+                modelContent: wrapped.content,
                 userSummary: `[${toolName}] refused — server "${config.name}" is closed`,
-                data: { server: config.name, tool: mcpTool.name, error: true, closed: true },
+                // One shape for every MCP error path, so a consumer parsing
+                // ToolResult.data does not have to special-case this one
+                // (agent-do-t3r).
+                data: {
+                  server: config.name,
+                  tool: mcpTool.name,
+                  error: true,
+                  closed: true,
+                  redactedMarkerCount: wrapped.redactedMarkerCount,
+                  neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+                  truncated: wrapped.truncated,
+                  totalBytes: wrapped.totalBytes,
+                },
               };
             }
             try {
@@ -290,11 +303,18 @@ export async function mountMcpServers(
                   tool: mcpTool.name,
                   error: true,
                   message: msg,
-                  neutralisedMarkers: wrapped.redactedMarkerCount,
-                  // Additive, so it does not collide with agent-do-t3r's rename
-                  // of the field above: the boundary-escape count belongs
-                  // wherever the redaction count is reported (agent-do-zfa).
+                  // The injection-marker count is `redactedMarkerCount`
+                  // everywhere, which is what read_file and the shell tool
+                  // report. It was `neutralisedMarkers` here - a third name for
+                  // a quantity that already had one (agent-do-t3r).
+                  redactedMarkerCount: wrapped.redactedMarkerCount,
+                  // Not a synonym: this counts `<tool_output>` boundary tags
+                  // escaped, where the count above counts injection phrases.
+                  // Both belong wherever redaction is reported (agent-do-zfa).
                   neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+                  // Same fields the closed path and the file tools surface.
+                  truncated: wrapped.truncated,
+                  totalBytes: wrapped.totalBytes,
                 },
               };
             }
