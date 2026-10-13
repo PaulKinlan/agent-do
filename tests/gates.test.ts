@@ -1,8 +1,9 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { once } from 'node:events';
 import { afterAll, describe, expect, it } from 'vitest';
 
 /**
@@ -20,8 +21,77 @@ import { afterAll, describe, expect, it } from 'vitest';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOTS: string[] = [];
 
+/**
+ * Fixture teardown has to stop processes as well as delete directories, and it has to do it before the
+ * directory goes away: the path IS the handle. The probe below is bounded on purpose - a fix for leaks
+ * must not become the next leak, so the test never depends on the code under test to end it.
+ */
+describe('fixture teardown', () => {
+  it('kills a process still running out of the fixture root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
+    ROOTS.push(root);
+    const marker = join(root, 'probe');
+    const child = spawn('bash', ['-c', 'while :; do sleep 1; done', marker]);
+    try {
+      await once(child, 'spawn');
+      await new Promise((done) => setTimeout(done, 250));
+      const pids = () => spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim();
+      expect(pids(), 'the probe must be visible to the same match teardown uses').not.toBe('');
+
+      expect(reapFixtureProcesses(root)).toBeGreaterThan(0);
+      expect(pids(), 'teardown must leave nothing matching the fixture root').toBe('');
+      const exited = await Promise.race([
+        once(child, 'exit').then(() => true),
+        new Promise((done) => setTimeout(() => done(false), 2000)),
+      ]);
+      expect(exited, 'the probe itself must be gone, not merely detached').toBe(true);
+    } finally {
+      child.kill('SIGKILL');
+    }
+  });
+});
+
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/**
+ * Kill anything still running out of a fixture root, while the path is still there to match on.
+ *
+ * WHY this exists: a bound-kill case deliberately starts a gate that will not stop on its own. While the
+ * suite is exercising a revision that does NOT reap (that is the behaviour under test when the case is
+ * written against an older tip), the gate can outlive the assertion, and today's leak showed what that
+ * costs: five orphaned fixture gates, stuck for two hours in the static step, each one invisible to the
+ * reaper because its argv contains no marker-shaped name. Cleanup that only removes the directory is not
+ * cleanup - it leaves the process running against a path that no longer exists, which nothing can then
+ * find. The pattern carries the trailing separator so a sibling fixture (or a longer mkdtemp name) can
+ * never match, and it is applied BEFORE the removal for the same reason it is applied at all.
+ */
+function reapFixtureProcesses(root: string): number {
+  const pattern = `${root}/`;
+  const find = () =>
+    spawnSync('pgrep', ['-f', '--', pattern], { encoding: 'utf8' })
+      .stdout.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+  const pids = find();
+  if (pids.length === 0) return 0;
+  spawnSync('kill', ['-TERM', ...pids]);
+  // A gate wedged behind a foreground child ignores TERM until that child exits - the exact bug this file
+  // pins - so the wait is short and the KILL is what actually ends it.
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (find().length === 0) return pids.length;
+    sleepSync(50);
+  }
+  spawnSync('kill', ['-KILL', ...pids]);
+  return pids.length;
+}
+
 afterAll(() => {
-  for (const dir of ROOTS) rmSync(dir, { recursive: true, force: true });
+  for (const dir of ROOTS) {
+    reapFixtureProcesses(dir);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
