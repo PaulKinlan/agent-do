@@ -155,8 +155,12 @@ function reapFixtureProcesses(root: string): number {
   const alive = (pid: string) => spawnSync('kill', ['-0', pid]).status === 0;
 
   // A child that inherits the fixture as its working directory is findable even after its parent is gone,
-  // which is the case a walk cannot reach. Only reached when something has already matched, so a green run
-  // pays nothing for it, and another user's process simply reads as an error and is skipped.
+  // which is the case a walk cannot reach. This runs on EVERY pass, including passes where the argv match is
+  // empty, and that is deliberate rather than an oversight: by the second pass the parent is usually gone,
+  // so an empty argv match is exactly the situation where cwd is the only handle left on a reparented child.
+  // Guarding this on a non-empty argv match would silently reintroduce agent-do-51j. The cost is one /proc
+  // scan only while a fixture has actually leaked something, and another user's process reads as an error
+  // and is skipped.
   const byWorkingDirectory = () => {
     if (!existsSync('/proc')) return [];
     const found: string[] = [];
