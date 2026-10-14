@@ -455,19 +455,78 @@ describe('realpathSafe on generated symlink graphs (agent-do-zuy)', () => {
       const chained = `${dirs[0]}/chain`;
       await fs.promises.symlink(nodePath.relative(p(...dirs[0].split('/')), p(...links[0].split('/'))), p(...chained.split('/')));
 
-      const traversesLink = (candidate: string) =>
-        [...links, chained].some((l) => candidate === l || candidate.startsWith(`${l}/`));
+      // DIRECTORY links, so a candidate can walk THROUGH a link instead of stopping at one (agent-do-108).
+      // Every leaf link above targets a FILE, so no generated candidate ever had a link as an ancestor: the
+      // fixed oracle had exactly one hand-written link-dir and the generator could not reach that shape at all.
+      // Each link targets a dedicated subtree containing a file, so a candidate can always continue past the
+      // link with a suffix that EXISTS - which is what lets fs.realpath stay the oracle instead of a hedge.
+      const targets: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        const t = `${dirs[i % dirs.length]}/target${i}`;
+        await fs.promises.mkdir(p(...t.split('/')), { recursive: true });
+        await fs.promises.writeFile(p(...t.split('/'), 'leaf.txt'), 'x');
+        targets.push(t);
+      }
+      // A link INSIDE a target subtree, pointing at a file in another one: traversing that path crosses two
+      // links at different depths, which is the "links at each depth as traversed components" the bead asks for.
+      await fs.promises.symlink(
+        nodePath.relative(p(...targets[0].split('/')), p(...targets[1].split('/'), 'leaf.txt')),
+        p(...targets[0].split('/'), 'inner-link'),
+      );
 
-      for (const candidate of [...files, ...links, chained]) {
+      const dirLinks: Array<{ name: string; target: string }> = [];
+      for (let i = 0; i < 3; i++) {
+        const parent = dirs[Math.floor(rng() * dirs.length)];
+        const target = targets[Math.floor(rng() * targets.length)];
+        const name = `${parent}/dlink${i}`;
+        await fs.promises.symlink(
+          rng() < 0.3 ? p(...target.split('/')) : nodePath.relative(p(...parent.split('/')), p(...target.split('/'))),
+          p(...name.split('/')),
+        );
+        dirLinks.push({ name, target });
+      }
+      // A directory link whose target is ANOTHER directory link, so following it lands on a link.
+      const chainedDir = { name: `${dirs[0]}/dchain`, target: dirs[0] };
+      await fs.promises.symlink(
+        nodePath.relative(p(...dirs[0].split('/')), p(...dirLinks[0].name.split('/'))),
+        p(...chainedDir.name.split('/')),
+      );
+
+      const allDirLinks = [...dirLinks, chainedDir];
+      // Through a link, through a link with a nested suffix, through a link followed by ".." (which POSIX
+      // resolves against the TARGET's directory, not the link's parent), and through two links in one path.
+      const throughLinks = allDirLinks.flatMap(({ name, target }) => [
+        `${name}/leaf.txt`,
+        `${name}/../${nodePath.basename(target)}`,
+      ]);
+      throughLinks.push(`${chainedDir.name}/leaf.txt`);
+      throughLinks.push(`${dirLinks[0].name}/inner-link`);
+
+      const linkNames = [...links, chained, ...allDirLinks.map((l) => l.name)];
+      const traversesLink = (candidate: string) =>
+        linkNames.some((l) => candidate === l || candidate.startsWith(`${l}/`));
+
+      for (const candidate of [...files, ...links, chained, ...throughLinks]) {
         const target = p(...candidate.split('/'));
         const expected = await platformAnswer(target);
         if (expected === undefined) continue;
-        const result = await realpathSafe(sandbox(), target, nodePath);
-        expect(result.ok, `seed ${seed}, ${candidate}: expected a resolution`).toBe(true);
-        expect(okPath(result), `seed ${seed}, ${candidate}`).toBe(expected);
-        if (traversesLink(candidate)) {
-          // rule 2 - only meaningful where the path contains a link.
-          expect(okPath(result), `seed ${seed}, ${candidate}: returned the alias`).not.toBe(target);
+        // BOTH connectors, and this is the difference between testing the walk and testing the connector.
+        // With `realpath` available the connector canonicalises the whole path in ONE call, so the walk's own
+        // expansion is never exercised - measured: a mutation that bases a relative target on the link's own path
+        // instead of its directory changes NOTHING here (the connector answers first). Without `realpath` the walk
+        // expands every component itself, which is where rules 3-6 live and where every finding in this area was.
+        for (const [label, sb] of [['host', sandbox()], ['walk (no realpath)', sandboxWithoutRealpath()]] as const) {
+          const result = await realpathSafe(sb, target, nodePath);
+          expect(result.ok, `seed ${seed}, ${candidate} [${label}]: expected a resolution`).toBe(true);
+          expect(okPath(result), `seed ${seed}, ${candidate} [${label}]`).toBe(expected);
+        if (traversesLink(candidate) && !candidate.includes('/../')) {
+          // rule 2 - only meaningful where the path contains a link AND the alias would be visible in the
+          // answer. A candidate with ".." AFTER a link cannot show it: nodePath.join has already normalised the
+          // ".." lexically, so "the path the caller asked for" and the correctly-resolved answer are the same
+          // string, and a resolver that ignored the link entirely would return that same string too. Those
+          // candidates are checked by rule 1 (exact agreement with fs.realpath), which is the stronger oracle.
+            expect(okPath(result), `seed ${seed}, ${candidate} [${label}]: returned the alias`).not.toBe(target);
+          }
         }
       }
     }

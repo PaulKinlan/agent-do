@@ -493,6 +493,17 @@ export async function realpathSafe(
   p: string,
   pathApi: PathApi,
 ): Promise<ResolvedPath> {
+  // `hops` lives in an object so that a nested walk (see the relative-target base below) SHARES the budget with
+  // its caller. Without that, canonicalising a prefix could expand links without bound.
+  return walkToRealpath(sandbox, p, pathApi, { hops: 0 });
+}
+
+async function walkToRealpath(
+  sandbox: SandboxApi,
+  p: string,
+  pathApi: PathApi,
+  budget: { hops: number },
+): Promise<ResolvedPath> {
   // There is deliberately no capability shortcut here. A connector without
   // `realpath` can still *report* a symlink - just-bash does, via `[ -L ]` in its
   // stat - so the walk runs either way and the presence of a primitive decides
@@ -502,7 +513,6 @@ export async function realpathSafe(
   const canRealpath = typeof sandbox.realpath === 'function';
   let parts: string[] = [];
   let current = p;
-  let hops = 0;
   for (;;) {
     // 1. Does this path exist? If so, realpath is a positive attestation.
     if (canRealpath) {
@@ -542,8 +552,8 @@ export async function realpathSafe(
     // the link's own name is precisely the bypass (agent-do-vn9).
     if (isLink) {
       if (!sandbox.readlink) return UNRESOLVED;
-      hops += 1;
-      if (hops > MAX_SYMLINK_HOPS) return UNRESOLVED;
+      budget.hops += 1;
+      if (budget.hops > MAX_SYMLINK_HOPS) return UNRESOLVED;
       let link: string;
       try {
         link = await sandbox.readlink(current);
@@ -554,9 +564,23 @@ export async function realpathSafe(
         return UNRESOLVED;
       }
       if (typeof link !== 'string') return UNRESOLVED;
-      const target = pathApi.isAbsolute(link)
-        ? link
-        : pathApi.join(pathApi.dirname(current), link);
+      let base: string;
+      if (pathApi.isAbsolute(link)) {
+        base = link;
+      } else {
+        // A relative target is relative to the directory CONTAINING the link, and that directory must be
+        // CANONICAL before a relative target is joined to it (agent-do-utb). This walk goes bottom-up, starting at
+        // the full path, so `current`'s prefix may still contain an unresolved ancestor link; joining against it
+        // let the target's own ".." cancel that ancestor's name, after which the walk never revisited it and
+        // returned an ATTESTED WRONG PATH (d0/d2/dlink0 -> ../d1/target0 with d0/d1/target0/inner-link ->
+        // ../target1/leaf.txt answered d0/d2/target1/leaf.txt instead of d0/d1/target1/leaf.txt). Canonicalising
+        // the containing directory first removes the ambiguity, and `budget` is shared so a nested walk cannot
+        // expand more links than the caller's own budget allows.
+        const containingDir = await walkToRealpath(sandbox, pathApi.dirname(current), pathApi, budget);
+        if (!containingDir.ok) return UNRESOLVED;
+        base = containingDir.path;
+      }
+      const target = pathApi.isAbsolute(link) ? base : pathApi.join(base, link);
       current = parts.length ? pathApi.join(target, ...parts) : target;
       parts = [];
       continue;
