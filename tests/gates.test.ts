@@ -896,3 +896,20 @@ describe('tools/fast-gate.sh — a bound kill during the static step', () => {
   }, 45_000);
 });
 
+describe('the gate re-checks its own generated metadata (agent-do-s5u)', () => {
+  it('runs the suite-map sync check in the static step, before the build', () => {
+    // A stale map is INVISIBLE to the fast tier: tests/gates.test.ts only runs when the map itself is among the
+    // changed files, so a branch that adds an import edge selects a suite set which EXCLUDES the test that would
+    // catch it - green locally, red only at the merger's full gate (25-45 min of the one heavy slot). The static
+    // step is the same command in both tiers, so pinning it here is what stops a later tools/gate.conf edit from
+    // silently dropping the check that agent-do-s5u added.
+    const conf = readFileSync(join(REPO, 'tools', 'gate.conf'), 'utf8');
+    const staticCmd = /^STATIC_CMD="([^"]*)"/m.exec(conf)?.[1];
+    expect(staticCmd, 'tools/gate.conf must define STATIC_CMD as one double-quoted line').toBeTruthy();
+    expect(staticCmd!).toContain('tools/gen-suite-map.mjs --check');
+    // Order matters: the check is sub-second and needs no suites, so it must fail before the ~14s build.
+    expect(staticCmd!.indexOf('gen-suite-map')).toBeLessThan(staticCmd!.indexOf('npm run build'));
+    // And it must be a real check, not an echo: --check exits non-zero on drift (measured, agent-do-s5u).
+    expect(staticCmd!).not.toContain('--check ||');
+  });
+});
