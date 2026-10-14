@@ -37,6 +37,28 @@ import {
   type DenyGuard,
 } from './deny-list.js';
 import type { ToolResult } from './types.js';
+import { wrapForModel } from './content-guards.js';
+
+/**
+ * The structured match records grep_file / memory_search put in `ToolResult.data.matches`.
+ *
+ * Validated rather than trusted: the deny-list decision reads `path`, so anything other than a string path
+ * is treated as "no usable list" and nothing is passed through. Returns null when the caller supplied no
+ * list, or a malformed one - never a partial one.
+ */
+export function readMatchRecords(data: Record<string, unknown> | undefined): Array<{ path: string; line: string }> | null {
+  const value = data?.matches;
+  if (!Array.isArray(value)) return null;
+  const out: Array<{ path: string; line: string }> = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return null;
+    const { path, line } = item as { path?: unknown; line?: unknown };
+    if (typeof path !== 'string' || typeof line !== 'string') return null;
+    out.push({ path, line });
+  }
+  return out;
+}
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const s = (schema: z.ZodType): any => schema;
@@ -220,7 +242,11 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
           // format: "[dir] name" or "[file] name"
           const m = line.match(/^\[(dir|file)\]\s+(.+)$/);
           if (!m) {
-            kept.push(line);
+            // An unparsable line used to be passed through verbatim. A filename containing a newline
+            // splits into a continuation line that cannot match this regex, so passing it through leaked
+            // the rest of the name past the filter (agent-do-2rm). Fail closed: hide it, and count it so
+            // the operator still sees that something was withheld.
+            hidden++;
             continue;
           }
           // Both `list_directory` and `find_files` return entry paths
@@ -259,28 +285,54 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
       ...underlying,
       execute: async (args: unknown, ctx: unknown): Promise<ToolResult> => {
         const result = (await (originalExecute as Function)(args, ctx)) as ToolResult;
-        // Filter grep hits whose path is deny-listed. The parsed line
-        // format is "path: line" from createFileTools.grep_file.
-        const lines = result.modelContent.split('\n').filter(Boolean);
-        const kept: string[] = [];
+        // Filter grep hits whose path is deny-listed. The paths come from data.matches, which grep_file
+        // fills alongside the rendered text (agent-do-2rm). Recovering them by re-parsing modelContent was
+        // the bug: the rendered format is "path: line", so a ':' inside a path made line.indexOf(':')
+        // return a truncated prefix, that prefix was checked instead of the real path, and a deny-listed
+        // file was passed through unfiltered AND unredacted.
+        const matches = readMatchRecords(result.data);
+        if (matches === null) {
+          const claimed = result.data?.matchCount;
+          // No structured match list. That is a contract violation by the caller, and the one recovery we
+          // must not attempt is guessing paths out of the text - so nothing is passed through. A result
+          // with no matches has nothing to leak and is returned untouched.
+          if (typeof claimed === 'number' && claimed > 0) {
+            return {
+              modelContent: '(matches withheld: the tool did not report their paths for deny-list checking)',
+              userSummary: `${result.userSummary}, all matches hidden (no structured match list to check)`,
+              data: { ...(result.data ?? {}), hiddenByDenyList: claimed, matchCount: 0, matches: [] },
+            };
+          }
+          return result;
+        }
+        const kept: Array<{ path: string; line: string }> = [];
         let hidden = 0;
-        for (const line of lines) {
-          const colonIndex = line.indexOf(':');
-          const maybePath = colonIndex > 0 ? line.slice(0, colonIndex) : line;
-          if ((await guard.checkRead(maybePath)).blocked) {
+        for (const m of matches) {
+          if ((await guard.checkRead(m.path)).blocked) {
             hidden++;
             continue;
           }
-          kept.push(line);
+          kept.push(m);
         }
         if (hidden === 0) return result;
-        const modelContent = kept.length === 0
+        const body = kept.length === 0
           ? '(all matches hidden by deny list)'
-          : `${kept.join('\n')}\n... ${hidden} match${hidden === 1 ? '' : 'es'} hidden by deny list`;
+          : `${kept.map((m) => `${m.path}: ${m.line}`).join('\n')}\n... ${hidden} match${hidden === 1 ? '' : 'es'} hidden by deny list`;
+        // Re-render through the same framing the tool uses. The tool already framed the unfiltered text, so
+        // building the filtered text without re-wrapping would either drop the frame or nest a second one;
+        // wrapping the body keeps exactly one frame around what is actually returned.
+        const wrapped = kept.length === 0
+          ? null
+          : wrapForModel(body, { tool: 'grep_file', path: String(result.data?.scope ?? '.') });
         return {
-          modelContent,
+          modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} match${hidden === 1 ? '' : 'es'} hidden by deny list`,
-          data: { ...(result.data ?? {}), hiddenByDenyList: hidden },
+          data: {
+            ...(result.data ?? {}),
+            hiddenByDenyList: hidden,
+            matchCount: kept.length,
+            matches: kept,
+          },
         };
       },
     } as typeof underlying;

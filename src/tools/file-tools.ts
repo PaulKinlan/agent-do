@@ -329,23 +329,38 @@ export function createFileTools(
           // a line whose byte length exceeds the cap.
           const ellipsis = '…';
           const ellipsisBytes = utf8ByteLength(ellipsis);
-          const rendered = results
-            .map((r) => {
-              if (utf8ByteLength(r.line) <= maxGrepLineBytes) {
-                return `${r.path}: ${r.line}`;
-              }
-              const budget = Math.max(0, maxGrepLineBytes - ellipsisBytes);
-              return `${r.path}: ${truncateUtf8ByBytes(r.line, budget)}${ellipsis}`;
-            })
-            .join('\n');
+          // Each match keeps its path and its already-capped rendered line as ONE record, and the
+          // model-facing text is derived from those records. A consumer that must apply path-based policy
+          // (wrapGrep) reads the records; it must never recover a path by re-parsing the text, because the
+          // rendered line is "path: line" and a ':' inside a path made that recovery silently wrong
+          // (agent-do-2rm).
+          const matches = results.map((r) => {
+            if (utf8ByteLength(r.line) <= maxGrepLineBytes) {
+              return { path: r.path, line: r.line };
+            }
+            const budget = Math.max(0, maxGrepLineBytes - ellipsisBytes);
+            return { path: r.path, line: `${truncateUtf8ByBytes(r.line, budget)}${ellipsis}` };
+          });
+          const wrapped = wrapForModel(matches.map((m) => `${m.path}: ${m.line}`).join('\n'), {
+            tool: 'grep_file',
+            path: scope,
+          });
+          const markerNote = wrapped.redactedMarkerCount > 0
+            ? `, redacted ${wrapped.redactedMarkerCount} potential injection marker${wrapped.redactedMarkerCount === 1 ? '' : 's'}`
+            : '';
           return {
-            modelContent: rendered,
-            userSummary: `[grep_file] "${pattern}" under ${scope} — ${results.length} match${results.length === 1 ? '' : 'es'} in ${fileSet.size} file${fileSet.size === 1 ? '' : 's'}`,
+            modelContent: wrapped.content,
+            userSummary: `[grep_file] "${pattern}" under ${scope} — ${results.length} match${results.length === 1 ? '' : 'es'} in ${fileSet.size} file${fileSet.size === 1 ? '' : 's'}${markerNote}`,
             data: {
               pattern,
               scope,
               matchCount: results.length,
               fileCount: fileSet.size,
+              matches,
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
             },
           };
         } catch (err) {
