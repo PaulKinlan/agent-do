@@ -522,8 +522,25 @@ describe('realpathSafe on generated symlink graphs (agent-do-zuy)', () => {
       throughLinks.push(`${dirLinks[0].name}/inner-link`);
 
       const linkNames = [...links, chained, ...allDirLinks.map((l) => l.name), `${rawDir}/to-target`];
-      const traversesLink = (candidate: string) =>
-        linkNames.some((l) => candidate === l || candidate.startsWith(`${l}/`));
+      // Link names are RELATIVE to the sandbox root, but a candidate may be absolute - the raw ones below are -
+      // so compare on the form relative to `dir`. Without this, traversesLink could not see an absolute
+      // candidate at all and rule 2 was skipped on precisely the candidates added to exercise it (agent-do-u0c).
+      const relativeToDir = (candidate: string) =>
+        candidate.startsWith(`${dir}/`) ? candidate.slice(dir.length + 1) : candidate;
+      const traversesLink = (candidate: string) => {
+        const rel = relativeToDir(candidate);
+        return linkNames.some((l) => rel === l || rel.startsWith(`${l}/`));
+      };
+
+      // The oracle's own instrumentation, asserted rather than assumed. Rule 2 can only bite on a candidate that
+      // traversesLink recognises; if detection silently stops matching, the suite keeps passing while checking
+      // less - which is exactly what happened and is why this check exists rather than a comment claiming it.
+      for (const raw of rawCandidates) {
+        expect(
+          traversesLink(raw),
+          `rule 2 cannot see the raw candidate ${raw}, so it is not being checked`,
+        ).toBe(true);
+      }
 
       for (const candidate of [...files, ...links, chained, ...throughLinks, ...rawCandidates]) {
         // A candidate that already names an absolute path is used AS GIVEN, which matters only for the raw ones
