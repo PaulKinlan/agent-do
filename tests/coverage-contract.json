@@ -471,6 +471,7 @@
   ],
   "src/stores/in-memory.ts": [
     "tests/conversation-history.test.ts",
+    "tests/deny-list.test.ts",
     "tests/eval-assertions.test.ts",
     "tests/eval-runner.test.ts",
     "tests/file-tools.test.ts",
@@ -601,6 +602,7 @@
   ],
   "src/tools/memory-tools.ts": [
     "tests/conversation-history.test.ts",
+    "tests/deny-list.test.ts",
     "tests/memory-tools.test.ts",
     "tests/script-import.test.ts"
   ],
