@@ -38,6 +38,7 @@ import {
 } from './deny-list.js';
 import type { ToolResult } from './types.js';
 import { wrapForModel } from './content-guards.js';
+import { escapeForLine } from './content-guards.js';
 
 /**
  * The structured match records grep_file / memory_search put in `ToolResult.data.matches`.
@@ -46,6 +47,27 @@ import { wrapForModel } from './content-guards.js';
  * is treated as "no usable list" and nothing is passed through. Returns null when the caller supplied no
  * list, or a malformed one - never a partial one.
  */
+/**
+ * The structured entry records list_directory / find_files put in `ToolResult.data.entries`.
+ *
+ * Validated rather than trusted, like readMatchRecords: the deny-list decision reads `path`, so anything
+ * other than a string path means "no usable list" and nothing is passed through.
+ */
+export function readListEntries(
+  data: Record<string, unknown> | undefined,
+): Array<{ type: string; path: string }> | null {
+  const value = data?.entries;
+  if (!Array.isArray(value)) return null;
+  const out: Array<{ type: string; path: string }> = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return null;
+    const { type, path } = item as { type?: unknown; path?: unknown };
+    if (typeof path !== 'string' || typeof type !== 'string') return null;
+    out.push({ type, path });
+  }
+  return out;
+}
+
 export function readMatchRecords(data: Record<string, unknown> | undefined): Array<{ path: string; line: string }> | null {
   const value = data?.matches;
   if (!Array.isArray(value)) return null;
@@ -235,40 +257,47 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
         const requestedPath = (args as { path?: string } | undefined)?.path;
         const result = (await (originalExecute as Function)(args, ctx)) as ToolResult;
         const basePath = (requestedPath ?? '.').replace(/\/?$/, '');
-        const lines = result.modelContent.split('\n').filter(Boolean);
-        const kept: string[] = [];
+        // Entries come from data.entries, which list_directory/find_files fill alongside the rendered text
+        // (agent-do-0fr). They used to be recovered by parsing "[dir] name" lines, which a filename
+        // containing a newline could forge: the continuation was a syntax-valid entry line, so a name minted
+        // an entry that did not exist. The tool now escapes the name AND reports records, so this reads
+        // records and never parses text.
+        const entries = readListEntries(result.data);
+        if (entries === null) {
+          const claimed = result.data?.count;
+          // No structured entry list: a contract violation by the caller. The one recovery we must not
+          // attempt is guessing entries out of the text, so nothing is passed through. A listing with no
+          // entries has nothing to leak and is returned untouched.
+          if (typeof claimed === 'number' && claimed > 0) {
+            return {
+              modelContent: '(entries withheld: the tool did not report them in a form the deny list can check)',
+              userSummary: `${result.userSummary}, all entries hidden (no structured entry list to check)`,
+              data: { ...(result.data ?? {}), hiddenByDenyList: claimed, count: 0, entries: [] },
+              blocked: result.blocked,
+            };
+          }
+          return result;
+        }
+        const kept: Array<{ type: string; path: string }> = [];
         let hidden = 0;
-        for (const line of lines) {
-          // format: "[dir] name" or "[file] name"
-          const m = line.match(/^\[(dir|file)\]\s+(.+)$/);
-          if (!m) {
-            // An unparsable line used to be passed through verbatim. A filename containing a newline
-            // splits into a continuation line that cannot match this regex, so passing it through leaked
-            // the rest of the name past the filter (agent-do-2rm). Fail closed: hide it, and count it so
-            // the operator still sees that something was withheld.
+        for (const e of entries) {
+          // Both `list_directory` and `find_files` report paths relative to the *scan root* (immediate
+          // child names, or nested paths under it). Prepend basePath in either case so deny rules matching
+          // workspace-relative globs (`.ssh/**`, `.git/objects/**`, etc.) actually match.
+          if ((await guard.checkRead(joinForCheck(basePath, e.path))).blocked) {
             hidden++;
             continue;
           }
-          // Both `list_directory` and `find_files` return entry paths
-          // relative to the *scan root* (immediate child names, or
-          // nested paths under it). Prepend basePath in either case so
-          // deny rules matching workspace-relative globs (`.ssh/**`,
-          // `.git/objects/**`, etc.) actually match.
-          const rel = joinForCheck(basePath, m[2]);
-          if ((await guard.checkRead(rel)).blocked) {
-            hidden++;
-            continue;
-          }
-          kept.push(line);
+          kept.push(e);
         }
         if (hidden === 0) return result;
         const modelContent = kept.length === 0
-          ? `(all ${lines.length} entries hidden by deny list)`
-          : `${kept.join('\n')}\n... ${hidden} entr${hidden === 1 ? 'y' : 'ies'} hidden by deny list`;
+          ? `(all ${entries.length} entries hidden by deny list)`
+          : `${kept.map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`).join('\n')}\n... ${hidden} entr${hidden === 1 ? 'y' : 'ies'} hidden by deny list`;
         return {
           modelContent,
           userSummary: `${result.userSummary}, ${hidden} hidden by deny list`,
-          data: { ...(result.data ?? {}), hiddenByDenyList: hidden },
+          data: { ...(result.data ?? {}), hiddenByDenyList: hidden, count: kept.length, entries: kept },
           blocked: result.blocked,
         };
       },

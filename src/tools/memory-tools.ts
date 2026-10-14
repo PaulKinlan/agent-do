@@ -16,6 +16,7 @@ import { z } from 'zod';
 import type { MemoryStore } from '../stores.js';
 import type { ToolResult } from './types.js';
 import {
+  escapeForLine,
   DEFAULT_MAX_READ_BYTES,
   DEFAULT_MAX_WRITE_BYTES,
   sanitiseFsError,
@@ -158,7 +159,7 @@ export function createMemoryTools(
             };
           }
           const rendered = entries
-            .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${e.name}`)
+            .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.name)}`)
             .join('\n');
           return {
             modelContent: rendered,
