@@ -155,12 +155,18 @@ function reapFixtureProcesses(root: string): number {
   const alive = (pid: string) => spawnSync('kill', ['-0', pid]).status === 0;
 
   // A child that inherits the fixture as its working directory is findable even after its parent is gone,
-  // which is the case a walk cannot reach. This runs on EVERY pass, including passes where the argv match is
-  // empty, and that is deliberate rather than an oversight: by the second pass the parent is usually gone,
-  // so an empty argv match is exactly the situation where cwd is the only handle left on a reparented child.
-  // Guarding this on a non-empty argv match would silently reintroduce agent-do-51j. The cost is one /proc
-  // scan only while a fixture has actually leaked something, and another user's process reads as an error
-  // and is skipped.
+  // which is the case a walk cannot reach. This runs on EVERY pass - the first one included, before anything
+  // is known to have leaked, and every grace-period pass after the TERM - because by a later pass the parent
+  // is usually gone and an empty argv match is exactly when cwd is the only handle left on a reparented
+  // child. Guarding this on a non-empty argv match would silently reintroduce agent-do-51j.
+  //
+  // The cost is therefore paid per fixture root, not only when something leaked: one full /proc listing plus
+  // a readlink per numeric entry, measured at ~2-3 ms on this machine (only entries belonging to the same
+  // user are readable, so the readlink count is well under the size of /proc). The suite creates a few dozen
+  // roots per run, so a whole run pays tens of milliseconds - including a green run, which is the point:
+  // this is the price of not having a hole, and it is far smaller than the cost of a leaked process, which
+  // the reaper did not catch for two hours. agent-do-fhn: the previous wording claimed this was only
+  // reached once something had matched, which is not what the code did.
   const byWorkingDirectory = () => {
     if (!existsSync('/proc')) return [];
     const found: string[] = [];
