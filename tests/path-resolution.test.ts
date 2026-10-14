@@ -492,22 +492,45 @@ describe('realpathSafe on generated symlink graphs (agent-do-zuy)', () => {
         p(...chainedDir.name.split('/')),
       );
 
+      // RAW ".."-after-a-link candidates (agent-do-dcz). Each link deliberately sits in a DIFFERENT directory
+      // from the one it targets, so "<link>/../<basename>" as POSIX resolves it (the ".." applied to the LINK
+      // TARGET's directory) is a path that EXISTS while the lexical reading of the same string does not. That
+      // difference is what gives these cases teeth: an implementation which normalised its input first would
+      // answer with the lexical path and disagree with fs.realpath.
+      //
+      // API SEMANTICS, stated because these candidates depend on it: realpathSafe resolves the path it is GIVEN,
+      // applying ".." to the already-resolved prefix, so a raw "link/.." gets POSIX semantics. That is a property
+      // of the resolver, not a promise to every caller - the shipped deny list normalises its input before calling
+      // (deny-list.ts), so a raw path here is defence in depth. The resolver is deliberately not made to normalise
+      // first: normalising would discard the difference these cases exist to pin.
+      const rawDir = 'raw';
+      await fs.promises.mkdir(p(rawDir), { recursive: true });
+      await fs.promises.symlink(`../${targets[0]}`, p(rawDir, 'to-target'));
+      const rawCandidates = [
+        `${dir}/${rawDir}/to-target/../${nodePath.basename(targets[0])}`,
+        `${dir}/${rawDir}/to-target/../${nodePath.basename(targets[0])}/leaf.txt`,
+      ];
+
       const allDirLinks = [...dirLinks, chainedDir];
-      // Through a link, through a link with a nested suffix, through a link followed by ".." (which POSIX
-      // resolves against the TARGET's directory, not the link's parent), and through two links in one path.
-      const throughLinks = allDirLinks.flatMap(({ name, target }) => [
-        `${name}/leaf.txt`,
-        `${name}/../${nodePath.basename(target)}`,
-      ]);
+      // Through a link, through a link with a nested suffix, and through two links in one path. The
+      // ".."-AFTER-a-link shape lives in rawCandidates, NOT here: candidates in this list are built with p(...),
+      // and nodePath.join normalises ".." lexically, so a `${name}/../${basename(target)}` entry reached the
+      // resolver already collapsed, asserted nothing about link expansion, and was the reason rule 2 below
+      // carried a '/../' exemption (agent-do-dcz).
+      const throughLinks = allDirLinks.flatMap(({ name }) => [`${name}/leaf.txt`]);
       throughLinks.push(`${chainedDir.name}/leaf.txt`);
       throughLinks.push(`${dirLinks[0].name}/inner-link`);
 
-      const linkNames = [...links, chained, ...allDirLinks.map((l) => l.name)];
+      const linkNames = [...links, chained, ...allDirLinks.map((l) => l.name), `${rawDir}/to-target`];
       const traversesLink = (candidate: string) =>
         linkNames.some((l) => candidate === l || candidate.startsWith(`${l}/`));
 
-      for (const candidate of [...files, ...links, chained, ...throughLinks]) {
-        const target = p(...candidate.split('/'));
+      for (const candidate of [...files, ...links, chained, ...throughLinks, ...rawCandidates]) {
+        // A candidate that already names an absolute path is used AS GIVEN, which matters only for the raw ones
+        // below - and is the whole point of them: nodePath.join normalises ".." lexically, so building a path with
+        // p(...) (as every other candidate does) strips a ".." AFTER a link before the resolver ever sees it, and
+        // the case proves nothing (agent-do-dcz).
+        const target = candidate.startsWith('/') ? candidate : p(...candidate.split('/'));
         const expected = await platformAnswer(target);
         if (expected === undefined) continue;
         // BOTH connectors, and this is the difference between testing the walk and testing the connector.
@@ -519,17 +542,15 @@ describe('realpathSafe on generated symlink graphs (agent-do-zuy)', () => {
           const result = await realpathSafe(sb, target, nodePath);
           expect(result.ok, `seed ${seed}, ${candidate} [${label}]: expected a resolution`).toBe(true);
           expect(okPath(result), `seed ${seed}, ${candidate} [${label}]`).toBe(expected);
-        if (traversesLink(candidate) && !candidate.includes('/../')) {
-          // rule 2 - only meaningful where the path contains a link AND the alias would be visible in the
-          // answer. A candidate with ".." AFTER a link cannot show it: nodePath.join has already normalised the
-          // ".." lexically, so "the path the caller asked for" and the correctly-resolved answer are the same
-          // string, and a resolver that ignored the link entirely would return that same string too. Those
-          // candidates are checked by rule 1 (exact agreement with fs.realpath), which is the stronger oracle.
+          if (traversesLink(candidate)) {
+            // rule 2 - a link is never the answer. The former '/../' exemption is gone: the only candidates here
+            // containing ".." are the raw ones, which are passed un-normalised, so the path the caller asked for
+            // and the resolved answer are genuinely different strings and this assertion can bite (agent-do-dcz).
             expect(okPath(result), `seed ${seed}, ${candidate} [${label}]: returned the alias`).not.toBe(target);
           }
         }
+        }
       }
-    }
   });
 
   it('resolves a dangling link against ITS OWN DIRECTORY at any depth (rule 3, rule 4)', async () => {
