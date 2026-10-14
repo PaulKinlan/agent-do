@@ -233,10 +233,29 @@ export function createMemoryTools(
             };
           }
           const fileSet = new Set(results.map((r) => r.path));
+          // Same shape as grep_file (agent-do-2rm): matches as records, model text derived and framed.
+          const matches = results.map((r) => ({ path: r.path, line: r.line }));
+          const wrapped = wrapForModel(matches.map((m) => `${m.path}: ${m.line}`).join('\n'), {
+            tool: 'memory_search',
+            path: scope,
+          });
+          const markerNote = wrapped.redactedMarkerCount > 0
+            ? `, redacted ${wrapped.redactedMarkerCount} potential injection marker${wrapped.redactedMarkerCount === 1 ? '' : 's'}`
+            : '';
           return {
-            modelContent: results.map((r) => `${r.path}: ${r.line}`).join('\n'),
-            userSummary: `[memory_search] "${pattern}" under ${scope} — ${results.length} match${results.length === 1 ? '' : 'es'} in ${fileSet.size} file${fileSet.size === 1 ? '' : 's'}`,
-            data: { pattern, scope, matchCount: results.length, fileCount: fileSet.size },
+            modelContent: wrapped.content,
+            userSummary: `[memory_search] "${pattern}" under ${scope} — ${results.length} match${results.length === 1 ? '' : 'es'} in ${fileSet.size} file${fileSet.size === 1 ? '' : 's'}${markerNote}`,
+            data: {
+              pattern,
+              scope,
+              matchCount: results.length,
+              fileCount: fileSet.size,
+              matches,
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            },
           };
         } catch (err) {
           return errorResult(err, 'memory_search', scope);
