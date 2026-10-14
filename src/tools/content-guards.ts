@@ -141,6 +141,21 @@ export interface WrappedContent {
  * so content cannot close the frame it was placed in. Returns enough metadata
  * for the caller to populate `ToolResult.data`.
  */
+/**
+ * Make a value safe to place inside one line of a rendered, line-oriented listing.
+ *
+ * A filename may contain a newline, and a listing IS lines: without this, the second half of a name renders
+ * as a line of its own, which the deny-list filter then reads as a separate entry. The continuation can even
+ * be a syntactically valid entry ("[file] x"), so a name could mint an entry that does not exist
+ * (agent-do-0fr - the same class as agent-do-2rm: a line-oriented format with an unescaped separator).
+ *
+ * Backslash is escaped FIRST so the result is unambiguous and reversible: a real backslash renders as "\\"
+ * and a real newline as "\n" (two characters), so no name can be read as a different name.
+ */
+export function escapeForLine(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+}
+
 export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const cap = opts.maxBytes ?? DEFAULT_MAX_READ_BYTES;
   const totalBytes = utf8ByteLength(body);

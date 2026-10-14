@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { MemoryStore } from '../stores.js';
 import type { ToolResult } from './types.js';
 import {
+  escapeForLine,
   DEFAULT_MAX_READ_BYTES,
   DEFAULT_MAX_WRITE_BYTES,
   DEFAULT_MAX_GREP_LINE_BYTES,
@@ -247,15 +248,19 @@ export function createFileTools(
               data: { path: listPath, count: 0 },
             };
           }
-          const rendered = entries
-            .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${e.name}`)
+          // Records first, text derived from them, and the name escaped so it cannot introduce a line
+          // (agent-do-0fr). A consumer that needs the entries for policy reads data.entries rather than
+          // reading them back out of the text.
+          const records = entries.map((e) => ({ type: e.type, path: e.name }));
+          const rendered = records
+            .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`)
             .join('\n');
           const dirs = entries.filter((e) => e.type === 'directory').length;
           const files = entries.length - dirs;
           return {
             modelContent: rendered,
             userSummary: `[list_directory] ${listPath} — ${entries.length} entries (${dirs} dirs, ${files} files)`,
-            data: { path: listPath, count: entries.length, dirs, files },
+            data: { path: listPath, count: entries.length, dirs, files, entries: records },
           };
         } catch (err) {
           return errorResult(err, 'list_directory', listPath);
@@ -379,19 +384,21 @@ export function createFileTools(
       execute: async ({ path }: { path?: string }): Promise<ToolResult> => {
         const scope = path ?? '.';
         try {
-          const result: string[] = [];
+          const result: Array<{ type: string; path: string }> = [];
           await listRecursive(store, agentId, path ?? '', '', result);
           if (result.length === 0) {
             return {
               modelContent: 'No files found.',
               userSummary: `[find_files] ${scope} — 0 entries`,
-              data: { path: scope, count: 0 },
+              data: { path: scope, count: 0, entries: [] },
             };
           }
           return {
-            modelContent: result.join('\n'),
+            modelContent: result
+              .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`)
+              .join('\n'),
             userSummary: `[find_files] ${scope} — ${result.length} entries`,
-            data: { path: scope, count: result.length },
+            data: { path: scope, count: result.length, entries: result },
           };
         } catch (err) {
           return errorResult(err, 'find_files', scope);
@@ -406,13 +413,15 @@ async function listRecursive(
   agentId: string,
   basePath: string,
   prefix: string,
-  result: string[],
+  result: Array<{ type: string; path: string }>,
 ): Promise<void> {
   const fullPath = basePath ? (prefix ? `${basePath}/${prefix}` : basePath) : prefix;
   const entries = await store.list(agentId, fullPath || undefined);
   for (const entry of entries) {
     const entryPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    result.push(`${entry.type === 'directory' ? '[dir]' : '[file]'} ${entryPath}`);
+    // The RAW path is kept for recursion and for the record; only the rendered line escapes it, so the
+    // store is still asked about the name that actually exists (agent-do-0fr).
+    result.push({ type: entry.type, path: entryPath });
     if (entry.type === 'directory') {
       await listRecursive(store, agentId, basePath, entryPath, result);
     }
