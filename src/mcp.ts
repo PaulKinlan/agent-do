@@ -19,36 +19,31 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
-import { createRequire } from 'node:module';
 import { wrapForModel } from './tools/content-guards.js';
 import type { AgentConfig } from './types.js';
 
 /**
  * Library version used in the MCP `Client` handshake metadata (what the
- * server sees as the connecting client). Resolved at module load from
- * the real `package.json` so the value tracks the release version
- * without a second source of truth to keep in sync (Copilot #75 review).
+ * server sees as the connecting client).
  *
- * Best-effort: if the JSON read fails (unlikely in a normal install,
- * but possible in some bundled-runtime / edge-runtime configs), fall
- * back to a known-stale constant. The server uses this purely for
- * logging — a stale value is informational drift, not a correctness
- * issue — so the fallback shouldn't throw and interrupt the mount.
+ * This is a LITERAL, not a read of `package.json`. It used to be resolved at
+ * module load through `createRequire(import.meta.url)` + `node:module`, which
+ * made this module - and therefore anything importing it, including the
+ * browser entry - depend on a Node builtin (GH #139). The "no second source
+ * of truth" property is kept by a test instead of by runtime code:
+ * `tests/browser-entry.test.ts` fails if this constant and `package.json`'s
+ * version ever disagree, so drift is caught in CI rather than avoided by
+ * dragging `node:module` into every consumer.
+ *
+ * The server uses this purely for logging, so a stale value would be
+ * informational drift rather than a correctness issue - but it cannot go
+ * stale silently.
  */
-const LIB_VERSION: string = (() => {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require('../package.json') as { version?: string };
-    if (typeof pkg.version === 'string') return pkg.version;
-  } catch {
-    // fall through to the literal
-  }
-  return '0.0.0';
-})();
+const LIB_VERSION = '0.7.0';
 
 /**
  * A single MCP server to mount. `name` is the namespace used to prefix
@@ -134,12 +129,49 @@ export function namespacedToolName(serverName: string, toolName: string): string
  *   - Tools invoked after `close()` resolve with an error string rather
  *     than throwing (same shape as other execute errors in agent-do).
  */
+/**
+ * Options for {@link mountMcpServers}.
+ */
+export interface MountMcpOptions {
+  /**
+   * Allow the `stdio` transport, which spawns a child process.
+   *
+   * Defaults to {@link canSpawnStdioMcp}, i.e. true in Node and false in a browser. Pass `false` explicitly to
+   * get the deterministic rejection in any runtime.
+   */
+  allowStdio?: boolean;
+}
+
+/**
+ * Whether this runtime can spawn the child process the stdio MCP transport needs.
+ *
+ * Read through `globalThis` so this module never touches a bare global: the browser entry's graph test asserts
+ * exactly that, and a browser build must not need a `process` shim (GH #139). Checking the capability, rather
+ * than relying on the dynamic import to fail, is what turns "a bundler-ignored import blew up somewhere" into
+ * a message that names the server and the fix (agent-do-5sh).
+ */
+export function canSpawnStdioMcp(): boolean {
+  const proc = (globalThis as { process?: { versions?: { node?: string } } }).process;
+  return typeof proc?.versions?.node === 'string';
+}
+
+/** The one rejection message for a stdio config this runtime cannot run. */
+function stdioUnavailable(name: string): TypeError {
+  return new TypeError(
+    `MCP server "${name}" uses the stdio transport, which spawns a child process and needs Node streams. ` +
+      `This runtime cannot run it. Configure an 'http' or 'sse' transport instead, or mount it from Node ` +
+      `with mountMcpServers.`,
+  );
+}
+
 export async function mountMcpServers(
   configs: McpServerConfig[],
+  options: MountMcpOptions = {},
 ): Promise<MountedMcpServers> {
   // Validate up front — surface bad names as TypeErrors before any
   // subprocess spawns, so the caller gets a deterministic failure.
   const seen = new Set<string>();
+  const allowStdio = options.allowStdio ?? canSpawnStdioMcp();
   for (const config of configs) {
     if (!NAMESPACE_RE.test(config.name)) {
       throw new TypeError(
@@ -150,6 +182,12 @@ export async function mountMcpServers(
       throw new TypeError(`Duplicate MCP server name "${config.name}"`);
     }
     seen.add(config.name);
+    // Rejected here, in the shared mount path, BEFORE any client or transport exists - so the loop and this
+    // function behave the same way, and no caller can reach the stdio dynamic import in a runtime that cannot
+    // spawn (agent-do-5sh: the guard used to live only in the browser helper, which runAgentLoop never calls).
+    if (!allowStdio && config.transport.type === 'stdio') {
+      throw stdioUnavailable(config.name);
+    }
   }
 
   const clients: Client[] = [];
@@ -186,7 +224,7 @@ export async function mountMcpServers(
       // all-or-nothing failure path.
       clients.push(client);
 
-      const transport = createTransport(config.transport);
+      const transport = await createTransport(config.transport);
       await client.connect(transport);
 
       const { tools: mcpTools } = await client.listTools();
@@ -334,15 +372,31 @@ export async function mountMcpServers(
   };
 }
 
-function createTransport(config: McpTransportConfig) {
+async function createTransport(config: McpTransportConfig): Promise<Transport> {
   switch (config.type) {
-    case 'stdio':
+    case 'stdio': {
+      // The SDK's stdio transport pulls `cross-spawn`, `node:process` and `node:stream`. A static
+      // import of it made this module - and every module importing it, including the browser entry -
+      // pull Node-only code into a browser build (GH #139, agent-do-5ep). The specifier is therefore
+      // INDIRECT: bundlers cannot follow it, so this edge never lands in a browser bundle, while a
+      // Node runtime still resolves it on demand. The browser entry refuses `stdio` configs up front
+      // with a clear error instead of relying on this failing at import time.
+      const spec = '@modelcontextprotocol/sdk/client/stdio.js';
+      const { StdioClientTransport } = (await import(/* @vite-ignore */ spec)) as {
+        StdioClientTransport: new (options: {
+          command: string;
+          args?: string[];
+          env?: Record<string, string>;
+          cwd?: string;
+        }) => Transport;
+      };
       return new StdioClientTransport({
         command: config.command,
         args: config.args,
         env: config.env,
         cwd: config.cwd,
       });
+    }
     case 'sse':
       return new SSEClientTransport(new URL(config.url), {
         requestInit: config.headers ? { headers: config.headers } : undefined,
@@ -399,11 +453,12 @@ function formatMcpToolResult(result: unknown): string {
  */
 export async function mountConfigMcp(
   config: AgentConfig,
+  options: MountMcpOptions = {},
 ): Promise<{ config: AgentConfig; mcp: MountedMcpServers | undefined }> {
   if (!config.mcpServers || config.mcpServers.length === 0) {
     return { config, mcp: undefined };
   }
-  const mcp = await mountMcpServers(config.mcpServers);
+  const mcp = await mountMcpServers(config.mcpServers, options);
   // Local tools win on name collisions — the caller's explicit `tools`
   // map is authoritative, and MCP servers can't silently shadow a local
   // tool just by naming something the same. Server-side tools always

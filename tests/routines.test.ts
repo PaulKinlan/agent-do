@@ -7,8 +7,8 @@ import {
   interpolateRoutine,
   createRoutineTools,
   InMemoryRoutineStore,
-  FilesystemRoutineStore,
 } from '../src/routines.js';
+import { FilesystemRoutineStore } from '../src/routines/filesystem.js';
 import type { Routine } from '../src/types.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

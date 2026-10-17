@@ -37,8 +37,9 @@ export {
   interpolateRoutine,
   createRoutineTools,
   InMemoryRoutineStore,
-  FilesystemRoutineStore,
 } from './routines.js';
+// Node-only (needs node:fs); kept out of routines.ts so the browser entry can re-export that module.
+export { FilesystemRoutineStore } from './routines/filesystem.js';
 export type { CreateRoutineToolsOptions } from './routines.js';
 export type { Routine, RoutineStore, RoutineInput } from './types.js';
 
@@ -137,14 +138,10 @@ export { acquireFileLock, withFileLock } from './stores/file-lock.js';
 export type { FileLockOptionsInternal } from './stores/file-lock.js';
 export type { FileLockOptions, LockHandle, LockAdapter } from './types.js';
 // Scheduled tasks (#79) — declarative cron-driven agent runs with lock-file concurrency.
-export {
-  matchesCron,
-  validateScheduledTasks,
-  readStatus,
-  writeStatus,
-  recordRun,
-  runScheduledTask,
-} from './scheduled-tasks.js';
+export { matchesCron, validateScheduledTasks } from './scheduled-tasks.js';
+// Node-only (node:fs + the #15 lock); kept out of scheduled-tasks.ts so the browser entry can re-export
+// the cron matcher and validator from that module.
+export { readStatus, writeStatus, recordRun, runScheduledTask } from './scheduled-tasks/fs.js';
 export type { ScheduledTask, ScheduledTasksConfig, TaskStatus, StatusRecord } from './scheduled-tasks.js';
 export { SandboxBackedMemoryStore } from './stores/sandbox.js';
 export type { SandboxBackedMemoryStoreOptions } from './stores/sandbox.js';

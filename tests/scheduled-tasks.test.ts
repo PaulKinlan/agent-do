@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  matchesCron,
-  validateScheduledTasks,
-  readStatus,
-  writeStatus,
-  recordRun,
-  runScheduledTask,
-} from '../src/scheduled-tasks.js';
+import { matchesCron, validateScheduledTasks } from '../src/scheduled-tasks.js';
+import { readStatus, writeStatus, recordRun, runScheduledTask } from '../src/scheduled-tasks/fs.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
