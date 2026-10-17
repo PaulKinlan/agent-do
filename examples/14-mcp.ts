@@ -1,4 +1,9 @@
 /**
+ * For the CLI's built-in anonymous Parallel search/fetch, no script is needed:
+ * npx agent-do --allow mcp__parallel__web_search,mcp__parallel__web_fetch "Find the Node.js release notes and cite sources"
+ * Use --no-search to disable the prompt-mode default. The script below shows
+ * explicit MCP configuration for library callers, whose defaults are unchanged.
+ *
  * Example 14: MCP (Model Context Protocol) servers
  *
  * Mount an external MCP server and let the agent use its tools.

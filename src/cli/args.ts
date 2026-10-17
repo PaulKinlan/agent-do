@@ -22,6 +22,8 @@ export interface ParsedArgs {
   readOnly: boolean;
   maxIterations: number;
   noTools: boolean;
+  /** Disable the default web search/fetch tools in prompt mode. */
+  noSearch?: boolean;
   verbose: boolean;
   /**
    * Show full tool results (file bodies, etc.) in verbose output. Default
@@ -139,6 +141,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     readOnly: false,
     maxIterations: 20,
     noTools: false,
+    noSearch: false,
     verbose: false,
     showContent: false,
     json: false,
@@ -225,6 +228,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
     } else if (arg === '--no-tools') {
       args.noTools = true;
+    } else if (arg === '--no-search') {
+      args.noSearch = true;
     } else if (arg === '--verbose') {
       // Legacy alias: nudges logLevel up to at least `verbose` when
       // the operator hasn't explicitly picked a level. Final

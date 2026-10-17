@@ -197,6 +197,7 @@ Options:
   --include-sensitive    Bypass built-in sensitive-file deny list (.env, .ssh, etc.)
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
+  --no-search            Disable default web search and page fetching (prompt mode)
   --verbose              Show per-step thinking + tool summaries (stderr)
   --show-content         With --verbose: also include each tool's full result
   --log-level <level>    silent | info | verbose | debug | trace (default: info).
@@ -213,6 +214,36 @@ Options:
   --compare <providers>  Compare providers (eval only, comma-separated)
   --concurrency <n>      Parallel eval cases (default: 1)
 ```
+
+### Web search in prompt mode
+
+Fresh one-shot and interactive prompt sessions include `mcp__parallel__web_search`
+and `mcp__parallel__web_fetch` through [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp).
+Search uses Fast mode, with no search account or API key needed. Search results
+include source URLs and excerpts; fetching reads relevant excerpts from specific
+HTTP/HTTPS pages. The free service has usage limits.
+
+```bash
+# Allow the web tools in a piped/non-interactive session
+npx agent-do --allow mcp__parallel__web_search,mcp__parallel__web_fetch \
+  "Find the current Node.js release notes and cite the source URLs"
+
+# Keep a prompt session offline apart from the model provider
+npx agent-do --no-search "Review this code"
+```
+
+The usual tool permissions apply: approve each web tool in an interactive session,
+or list it in `--allow`. No connection is made until an approved tool call. Each
+call has a 30-second deadline, respects cancellation and frames remote content as
+untrusted tool output. Queries and requested URLs are sent to Parallel; ambient
+Parallel API keys are not used by this anonymous integration.
+
+`--no-search` or `--no-tools` disables these default web tools. Explicit
+`--provider-tool` or `--provider-options` settings take precedence and suppress the
+Parallel default; their failures never trigger a fallback. Saved agents, scripts
+(including `.shellm` and shebang prompt files),
+evals and library tool configurations keep their existing behavior. To configure
+Parallel explicitly in a script, use the existing `mcpServers` HTTP configuration.
 
 ### Provider-native tools and options
 

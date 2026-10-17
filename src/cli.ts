@@ -96,6 +96,7 @@ Options:
   --include-sensitive    Bypass built-in sensitive-file deny list (.env, .ssh, etc.)
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
+  --no-search            Disable default web search and page fetching (prompt mode)
   --verbose              Show thinking, tool calls, and per-step summaries (stderr)
   --show-content         With --verbose: also print each tool's full result
   --log-level <level>    silent | info | verbose | debug | trace (default: info).
@@ -119,6 +120,13 @@ Tools:
   Memory tools (memory_read, memory_write, memory_list, memory_delete,
   memory_search) are a separate, optional scratchpad for the agent's own notes.
   Enable them with --with-memory. They're scoped per-agent and kept in --memory.
+
+  Fresh prompt sessions include Parallel web search and page fetching, with no
+  search API key required. Approve mcp__parallel__web_search and
+  mcp__parallel__web_fetch interactively or with --allow. Connections are lazy.
+  --no-search or --no-tools disables them. Explicit --provider-tool or
+  --provider-options suppresses this default. Saved agents and scripts keep
+  their configured tools.
 
 Logs:
   In --verbose mode, each tool call emits a structured one-line summary to
