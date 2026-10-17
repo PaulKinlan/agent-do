@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from '../src/cli/args.js';
 import { buildPromptSearchTools } from '../src/cli/search.js';
 import { runPromptMode } from '../src/cli/prompt.js';
@@ -140,6 +143,26 @@ describe('CLI Parallel search', () => {
     await runAgentLoop({ id: 'denied', name: 'Denied', model, tools: tools(), permissions: { mode: 'deny-all' } }, 'Search');
     expect(requests).toEqual([]);
     expect(JSON.stringify(model.doStreamCalls)).toContain('Permission denied');
+  });
+
+  it.each(['task.shellm', 'task-with-shebang'])('preserves executable prompt-file tools: %s', async (filename) => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-do-search-'));
+    try {
+      const path = join(dir, filename);
+      await writeFile(path, '#!/usr/bin/env agent-do\nReview the local project.\n');
+      const model = createMockModel({ responses: [{ text: 'Done.' }] });
+      vi.mocked(resolveModel).mockResolvedValue(model);
+      vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+      await runPromptMode(parseArgs([path]));
+      const advertised = JSON.stringify(model.doStreamCalls[0].tools);
+      expect(advertised).not.toContain(searchName);
+      expect(advertised).not.toContain(fetchName);
+      expect(advertised).toContain('read_file');
+      expect(requests).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('frames server errors as untrusted tool output', async () => {

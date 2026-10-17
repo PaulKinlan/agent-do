@@ -240,7 +240,8 @@ Parallel API keys are not used by this anonymous integration.
 
 `--no-search` or `--no-tools` disables these default web tools. Explicit
 `--provider-tool` or `--provider-options` settings take precedence and suppress the
-Parallel default; their failures never trigger a fallback. Saved agents, scripts,
+Parallel default; their failures never trigger a fallback. Saved agents, scripts
+(including `.shellm` and shebang prompt files),
 evals and library tool configurations keep their existing behavior. To configure
 Parallel explicitly in a script, use the existing `mcpServers` HTTP configuration.
 

@@ -44,9 +44,11 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
   // becomes the prompt (merged with piped stdin below, same as today).
   // A non-shellm positional is left untouched — `agent-do readme.md` still
   // passes the literal string "readme.md" to the model.
+  let shellmPrompt = false;
   if (args.prompt) {
     const shellm = await tryParseShellm(args.prompt);
     if (shellm) {
+      shellmPrompt = true;
       args.prompt = shellm.prompt;
       // Frontmatter is authoritative — the script is a self-contained
       // program, so running ./foo.shellm behaves the same regardless of
@@ -89,10 +91,14 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     );
     tools = { ...(tools ?? {}), ...providerTools };
   }
-  tools = {
-    ...buildPromptSearchTools(args, typeof model === 'string' ? model : model.modelId),
-    ...tools,
-  };
+  // Executable prompt files are existing programs with their own configuration,
+  // so preserve their tools just as we do for saved agents and JS/TS scripts.
+  if (!shellmPrompt) {
+    tools = {
+      ...buildPromptSearchTools(args, typeof model === 'string' ? model : model.modelId),
+      ...tools,
+    };
+  }
 
   const agent = createAgent({
     id: 'cli-agent',
