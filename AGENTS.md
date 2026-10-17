@@ -72,6 +72,7 @@ src/
     agents.ts         — create / list / load saved agent configs
     resolve-model.ts  — dynamic provider/model resolution + DEFAULT_MODELS
     provider-tools.ts — `--provider-tool` registry (provider-native tools)
+    search.ts         — lazy anonymous Parallel search/fetch for fresh prompt sessions
     permission-handler.ts — interactive permission prompts (#17)
     debug-config.ts   — `--log-level` → AgentConfig.debug (#72)
     render.ts         — shared ProgressEvent rendering

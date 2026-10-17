@@ -21,6 +21,7 @@ import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
 import { buildProviderTools } from './provider-tools.js';
+import { buildPromptSearchTools } from './search.js';
 import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
@@ -88,6 +89,10 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     );
     tools = { ...(tools ?? {}), ...providerTools };
   }
+  tools = {
+    ...buildPromptSearchTools(args, typeof model === 'string' ? model : model.modelId),
+    ...tools,
+  };
 
   const agent = createAgent({
     id: 'cli-agent',

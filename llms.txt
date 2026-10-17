@@ -194,6 +194,8 @@
 
 ## CLI (npx agent-do)
 
+- Fresh prompt sessions include lazy, anonymous Parallel Search MCP tools `mcp__parallel__web_search` and `mcp__parallel__web_fetch`. Approve interactively or with `--allow`; tool calls have a 30-second deadline and respect cancellation.
+- `--no-search` or `--no-tools` disables the default web tools. Explicit `--provider-tool` / `--provider-options` suppresses this default; saved agents, scripts, evals and library configurations are unchanged.
 - `npx agent-do "prompt"` — one-shot task with default agent
 - `npx agent-do` — interactive chat REPL
 - `echo "context" | npx agent-do "prompt"` — pipe stdin as context, merged with prompt
