@@ -25,13 +25,9 @@ import type { ParsedArgs } from './args.js';
 import { resolveModel } from './resolve-model.js';
 import { createAgent } from '../agent.js';
 import { emitSandboxWarning } from './warnings.js';
-import {
-  matchesCron,
-  readStatus,
-  runScheduledTask,
-  validateScheduledTasks,
-  type ScheduledTask,
-} from '../scheduled-tasks.js';
+import { matchesCron, validateScheduledTasks } from '../scheduled-tasks.js';
+import { readStatus, runScheduledTask } from '../scheduled-tasks/fs.js';
+import type { ScheduledTask } from '../scheduled-tasks.js';
 
 /** Tasks file: a JSON array of ScheduledTask, optionally with `description`. */
 const TasksFileSchema = z.array(

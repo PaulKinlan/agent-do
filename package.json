@@ -38,6 +38,10 @@
       "types": "./dist/src/prompts/index.d.ts",
       "default": "./dist/src/prompts/index.js"
     },
+    "./browser": {
+      "types": "./dist/src/browser.d.ts",
+      "default": "./dist/src/browser.js"
+    },
     "./eval": {
       "types": "./dist/src/eval/index.d.ts",
       "default": "./dist/src/eval/index.js"

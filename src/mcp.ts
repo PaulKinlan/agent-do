@@ -19,36 +19,31 @@
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
-import { createRequire } from 'node:module';
 import { wrapForModel } from './tools/content-guards.js';
 import type { AgentConfig } from './types.js';
 
 /**
  * Library version used in the MCP `Client` handshake metadata (what the
- * server sees as the connecting client). Resolved at module load from
- * the real `package.json` so the value tracks the release version
- * without a second source of truth to keep in sync (Copilot #75 review).
+ * server sees as the connecting client).
  *
- * Best-effort: if the JSON read fails (unlikely in a normal install,
- * but possible in some bundled-runtime / edge-runtime configs), fall
- * back to a known-stale constant. The server uses this purely for
- * logging — a stale value is informational drift, not a correctness
- * issue — so the fallback shouldn't throw and interrupt the mount.
+ * This is a LITERAL, not a read of `package.json`. It used to be resolved at
+ * module load through `createRequire(import.meta.url)` + `node:module`, which
+ * made this module - and therefore anything importing it, including the
+ * browser entry - depend on a Node builtin (GH #139). The "no second source
+ * of truth" property is kept by a test instead of by runtime code:
+ * `tests/browser-entry.test.ts` fails if this constant and `package.json`'s
+ * version ever disagree, so drift is caught in CI rather than avoided by
+ * dragging `node:module` into every consumer.
+ *
+ * The server uses this purely for logging, so a stale value would be
+ * informational drift rather than a correctness issue - but it cannot go
+ * stale silently.
  */
-const LIB_VERSION: string = (() => {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require('../package.json') as { version?: string };
-    if (typeof pkg.version === 'string') return pkg.version;
-  } catch {
-    // fall through to the literal
-  }
-  return '0.0.0';
-})();
+const LIB_VERSION = '0.7.0';
 
 /**
  * A single MCP server to mount. `name` is the namespace used to prefix
@@ -186,7 +181,7 @@ export async function mountMcpServers(
       // all-or-nothing failure path.
       clients.push(client);
 
-      const transport = createTransport(config.transport);
+      const transport = await createTransport(config.transport);
       await client.connect(transport);
 
       const { tools: mcpTools } = await client.listTools();
@@ -334,15 +329,31 @@ export async function mountMcpServers(
   };
 }
 
-function createTransport(config: McpTransportConfig) {
+async function createTransport(config: McpTransportConfig): Promise<Transport> {
   switch (config.type) {
-    case 'stdio':
+    case 'stdio': {
+      // The SDK's stdio transport pulls `cross-spawn`, `node:process` and `node:stream`. A static
+      // import of it made this module - and every module importing it, including the browser entry -
+      // pull Node-only code into a browser build (GH #139, agent-do-5ep). The specifier is therefore
+      // INDIRECT: bundlers cannot follow it, so this edge never lands in a browser bundle, while a
+      // Node runtime still resolves it on demand. The browser entry refuses `stdio` configs up front
+      // with a clear error instead of relying on this failing at import time.
+      const spec = '@modelcontextprotocol/sdk/client/stdio.js';
+      const { StdioClientTransport } = (await import(/* @vite-ignore */ spec)) as {
+        StdioClientTransport: new (options: {
+          command: string;
+          args?: string[];
+          env?: Record<string, string>;
+          cwd?: string;
+        }) => Transport;
+      };
       return new StdioClientTransport({
         command: config.command,
         args: config.args,
         env: config.env,
         cwd: config.cwd,
       });
+    }
     case 'sse':
       return new SSEClientTransport(new URL(config.url), {
         requestInit: config.headers ? { headers: config.headers } : undefined,
