@@ -66,21 +66,15 @@ export type RemoteMcpTransportConfig = Extract<McpTransportConfig, { type: 'http
  * Mount MCP servers over the remote (`http` / `sse`) transports.
  *
  * Same contract as {@link mountMcpServers} — tool namespacing, injection wrapping, per-server isolation —
- * with the Node-only stdio transport rejected up front. The rejection is deliberate and typed: a browser
- * caller that passes a `stdio` config would otherwise get an obscure failure from a bundler-ignored dynamic
- * import, at a point far from the mistake.
+ * with the Node-only stdio transport rejected up front. The rejection is deliberate and typed, and it is
+ * implemented once, in `mountMcpServers`, keyed on `allowStdio`; this function simply pins that option to
+ * `false`. The same check therefore protects `runAgentLoop`, which mounts through `mountConfigMcp` with the
+ * runtime probe as its default (agent-do-5sh).
  */
 export async function mountRemoteMcpServers(
   configs: McpServerConfig[],
 ): Promise<MountedMcpServers> {
-  const stdio = configs.filter((config) => config.transport.type === 'stdio');
-  if (stdio.length > 0) {
-    const names = stdio.map((config) => `"${config.name}"`).join(', ');
-    throw new TypeError(
-      `MCP server ${names} uses the stdio transport, which spawns a child process and needs Node streams. ` +
-        `From a browser, configure an 'http' or 'sse' transport instead (see mountRemoteMcpServers), or ` +
-        `mount it from Node with mountMcpServers.`,
-    );
-  }
-  return mountMcpServers(configs);
+  // Delegates rather than re-implementing the check: the rejection lives in the shared mount path, so this
+  // helper and `runAgentLoop` (which mounts through `mountConfigMcp`) cannot drift apart again (agent-do-5sh).
+  return mountMcpServers(configs, { allowStdio: false });
 }

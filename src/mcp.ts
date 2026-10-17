@@ -129,12 +129,49 @@ export function namespacedToolName(serverName: string, toolName: string): string
  *   - Tools invoked after `close()` resolve with an error string rather
  *     than throwing (same shape as other execute errors in agent-do).
  */
+/**
+ * Options for {@link mountMcpServers}.
+ */
+export interface MountMcpOptions {
+  /**
+   * Allow the `stdio` transport, which spawns a child process.
+   *
+   * Defaults to {@link canSpawnStdioMcp}, i.e. true in Node and false in a browser. Pass `false` explicitly to
+   * get the deterministic rejection in any runtime.
+   */
+  allowStdio?: boolean;
+}
+
+/**
+ * Whether this runtime can spawn the child process the stdio MCP transport needs.
+ *
+ * Read through `globalThis` so this module never touches a bare global: the browser entry's graph test asserts
+ * exactly that, and a browser build must not need a `process` shim (GH #139). Checking the capability, rather
+ * than relying on the dynamic import to fail, is what turns "a bundler-ignored import blew up somewhere" into
+ * a message that names the server and the fix (agent-do-5sh).
+ */
+export function canSpawnStdioMcp(): boolean {
+  const proc = (globalThis as { process?: { versions?: { node?: string } } }).process;
+  return typeof proc?.versions?.node === 'string';
+}
+
+/** The one rejection message for a stdio config this runtime cannot run. */
+function stdioUnavailable(name: string): TypeError {
+  return new TypeError(
+    `MCP server "${name}" uses the stdio transport, which spawns a child process and needs Node streams. ` +
+      `This runtime cannot run it. Configure an 'http' or 'sse' transport instead, or mount it from Node ` +
+      `with mountMcpServers.`,
+  );
+}
+
 export async function mountMcpServers(
   configs: McpServerConfig[],
+  options: MountMcpOptions = {},
 ): Promise<MountedMcpServers> {
   // Validate up front — surface bad names as TypeErrors before any
   // subprocess spawns, so the caller gets a deterministic failure.
   const seen = new Set<string>();
+  const allowStdio = options.allowStdio ?? canSpawnStdioMcp();
   for (const config of configs) {
     if (!NAMESPACE_RE.test(config.name)) {
       throw new TypeError(
@@ -145,6 +182,12 @@ export async function mountMcpServers(
       throw new TypeError(`Duplicate MCP server name "${config.name}"`);
     }
     seen.add(config.name);
+    // Rejected here, in the shared mount path, BEFORE any client or transport exists - so the loop and this
+    // function behave the same way, and no caller can reach the stdio dynamic import in a runtime that cannot
+    // spawn (agent-do-5sh: the guard used to live only in the browser helper, which runAgentLoop never calls).
+    if (!allowStdio && config.transport.type === 'stdio') {
+      throw stdioUnavailable(config.name);
+    }
   }
 
   const clients: Client[] = [];
@@ -410,11 +453,12 @@ function formatMcpToolResult(result: unknown): string {
  */
 export async function mountConfigMcp(
   config: AgentConfig,
+  options: MountMcpOptions = {},
 ): Promise<{ config: AgentConfig; mcp: MountedMcpServers | undefined }> {
   if (!config.mcpServers || config.mcpServers.length === 0) {
     return { config, mcp: undefined };
   }
-  const mcp = await mountMcpServers(config.mcpServers);
+  const mcp = await mountMcpServers(config.mcpServers, options);
   // Local tools win on name collisions — the caller's explicit `tools`
   // map is authoritative, and MCP servers can't silently shadow a local
   // tool just by naming something the same. Server-side tools always

@@ -1,58 +1,127 @@
 /**
  * Browser entry (GH #139, agent-do-5ep) — the acceptance check.
  *
- * The issue's acceptance is not "a `./browser` export exists", it is: **build with builtin imports
- * forbidden, and no global `process` shim**. That is a property of the whole transitive graph, so it
- * cannot be held by a doc comment — any import added anywhere in reachable code can break it, silently,
- * long after the change that did it. This file therefore checks the property the way a bundler would:
- * it walks the real import graph from `src/browser.ts` and fails on a reachable `node:` specifier, a bare
- * `process.x`, `require(`, `__dirname` or `import.meta.url`.
+ * The issue's acceptance is: **build with builtin imports forbidden, and no global `process` shim**. That is a
+ * property of the whole transitive graph, so it cannot be held by a doc comment — any import added anywhere
+ * reachable can break it long after the change that did it.
  *
- * Two details matter for the walk to be worth anything:
+ * THE GRAPH IS WALKED FROM THE AST, NOT WITH A REGEX (agent-do-9d2). The first version matched
+ * `... from '<spec>'` with a regular expression, which silently missed side-effect imports — `import 'node:fs';`
+ * is a legal runtime import with no `from` clause — so a module could have added exactly the thing this test
+ * exists to forbid and stayed green. Regenerating the same knowledge with a TypeScript AST removes the class:
+ * `ImportDeclaration` (with or without a clause), `ExportDeclaration`, `ImportEqualsDeclaration` and dynamic
+ * `import(...)` are all visited, and `test('sees every import form a bundler would follow')` pins that with a
+ * table of sources, so a future narrowing fails loudly instead of quietly checking less.
  *
- * 1. `import type` / `export type` edges are NOT followed. They are erased before a bundler sees them, so
- *    treating them as runtime edges reports failures that no browser build would hit — the first version
- *    of this analysis flagged `types.ts -> mcp.ts` for exactly that reason and was wrong.
- * 2. Comments and string/template literals are removed before scanning for `process`. `src/usage.ts`
- *    explains in a comment that *"browsers don't have process.stderr"* and then reads it through
- *    `globalThis` with an explicit `?.` guard; a naive grep reports the prose, and the guarded read works
- *    without a shim, so both must pass.
+ * The identifier scan is AST-based for the same reason: a regular expression over source sees `process` inside
+ * comments (`src/usage.ts` explains *"browsers don't have process.stderr"* in prose) and inside type
+ * annotations (`{ process?: … }`), and both were false positives in the first version. The AST only reports a
+ * `process` identifier that is a FREE reference, so `globalThis.process` and `typeof process` pass by
+ * construction — they are the shim-free ways to reach it, which is what the acceptance actually requires.
  *
- * The third group of tests is the other half of the contract: the Node entry must keep everything it
- * exported before (the issue says "preserve native Node exports"), so each split is checked from both
- * sides — present in `src/index.ts`, absent from `src/browser.ts`.
+ * The second group covers the other half of the contract, "preserve native Node exports": every split is checked
+ * from both sides — present in `src/index.ts`, absent from `src/browser.ts`.
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as ts from 'typescript';
 
 import * as browserEntry from '../src/browser.js';
 import { buildOnStepEnd, runAgentLoop, streamAgentLoop } from '../src/loop.js';
+import { canSpawnStdioMcp } from '../src/mcp.js';
 import * as nodeEntry from '../src/index.js';
+import type { AgentConfig } from '../src/types.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'src');
 const BROWSER_ENTRY = join(SRC, 'browser.ts');
 
-/** Remove comments so prose about `process.stderr` is not mistaken for code. */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:"'`\\])\/\/[^\n]*/gm, '$1');
+/** `true` when the import/export is erased before a bundler sees it (`import type` / `export type`). */
+interface Specifier {
+  specifier: string;
+  typeOnly: boolean;
+  dynamic: boolean;
 }
 
-/** Blank string and template literals so their contents are not read as identifiers. */
-function blankStrings(source: string): string {
-  return source
-    .replace(/'(?:\\.|[^'\\\n])*'/g, "''")
-    .replace(/"(?:\\.|[^"\\\n])*"/g, '""')
-    .replace(/`(?:\\.|[^`\\])*`/g, '``');
+function parse(fileName: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
-/** A runtime import/export-from, or a dynamic import with a literal specifier. */
-const IMPORT_RE =
-  /(?:^|\n)\s*(?:import|export)\s+(type\s+)?([^;\n]*?)\s*from\s*['"]([^'"]+)['"]|(?<!["'\w])import\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+/** Every module specifier this file names at runtime: all import/export forms, dynamic imports included. */
+function importSpecifiers(fileName: string, source: string): Specifier[] {
+  const out: Specifier[] = [];
+  const push = (specifier: string, typeOnly: boolean, dynamic: boolean): void => {
+    out.push({ specifier, typeOnly, dynamic });
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      // Covers `import x from`, `import {a} from`, `import type {...} from` AND the side-effect form
+      // `import '<spec>'` — the form the regex version could not see (agent-do-9d2).
+      if (ts.isStringLiteral(node.moduleSpecifier)) {
+        push(node.moduleSpecifier.text, node.importClause?.isTypeOnly ?? false, false);
+      }
+    } else if (ts.isExportDeclaration(node)) {
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        push(node.moduleSpecifier.text, node.isTypeOnly, false);
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      const ref = node.moduleReference;
+      if (ts.isExternalModuleReference(ref) && ref.expression && ts.isStringLiteral(ref.expression)) {
+        push(ref.expression.text, node.isTypeOnly, true);
+      }
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      push(node.arguments[0].text, false, true);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(fileName, source));
+  return out;
+}
+
+/**
+ * Node-only global references, as a bundler would see them: free `process`, `require(...)`, `__dirname`,
+ * `__filename`, `import.meta.url`. `globalThis.process` and `typeof process` are deliberately NOT reported —
+ * they are how code stays shim-free.
+ */
+function nodeOnlyGlobals(fileName: string, source: string): string[] {
+  const out: string[] = [];
+  const visit = (node: ts.Node, guardOnly: boolean): void => {
+    if (ts.isTypeOfExpression(node)) {
+      ts.forEachChild(node, (child) => visit(child, true));
+      return;
+    }
+    if (ts.isIdentifier(node) && !guardOnly) {
+      const parent = node.parent;
+      const isMemberName =
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        (ts.isPropertySignature(parent) && parent.name === node) ||
+        (ts.isMethodDeclaration(parent) && parent.name === node);
+      if (!isMemberName && node.text === 'process') out.push('free `process` reference');
+      if (node.text === '__dirname' || node.text === '__filename') out.push(node.text);
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require'
+    ) {
+      out.push('require(...)');
+    }
+    if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression)) {
+      out.push('import.meta.url');
+    }
+    ts.forEachChild(node, (child) => visit(child, guardOnly));
+  };
+  visit(parse(fileName, source), false);
+  return [...new Set(out)];
+}
 
 interface Offender {
   what: string;
@@ -65,10 +134,7 @@ interface Graph {
   bareSpecifiers: Set<string>;
 }
 
-/**
- * Walk runtime imports from `entry`, collecting every reachable module, every Node-only reference, and
- * every bare package specifier (so the test can check that no *dependency* drags Node code in either).
- */
+/** Walk runtime imports from `entry` the way a bundler would. */
 function analyse(entry: string): Graph {
   const modules = new Set<string>();
   const offenders: Offender[] = [];
@@ -78,36 +144,20 @@ function analyse(entry: string): Graph {
     if (modules.has(file)) return;
     modules.add(file);
 
-    const code = stripComments(readFileSync(file, 'utf8'));
+    const source = readFileSync(file, 'utf8');
     const chain = [...via, relative(ROOT, file)];
 
-    for (const match of code.matchAll(IMPORT_RE)) {
-      const isTypeOnly = Boolean(match[1]);
-      const specifier = match[3] ?? match[4];
-      if (!specifier) continue;
-      if (isTypeOnly) continue; // erased before a bundler sees it
+    for (const { specifier, typeOnly, dynamic } of importSpecifiers(file, source)) {
+      if (typeOnly) continue; // erased before a bundler sees it
       if (specifier.startsWith('node:')) {
-        offenders.push({ what: `${specifier}${match[4] ? ' (dynamic)' : ''}`, via: chain });
+        offenders.push({ what: `${specifier}${dynamic ? ' (dynamic)' : ''}`, via: chain });
       } else if (specifier.startsWith('.')) {
         visit(resolve(dirname(file), specifier).replace(/\.js$/, '.ts'), chain);
       } else {
         bareSpecifiers.add(specifier);
       }
     }
-
-    const codeNoStrings = blankStrings(code);
-    for (const match of codeNoStrings.matchAll(
-      /(?<![\w.$])process\.(env|argv|stdout|stderr|stdin|cwd|exit|platform)/g,
-    )) {
-      // `typeof process` and `globalThis[...].process` are the shim-free ways to reach it, so allow them.
-      const near = codeNoStrings.slice(Math.max(0, match.index - 200), match.index + 200);
-      if (!/typeof\s+process|globalThis[\s\S]{0,80}\.process/.test(near)) {
-        offenders.push({ what: `bare process.${match[1]}`, via: chain });
-      }
-    }
-    for (const match of codeNoStrings.matchAll(/(?<![\w.$])(require\s*\(|__dirname|import\.meta\.url)/g)) {
-      offenders.push({ what: match[1], via: chain });
-    }
+    for (const what of nodeOnlyGlobals(file, source)) offenders.push({ what, via: chain });
   };
 
   visit(entry, []);
@@ -116,8 +166,42 @@ function analyse(entry: string): Graph {
 
 const graph = analyse(BROWSER_ENTRY);
 
+describe('the walker itself (agent-do-9d2)', () => {
+  // If the walker cannot see a form, every assertion below it is weaker than it looks. This table is the
+  // contract for "a bundler would follow this", including the side-effect import that the regex version missed.
+  it.each([
+    ["import x from 'node:fs';", 'node:fs', false],
+    ["import { readFile } from 'node:fs';", 'node:fs', false],
+    ["import type { X } from 'node:fs';", 'node:fs', true],
+    ["import 'node:fs';", 'node:fs', false], // side-effect form: no clause, no `from`
+    ["export * from 'node:fs';", 'node:fs', false],
+    ["export type { X } from 'node:fs';", 'node:fs', true],
+    ["export { x } from './x.js';", './x.js', false],
+    ['const m = await import("node:fs");', 'node:fs', false],
+    ['import fs = require("node:fs");', 'node:fs', false],
+  ])('sees %s', (source, expected, typeOnly) => {
+    const found = importSpecifiers('probe.ts', source);
+    expect(found.some((s) => s.specifier === expected && s.typeOnly === typeOnly)).toBe(true);
+  });
+
+  it('sees a free process reference but not the guarded forms', () => {
+    expect(nodeOnlyGlobals('p.ts', 'const a = process.env.HOME;')).toContain('free `process` reference');
+    expect(nodeOnlyGlobals('p.ts', 'const p = (globalThis).process; const q = p?.env;')).toEqual([]);
+    // The guard EXPRESSION is allowed; a use inside the guarded block is still a free reference, because the
+    // AST carries no control flow. That is deliberate and conservative: `globalThis.process` (which usage.ts
+    // uses) is the pattern that passes, and a `typeof` guard does not come with a proof that the body is only
+    // reachable in Node.
+    expect(nodeOnlyGlobals('p.ts', 'if (typeof process !== "undefined") { }')).toEqual([]);
+    expect(
+      nodeOnlyGlobals('p.ts', 'if (typeof process !== "undefined") { void process; }'),
+    ).toContain('free `process` reference');
+    expect(nodeOnlyGlobals('p.ts', 'const t = { process?: unknown }; // process.env in prose')).toEqual([]);
+    expect(nodeOnlyGlobals('p.ts', 'const u = import.meta.url;')).toContain('import.meta.url');
+  });
+});
+
 describe('the browser entry graph, walked the way a bundler follows it', () => {
-  it('contains no Node builtin, no bare process access, no require/__dirname/import.meta.url', () => {
+  it('contains no Node builtin, no free process reference, no require/__dirname/import.meta.url', () => {
     const report = graph.offenders
       .map((offender) => `  ${offender.what}\n      via ${offender.via.join(' -> ')}`)
       .join('\n');
@@ -129,8 +213,6 @@ describe('the browser entry graph, walked the way a bundler follows it', () => {
   });
 
   it('reaches the real implementations rather than stubs', () => {
-    // "retaining real loop, in-memory routines, cron validation and remote MCP" - if any of these is
-    // missing, the entry has been hollowed out and the graph assertions above become trivial.
     for (const required of [
       'src/loop.ts',
       'src/routines.ts',
@@ -143,14 +225,14 @@ describe('the browser entry graph, walked the way a bundler follows it', () => {
 
   it('keeps every Node-only half out of the graph', () => {
     for (const forbidden of [
-      'src/routines/filesystem.ts', // node:fs
-      'src/scheduled-tasks/fs.ts', // node:fs + the #15 lock
-      'src/stores/file-lock.ts', // node:os + node:crypto
-      'src/stores/sandbox.ts', // node:fs (host connector)
-      'src/tools/shell-tool.ts', // node:child_process
-      'src/tools/workspace-tools.ts', // node:child_process via the host connector
-      'src/agent.ts', // composes the Node-only tools and the scheduled-task runner
-      'src/index.ts', // the Node entry itself
+      'src/routines/filesystem.ts',
+      'src/scheduled-tasks/fs.ts',
+      'src/stores/file-lock.ts',
+      'src/stores/sandbox.ts',
+      'src/tools/shell-tool.ts',
+      'src/tools/workspace-tools.ts',
+      'src/agent.ts',
+      'src/index.ts',
     ]) {
       expect(
         graph.modules.has(join(ROOT, forbidden)),
@@ -160,9 +242,6 @@ describe('the browser entry graph, walked the way a bundler follows it', () => {
   });
 
   it('imports no MCP client transport that pulls Node streams', () => {
-    // The remote transports are safe; the stdio one pulls `cross-spawn`, `node:process` and `node:stream`.
-    // `src/mcp.ts` imports it dynamically through an indirect specifier so bundlers cannot follow it, which
-    // also means the walk above cannot see it - so check the SDK files we DO import, directly.
     const sdkRoot = join(ROOT, 'node_modules/@modelcontextprotocol/sdk/dist/esm');
     const sdkSpecifiers = [...graph.bareSpecifiers].filter((specifier) =>
       specifier.startsWith('@modelcontextprotocol/sdk/'),
@@ -171,7 +250,7 @@ describe('the browser entry graph, walked the way a bundler follows it', () => {
     for (const specifier of sdkSpecifiers) {
       const file = join(sdkRoot, specifier.slice('@modelcontextprotocol/sdk/'.length));
       expect(existsSync(file), `${specifier} should resolve inside the published SDK`).toBe(true);
-      const code = stripComments(readFileSync(file, 'utf8'));
+      const code = readFileSync(file, 'utf8');
       expect(code, `${specifier} must not import a Node builtin`).not.toMatch(/from\s*['"]node:/);
       expect(code, `${specifier} must not spawn a process`).not.toMatch(/['"]cross-spawn['"]/);
     }
@@ -186,7 +265,6 @@ describe('what the browser entry exports', () => {
   });
 
   it('validates cron expressions without touching the host', () => {
-    // Local-time construction so the assertion is timezone independent.
     expect(browserEntry.matchesCron('*/5 * * * *', new Date(2026, 0, 1, 0, 5, 0))).toBe(true);
     expect(browserEntry.matchesCron('*/5 * * * *', new Date(2026, 0, 1, 0, 7, 0))).toBe(false);
     expect(() =>
@@ -211,29 +289,50 @@ describe('what the browser entry exports', () => {
     expect((await store.get('daily'))?.runCount).toBe(1);
     await store.remove('daily');
     expect(await store.get('daily')).toBeUndefined();
-    // The Node-only store must not be reachable from this entry.
     expect('FilesystemRoutineStore' in browserEntry).toBe(false);
   });
+});
 
-  it('mounts remote MCP and refuses stdio with an actionable error', async () => {
+describe('a runtime that cannot spawn rejects stdio before any dynamic import (agent-do-5sh)', () => {
+  const stdioConfig = { name: 'local', transport: { type: 'stdio' as const, command: 'node' } };
+
+  it('rejects via runAgentLoop — the path the review found unguarded', async () => {
+    // The guard used to live only in mountRemoteMcpServers, which runAgentLoop never calls, so a stdio config
+    // reached the bundler-ignored dynamic import and failed there. It now lives in mountMcpServers, keyed on a
+    // capability probe, and defaults to that probe for every caller.
+    const versions = process.versions as { node?: string };
+    const saved = versions.node;
+    try {
+      delete versions.node;
+      expect(canSpawnStdioMcp()).toBe(false);
+      await expect(
+        runAgentLoop(
+          { mcpServers: [stdioConfig] } as unknown as AgentConfig,
+          'say hello',
+        ),
+      ).rejects.toThrow(/stdio transport[\s\S]*'http' or 'sse'/);
+    } finally {
+      versions.node = saved;
+    }
+  });
+
+  it('rejects via mountRemoteMcpServers, which pins the same option', async () => {
     expect('mountMcpServers' in browserEntry).toBe(false);
-    await expect(
-      browserEntry.mountRemoteMcpServers([
-        { name: 'local', transport: { type: 'stdio', command: 'node' } },
-      ]),
-    ).rejects.toThrow(/stdio transport[\s\S]*'http' or 'sse'/);
+    await expect(browserEntry.mountRemoteMcpServers([stdioConfig])).rejects.toThrow(
+      /stdio transport[\s\S]*'http' or 'sse'/,
+    );
+  });
+
+  it('reports the capability it actually probed', () => {
+    expect(canSpawnStdioMcp()).toBe(true); // this suite runs in Node
   });
 });
 
 describe('version metadata', () => {
   it('pins the MCP client version to package.json instead of reading it with node:module', () => {
-    // `src/mcp.ts` used `createRequire(import.meta.url)` for this, which made the module - and everything
-    // importing it - depend on a Node builtin. A literal is only safe if drift is caught, so it is caught.
     const literal = /const LIB_VERSION = '([^']+)'/.exec(readFileSync(join(SRC, 'mcp.ts'), 'utf8'));
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string };
     expect(literal?.[1], 'LIB_VERSION must be a literal in src/mcp.ts').toBeTruthy();
-    // A release that bumps package.json must move this literal in the same commit. The message says so
-    // explicitly, because this failure will otherwise arrive in a release PR where the cause is non-obvious.
     expect(
       literal?.[1],
       `src/mcp.ts must carry const LIB_VERSION = '${pkg.version}'; (it is a literal so this module needs no ` +
@@ -243,7 +342,6 @@ describe('version metadata', () => {
 });
 
 describe('the Node entry keeps what it exported before', () => {
-  // "preserve native Node exports" - each split moved code, so both sides are checked.
   it.each([
     'FilesystemRoutineStore',
     'matchesCron',
