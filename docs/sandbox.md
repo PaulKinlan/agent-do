@@ -65,7 +65,7 @@ convention.
 |---|---|---|---|
 | `createHostSandbox(opts?)` | `node:fs/promises` + `child_process` | host (none) | Pass it to `createShellTool()` explicitly to opt into host execution — there is no default fallback. Commands get an allowlisted environment, not the parent's (see below). **Not a security boundary.** |
 | `createJustBashSandbox(opts?)` | [vercel-labs/just-bash][just-bash] virtual fs + interpreter | `allowNet` fetch hook inside the interpreter | Optional peer dep — install `just-bash` to use. |
-| `wrapJustBashSandbox(instance)` | as above | as above | For callers that construct the underlying just-bash `Sandbox` themselves. |
+| `wrapJustBashSandbox(instance)` | as above | **inherits** the instance's policy — cannot set or attest it | For callers that construct the underlying just-bash `Sandbox` themselves; configure `allowNet` on that instance. |
 
 Other backends (Vercel Sandbox, Deno Sandbox, Anthropic
 sandbox-runtime) aren't shipped — implement your own against
@@ -78,7 +78,12 @@ Network policy is **a connector-level concern, not a method on
 `SandboxApi`**. Each factory takes its own `allowNet` shape that
 matches what the underlying runtime exposes:
 
-- **just-bash** intercepts `fetch` / `curl` inside the interpreter.
+- **just-bash** intercepts `fetch` / `curl` inside the interpreter. Only the
+  factory sets it: `createJustBashSandbox({ allowNet })` forwards it to the
+  Sandbox config, passing `false` when omitted (it is never left unset for the
+  Sandbox to default). `wrapJustBashSandbox(instance)` inherits whatever the
+  instance was constructed with and cannot set or attest it — if you need a gated
+  network on that path, configure it yourself and check it.
 - **host** has no network policy — every network call goes straight
   out.
 
