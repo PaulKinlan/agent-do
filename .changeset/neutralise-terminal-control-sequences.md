@@ -16,3 +16,7 @@ gap between them closed.
 The streamed answer on stdout is covered too, and only when stdout is a terminal
 (`src/cli/answer-stream.ts`): a terminal obeys control sequences, a file or pipe does not. Redirected and piped
 output stays byte-identical, so consumers that parse the answer are unaffected.
+
+Interactive mode's answer and a scheduled task's answer are covered too — both are separate streaming loops that
+assign the model output to a local before printing it, which is why a check that looked for `stdout.write(event.*)`
+could not see them (agent-do-wcq).

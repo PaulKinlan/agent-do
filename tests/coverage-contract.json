@@ -38,6 +38,7 @@
   "src/cli/answer-stream.ts": [
     "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
+    "tests/cli-scheduled-tasks.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/args.ts": [

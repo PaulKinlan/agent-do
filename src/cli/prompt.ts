@@ -231,7 +231,10 @@ async function runInteractive(
       if (handled) continue;
       if (event.type === 'done') {
         response = event.content;
-        if (!args.verbose) process.stdout.write(response);
+        // Interactive mode is a third streaming loop, and it assigns to a local before writing - which is why a
+        // pattern matching `stdout.write(event.` could never see it (agent-do-wcq). Everything model-derived goes
+        // through the same seam as the other two.
+        if (!args.verbose) writeAnswerChunk(response);
         process.stdout.write('\n\n');
       }
       // Errors don't terminate interactive mode — the user can keep

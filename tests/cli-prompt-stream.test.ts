@@ -13,6 +13,7 @@
  * Both directions matter (see the helper test): a terminal must not be driven by model output, and a pipe or
  * redirect must receive the bytes unchanged.
  */
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseArgs } from '../src/cli/args.js';
 import { runPromptMode } from '../src/cli/prompt.js';
@@ -36,6 +37,7 @@ describe('runPromptMode writes the streamed answer through the sanitiser (agent-
   let writeSpy: any;
   const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
   const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin');
 
   function setStdoutTty(value: boolean | undefined): void {
     Object.defineProperty(process.stdout, 'isTTY', { value, configurable: true, writable: true });
@@ -59,6 +61,9 @@ describe('runPromptMode writes the streamed answer through the sanitiser (agent-
     writeSpy.mockRestore();
     if (stdoutTtyDescriptor) Object.defineProperty(process.stdout, 'isTTY', stdoutTtyDescriptor);
     else Reflect.deleteProperty(process.stdout, 'isTTY');
+    const current = process.stdin as unknown as { destroy?: () => void };
+    if (typeof current.destroy === 'function') current.destroy();
+    if (stdinDescriptor) Object.defineProperty(process, 'stdin', stdinDescriptor);
     if (stdinTtyDescriptor) Object.defineProperty(process.stdin, 'isTTY', stdinTtyDescriptor);
     else Reflect.deleteProperty(process.stdin, 'isTTY');
   });
@@ -88,5 +93,40 @@ describe('runPromptMode writes the streamed answer through the sanitiser (agent-
     await run(ordinary);
     expect(written()).toContain(ordinary);
     expect(written()).not.toContain('[U+');
+  }, 20_000);
+
+  it('neutralises the answer in INTERACTIVE mode, which is a separate streaming loop', async () => {
+    // agent-do-wcq: interactive mode is entered when there is no prompt and no piped stdin, and it assigns the
+    // answer to a local before writing it - so neither the helper test nor a `stdout.write(event.` pattern could
+    // ever have seen it. Driving it for real is the only honest proof, so stdin is swapped for a scripted one.
+    setStdoutTty(true);
+    // Both answers are buffered up front but the stream is never ENDED: `Readable.from` ends immediately, and
+    // readline closes on 'end' before the model stream has finished the first turn, so the second `question()` call
+    // rejects with "readline was closed". A PassThrough that stays open feeds them in order instead.
+    const scripted = new PassThrough();
+    Object.defineProperty(scripted, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process, 'stdin', { value: scripted, configurable: true });
+    mockState.text = HOSTILE;
+    scripted.write('hi\n');
+
+    // `exit` is written only once the first answer has actually been printed. readline emits each line as it arrives
+    // and drops any line with no pending `question()`, so writing both up front loses the second one and the loop
+    // waits forever. `vi.waitFor` bounds the wait instead of sleeping.
+    const running = runPromptMode(parseArgs(['--provider', 'mock', '--model', 'mock-model', '--no-tools']));
+    await vi.waitFor(
+      () => {
+        expect(written(), 'the first answer never arrived').toContain('answer');
+      },
+      { timeout: 10_000 },
+    );
+    scripted.write('exit\n');
+    await running;
+
+    const out = written();
+    expect(out, 'the interactive answer never reached stdout').toContain('answer');
+    expect(out, 'the OSC 52 introducer survived into the interactive terminal').not.toMatch(OSC52_INTRODUCER);
+    expect(out, 'a raw bidi override reached the interactive terminal').not.toMatch(BIDI);
+    expect(out).toContain('[U+001B]');
+    expect(out).toContain('[U+202E]');
   }, 20_000);
 });
