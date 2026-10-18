@@ -80,25 +80,93 @@ describe('writeAnswerChunk', () => {
   });
 });
 
+/** Known-sanitised wrappers: their result cannot carry a raw terminal control sequence. */
+const SAFE_WRAPPERS = [
+  'JSON.stringify(',
+  'printable(',
+  'sanitiseForTerminal(',
+  'sanitiseForStream(',
+  'writeAnswerChunk(',
+  'writeOperatorLine(',
+];
+
+const startsWithSafeWrapper = (expr: string): boolean => SAFE_WRAPPERS.some((w) => expr.startsWith(w));
+
+/** Every `${...}` expression inside a template literal, with nested braces and string literals respected. */
+function interpolations(templateArg: string): string[] {
+  const found: string[] = [];
+  let i = 0;
+  while (i < templateArg.length) {
+    const at = templateArg.indexOf('${', i);
+    if (at === -1) return found;
+    let depth = 1;
+    let j = at + 2;
+    let quote: string | null = null;
+    while (j < templateArg.length && depth > 0) {
+      const ch = templateArg[j];
+      if (quote) {
+        if (ch === '\\') {
+          j += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        j += 1;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === '`') {
+        quote = ch;
+        j += 1;
+        continue;
+      }
+      if (ch === '{') depth += 1;
+      else if (ch === '}') depth -= 1;
+      j += 1;
+    }
+    found.push(templateArg.slice(at + 2, j - 1).trim());
+    i = j;
+  }
+  return found;
+}
+
 /**
- * Collect the argument text of every `process.stdout.write(...)` call in `source`.
- *
- * A depth scan that skips string literals, so a nested call or a multi-line argument is captured whole.
+ * Acceptable argument shapes for operator-facing stdout (agent-do-bc4):
+ * - a string literal
+ * - a template with no interpolation (layout only: newlines, banners)
+ * - a call to a known sanitiser/encoder, whole-line
+ * - a template whose EVERY interpolation is itself a sanitiser call
+ * Anything else - any bare variable, any arithmetic, any unsanitised interpolation - is model/config data until
+ * proven otherwise and must be wrapped or routed through the seam.
  */
-function stdoutWriteArgs(source: string): string[] {
-  const args: string[] = [];
-  const needle = 'process.stdout.write(';
-  let i = source.indexOf(needle);
-  while (i !== -1) {
+function isSafeStdoutArg(arg: string): boolean {
+  // A blank line: `console.log()` is layout, not data.
+  if (arg === '') return true;
+  // Machine-format output is DATA, not operator-facing text: `--json`, the CSV eval rows, and the crontab lines
+  // `scheduled-tasks install` emits. Escaping belongs to the format (JSON does it; a CSV cell and a crontab line are
+  // read by a parser, not a terminal). The human-readable versions of the same content go through the renderer.
+  if (/^(?:JSON\.stringify|lines\.join|[A-Za-z_$][\w$]*\.join)\(/.test(arg)) return true;
+  if (/^'(?:[^'\\]|\\.)*'$/.test(arg)) return true;
+  if (/^"(?:[^"\\]|\\.)*"$/.test(arg)) return true;
+  if (startsWithSafeWrapper(arg)) return true;
+  if (!arg.startsWith('`')) return false;
+  const parts = interpolations(arg);
+  return parts.every((expr) => startsWithSafeWrapper(expr));
+}
+
+/** `process.stdout.write`, `console.log`, `console.info` and `console.debug` are the same channel (agent-do-bc4). */
+const STDOUT_CALL = /(?:process\.stdout\.write|console\.(?:log|info|debug))\(/;
+
+function stdoutCalls(source: string): Array<{ api: string; arg: string }> {
+  const calls: Array<{ api: string; arg: string }> = [];
+  let m: RegExpExecArray | null;
+  const re = new RegExp(STDOUT_CALL.source, 'g');
+  while ((m = re.exec(source)) !== null) {
+    const openParen = m.index + m[0].length - 1;
     let depth = 0;
-    let j = i + needle.length - 1;
+    let j = openParen;
     let quote: string | null = null;
     let arg = '';
     for (; j < source.length; j++) {
       const ch = source[j];
-      // Quoted content is PART of the argument: quote-awareness exists only so a paren inside a string literal is
-      // not mistaken for structure. Dropping it (an earlier version of this helper did) made every literal argument
-      // look empty, i.e. it failed the good cases rather than the bad one.
       if (quote) {
         arg += ch;
         if (ch === '\\') {
@@ -124,24 +192,10 @@ function stdoutWriteArgs(source: string): string[] {
       }
       if (depth >= 1) arg += ch;
     }
-    args.push(arg.trim());
-    i = source.indexOf(needle, j);
+    calls.push({ api: m[0].slice(0, -1), arg: arg.trim() });
+    re.lastIndex = j;
   }
-  return args;
-}
-
-/**
- * Acceptable argument shapes for a direct stdout write in `src/cli/`:
- * - a string literal, or a template with no interpolation (layout only: newlines, banners)
- * - `JSON.stringify(...)`: JSON escaping means no control byte reaches the terminal, and `--json` consumers want data
- * Everything else must go through `writeAnswerChunk`, so model-derived text cannot reach stdout by accident.
- */
-function isSafeStdoutArg(arg: string): boolean {
-  if (/^'(?:[^'\\]|\\.)*'$/.test(arg)) return true;
-  if (/^"(?:[^"\\]|\\.)*"$/.test(arg)) return true;
-  if (arg.startsWith('`') && !arg.includes('${')) return true;
-  if (arg.startsWith('JSON.stringify(')) return true;
-  return false;
+  return calls;
 }
 
 describe('no CLI module writes model output straight to stdout', () => {
@@ -166,8 +220,8 @@ describe('no CLI module writes model output straight to stdout', () => {
         .split('\n')
         .filter((line) => !line.trimStart().startsWith('*') && !line.trimStart().startsWith('//'))
         .join('\n');
-      for (const arg of stdoutWriteArgs(stripped)) {
-        if (!isSafeStdoutArg(arg)) offenders.push(`${file}: process.stdout.write(${arg})`);
+      for (const { api, arg } of stdoutCalls(stripped)) {
+        if (!isSafeStdoutArg(arg)) offenders.push(`${file}: ${api}(${arg})`);
       }
     }
     expect(offenders, 'these write non-literal data to stdout; route model output through writeAnswerChunk').toEqual(

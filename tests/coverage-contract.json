@@ -110,13 +110,15 @@
     "tests/shellm.test.ts"
   ],
   "src/cli/terminal-safety.ts": [
+    "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-terminal-safety.test.ts",
-    "tests/script-import.test.ts"
+    "tests/script-import.test.ts",
+    "tests/trust-boundary.test.ts"
   ],
   "src/cli/warnings.ts": [
     "tests/cli-prompt-stream.test.ts",

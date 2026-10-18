@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ParsedArgs } from './args.js';
 import { validateCliProviderToolNames } from './provider-tools.js';
+import { isSingleLineUnsafe } from './terminal-safety.js';
 
 /**
  * Schema for a saved agent JSON file. See issue #22 — earlier
@@ -181,27 +182,27 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
   const exists = await fs.promises.access(filePath).then(() => true).catch(() => false);
   if (exists) {
     // Overwrite — user can update config by re-creating
-    console.log(`Updating agent "${args.agentName}"...`);
+    console.log(printable(`Updating agent "${args.agentName}"...`));
   }
 
   await fs.promises.writeFile(filePath, JSON.stringify(config, null, 2) + '\n');
-  console.log(`Agent "${args.agentName}" saved to ${filePath}`);
+  console.log(printable(`Agent "${args.agentName}" saved to ${filePath}`));
   console.log();
-  console.log(`  Provider:     ${config.provider}`);
-  console.log(`  Model:        ${config.model ?? '(provider default)'}`);
-  console.log(`  System:       ${config.systemPrompt.slice(0, 60)}${config.systemPrompt.length > 60 ? '...' : ''}`);
-  console.log(`  Memory:       ${config.memoryDir}${config.withMemory ? '' : ' (disabled — pass --with-memory to enable)'}`);
-  console.log(`  Max iters:    ${config.maxIterations}`);
-  console.log(`  Read-only:    ${config.readOnly}`);
-  console.log(`  Tools:        ${config.noTools ? 'disabled' : 'workspace (cwd)'}`);
+  console.log(printable(`  Provider:     ${config.provider}`));
+  console.log(printable(`  Model:        ${config.model ?? '(provider default)'}`));
+  console.log(printable(`  System:       ${config.systemPrompt.slice(0, 60)}${config.systemPrompt.length > 60 ? '...' : ''}`));
+  console.log(printable(`  Memory:       ${config.memoryDir}${config.withMemory ? '' : ' (disabled — pass --with-memory to enable)'}`));
+  console.log(printable(`  Max iters:    ${config.maxIterations}`));
+  console.log(printable(`  Read-only:    ${config.readOnly}`));
+  console.log(printable(`  Tools:        ${config.noTools ? 'disabled' : 'workspace (cwd)'}`));
   if (config.providerTools && config.providerTools.length > 0) {
-    console.log(`  Provider:     ${config.providerTools.join(', ')}`);
+    console.log(printable(`  Provider:     ${config.providerTools.join(', ')}`));
   }
   if (config.providerOptions) {
-    console.log(`  Options:      ${JSON.stringify(config.providerOptions)}`);
+    console.log(printable(`  Options:      ${JSON.stringify(config.providerOptions)}`));
   }
   console.log();
-  console.log(`Run it: npx agent-do run ${args.agentName} "your task"`);
+  console.log(printable(`Run it: npx agent-do run ${args.agentName} "your task"`));
 }
 
 /**
@@ -244,14 +245,14 @@ export async function listSavedAgents(): Promise<void> {
       // `name` is derived from the filename, which can hold any character the
       // filesystem allows — `printable` keeps control characters (and therefore
       // terminal escape sequences) out of the operator's terminal.
-      console.log(`  ${printable(name).padEnd(20)} (invalid config)  [${rel}]`);
+      console.log(printable(`  ${printable(name).padEnd(20)} (invalid config)  [${rel}]`));
       continue;
     }
     const model = printable(config.model ?? '(default)');
     const prompt = printable(config.systemPrompt);
-    console.log(
+    console.log(printable(
       `  ${printable(config.name).padEnd(20)} ${config.provider}/${model}  ${prompt.slice(0, 40)}${prompt.length > 40 ? '...' : ''}  [${rel}]`,
-    );
+    ));
   }
   console.log();
 }
@@ -267,8 +268,10 @@ export async function listSavedAgents(): Promise<void> {
 function printable(value: string): string {
   let out = '';
   for (const ch of value) {
-    const code = ch.codePointAt(0)!;
-    out += code < 0x20 || (code >= 0x7f && code <= 0x9f) ? '?' : ch;
+    // `?` rather than the `[U+XXXX]` marker `sanitiseForTerminal` uses: a listing column wants a fixed width. The
+    // set of characters considered unsafe is shared, so this cannot drift from the sanitiser - and it now covers the
+    // bidi overrides, which the previous hand-rolled check here did not (agent-do-bc4).
+    out += isSingleLineUnsafe(ch) ? '?' : ch;
   }
   return out;
 }

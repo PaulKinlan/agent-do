@@ -337,6 +337,29 @@ describe('listSavedAgents', () => {
       expect(text).toContain('Be helpful.');
     });
 
+    it('neutralises control characters and bidi in a saved config (agent-do-bc4)', async () => {
+      // A saved agent file can come from a repository the operator merely cloned, so its model/system strings are
+      // untrusted text being printed to a terminal. `printable` is the listing's rendering of the shared unsafe
+      // character set, so this is also the test that it now covers bidi overrides (it used to check only C0/C1).
+      await writeAgentFile(
+        'hostile.json',
+        JSON.stringify({
+          ...validConfig,
+          name: 'hostile',
+          model: 'evil\u001b]52;c;ZXZpbA==\u0007',
+          systemPrompt: 'src/\u202Eevil.ts',
+        }),
+      );
+
+      const { text } = await captureListing();
+      expect(text).toContain('hostile');
+      // No ESC, no C1, no bidi override survives - only the visible `?` replacement does.
+      expect(text).not.toMatch(/[\u001b\u007f-\u009f\u200E\u200F\u202A-\u202E\u2066-\u2069]/);
+      expect(text).toContain('?');
+      // The payload is still legible, so the operator can see what a planted file tried to do.
+      expect(text).toContain(']52;c;ZXZpbA==');
+    });
+
     it('marks a schema-invalid file invalid instead of printing its planted fields', async () => {
       // Regression for agent-do-fhu: the listing used to
       // `JSON.parse(content) as SavedAgent` and read fields the schema never

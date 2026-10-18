@@ -90,7 +90,7 @@ async function printList(tasksFile: string): Promise<void> {
   }
   for (const t of tasks) {
     const desc = t.description ? ` — ${t.description}` : '';
-    console.log(`${t.id}\t${t.cron}${desc}`);
+    console.log(sanitiseForTerminal(`${t.id}\t${t.cron}${desc}`));
   }
 }
 
@@ -107,9 +107,9 @@ async function printStatus(tasksFile: string, memoryDir: string): Promise<void> 
     const s = status[t.id];
     const last = s?.lastRunAt ? new Date(s.lastRunAt).toISOString().replace('T', ' ').slice(0, 19) : 'never';
     const outcome = s?.lastOutcome ?? '-';
-    console.log(`${t.id}\t${t.cron}\t${last}\t${outcome}\t${s?.runCount ?? 0}`);
+    console.log(sanitiseForTerminal(`${t.id}\t${t.cron}\t${last}\t${outcome}\t${s?.runCount ?? 0}`));
   }
-  console.log(`\n(status at ${statusFile})`);
+  console.log(sanitiseForTerminal(`\n(status at ${statusFile})`));
 }
 
 /**
