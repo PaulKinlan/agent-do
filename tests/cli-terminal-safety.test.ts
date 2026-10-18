@@ -1,0 +1,73 @@
+/**
+ * Terminal safety for operator output (agent-do-9zk).
+ *
+ * These tests are about the *bytes*, not the wording: what must hold is that no control character or bidi
+ * override survives into the string the CLI hands to `process.stderr.write`. Each case names the thing an
+ * operator would otherwise suffer — clipboard overwrite, title rewrite, erased lines, a path that displays
+ * as a different path — so a future edit that "cleans up" the sanitiser fails with a reason attached.
+ */
+import { describe, expect, it } from 'vitest';
+import { sanitiseForTerminal } from '../src/cli/terminal-safety.js';
+
+/** Every byte class the sanitiser must remove. */
+const RAW = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+
+describe('sanitiseForTerminal', () => {
+  it('neutralises an OSC 52 clipboard write by breaking its introducer', () => {
+    // ESC ] 52 ; c ; <base64> BEL would put attacker-chosen text on the operator's clipboard.
+    const out = sanitiseForTerminal('note \x1b]52;c;ZXZpbA==\x07 end');
+    expect(out).not.toMatch(RAW);
+    expect(out).toContain('[U+001B]');
+    expect(out).toContain('[U+0007]');
+    // The payload stays as inert, visible text: the operator can see what was attempted.
+    expect(out).toContain(']52;c;ZXZpbA==');
+  });
+
+  it('neutralises a CSI erase-screen and cursor moves', () => {
+    const out = sanitiseForTerminal('\x1b[2J\x1b[H\x1b[31mred\x1b[0m');
+    expect(out).not.toMatch(RAW);
+    expect(out).toContain('[U+001B]');
+    expect(out).toContain('red');
+  });
+
+  it('neutralises the 8-bit C1 introducers as well as ESC', () => {
+    // U+009B is CSI and U+009D is OSC in 8-bit form; a sanitiser that only knows about ESC leaves them raw.
+    const out = sanitiseForTerminal('\u009b2J\u009d0;title\u009c');
+    expect(out).not.toMatch(RAW);
+    expect(out).toContain('[U+009B]');
+    expect(out).toContain('[U+009D]');
+    expect(out).toContain('[U+009C]');
+  });
+
+  it('neutralises bidi overrides so a path cannot display as a different path', () => {
+    // The Trojan Source shape: RLO reverses the run, so what prints is not what was read.
+    const out = sanitiseForTerminal('src/\u202Eevil.ts');
+    expect(out).not.toMatch(RAW);
+    expect(out).toContain('[U+202E]');
+    expect(sanitiseForTerminal('\u2066isolate\u2069')).not.toMatch(RAW);
+    expect(sanitiseForTerminal('\u200Fmark\u200E')).not.toMatch(RAW);
+  });
+
+  it('neutralises DEL and the remaining C0 controls including NUL', () => {
+    expect(sanitiseForTerminal('a\u007Fb\u0000c\u0001d')).not.toMatch(RAW);
+  });
+
+  it('leaves layout characters and ordinary text alone', () => {
+    // The renderer legitimately prints newlines and tabs, and box drawing / arrows are not controls.
+    const text = 'a\tb\nc ─── → … 🚀 漢字';
+    expect(sanitiseForTerminal(text)).toBe(text);
+  });
+
+  it('is idempotent, because the marker text contains no controls', () => {
+    const once = sanitiseForTerminal('\x1b[2J\u202E');
+    expect(sanitiseForTerminal(once)).toBe(once);
+  });
+
+  it('removes every raw byte class from a composed hostile payload', () => {
+    const hostile =
+      'summary: \x1b]0;pwned\x07\x1b[2J\x1b[8mhidden\x1b[0m \u202E…gm\u202C \u009b31m\u0000\u007F\n';
+    const out = sanitiseForTerminal(hostile);
+    expect(out).not.toMatch(RAW);
+    expect(out.endsWith('\n')).toBe(true); // a trailing newline is the renderer's, and survives
+  });
+});

@@ -24,6 +24,7 @@
 
 import * as readline from 'node:readline';
 import type { PermissionConfig } from '../types.js';
+import { sanitiseForTerminal } from './terminal-safety.js';
 
 /**
  * Tools that don't mutate the filesystem / memory store. Auto-approved
@@ -90,10 +91,14 @@ export function buildCliPermissions(
     // the question and has no idea what to do. Fail closed in that
     // case and tell them to use `--accept-all` / `--allow`.
     if (!stdin.isTTY || !stderr.isTTY) {
+      // `toolName` is chosen by the model, and this is the line that asks a human to authorise it - so it
+      // is exactly the text an attacker would want to dress up (agent-do-9zk).
       stderr.write(
-        `\n[agent-do] Denying destructive call ${req.toolName} — non-interactive session ` +
-        `(stdin ${stdin.isTTY ? 'OK' : 'not a TTY'}, stderr ${stderr.isTTY ? 'OK' : 'not a TTY'}). ` +
-        `Pass --accept-all or --allow ${req.toolName} to auto-approve.\n`,
+        sanitiseForTerminal(
+          `\n[agent-do] Denying destructive call ${req.toolName} — non-interactive session ` +
+            `(stdin ${stdin.isTTY ? 'OK' : 'not a TTY'}, stderr ${stderr.isTTY ? 'OK' : 'not a TTY'}). ` +
+            `Pass --accept-all or --allow ${req.toolName} to auto-approve.\n`,
+        ),
       );
       return false;
     }

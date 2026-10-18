@@ -11,6 +11,20 @@
 
 import type { DebugEvent, ProgressEvent } from '../types.js';
 import type { ParsedArgs } from './args.js';
+import { sanitiseForTerminal } from './terminal-safety.js';
+
+/**
+ * Every write in this file goes through here.
+ *
+ * Tool-derived text (summaries, `data`, `--show-content` bodies, tool arguments, thinking, and the
+ * debug/trace message dumps) is attacker-influenced whenever the agent reads a hostile repository, page or
+ * MCP server, and a terminal OBEYS control sequences rather than printing them - clipboard writes, title
+ * rewrites, erased lines, and bidi text that displays a different path than the one printed
+ * (agent-do-9zk). Sanitising in one place means a future write cannot forget.
+ */
+function writeStderr(text: string): void {
+  process.stderr.write(sanitiseForTerminal(text));
+}
 
 export interface RenderOptions {
   verbose: boolean;
@@ -47,12 +61,12 @@ export function renderEvent(
 
   switch (event.type) {
     case 'thinking':
-      if (verbose) process.stderr.write(event.content);
+      if (verbose) writeStderr(event.content);
       return { handled: true };
 
     case 'tool-call':
       if (verbose) {
-        process.stderr.write(
+        writeStderr(
           `\n[tool] ${event.toolName}(${truncateArgs(event.toolArgs)})\n`,
         );
       }
@@ -64,7 +78,7 @@ export function renderEvent(
 
     case 'text':
       if (verbose && event.content) {
-        process.stderr.write(`\n${event.content}\n`);
+        writeStderr(`\n${event.content}\n`);
       }
       return { handled: true };
 
@@ -81,7 +95,7 @@ export function renderEvent(
       // non-zero exit code. Originally these caused `process.exit(1)`
       // directly; #48 stage 4 lost that and CI scripts started seeing
       // exit code 0 on aborts / spending-limit / max-iteration failures.
-      process.stderr.write(`Error: ${event.content}\n`);
+      writeStderr(`Error: ${event.content}\n`);
       return { handled: false };
 
     case 'debug':
@@ -106,14 +120,14 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
   switch (event.channel) {
     case 'system-prompt': {
       const tag = event.truncated ? ' (truncated)' : '';
-      process.stderr.write(
+      writeStderr(
         `\n[debug:system-prompt] ${event.bytes} bytes${tag}\n─── system prompt ───\n${event.content}\n─────────────────────\n`,
       );
       return;
     }
     case 'messages': {
       const tag = event.truncated ? ' (some bodies truncated)' : '';
-      process.stderr.write(
+      writeStderr(
         `\n[debug:messages] step=${event.step} count=${event.messages.length} bytes=${event.bytes}${tag}\n`,
       );
       if (wantTrace) {
@@ -121,7 +135,7 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
           const body = typeof msg.content === 'string'
             ? msg.content
             : JSON.stringify(msg.content);
-          process.stderr.write(
+          writeStderr(
             `  [${idx}] ${msg.role}: ${truncate(body, 200)}\n`,
           );
         }
@@ -132,7 +146,7 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
       const tools = event.toolNames.length > 0
         ? ` tools=[${event.toolNames.slice(0, 6).join(',')}${event.toolNames.length > 6 ? ',…' : ''}]`
         : ' tools=none';
-      process.stderr.write(
+      writeStderr(
         `[debug:request] step=${event.step} model=${event.model}${tools}\n`,
       );
       return;
@@ -143,7 +157,7 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
       // view.
       if (wantTrace) {
         const detail = event.part ? ` ${truncate(JSON.stringify(event.part), 160)}` : '';
-        process.stderr.write(
+        writeStderr(
           `[debug:response-part] step=${event.step} ${event.partType}${detail}\n`,
         );
       }
@@ -157,7 +171,7 @@ function renderDebug(event: DebugEvent, opts: RenderOptions): void {
       // `read / (read + no-cache)`. (#73 Codex + Copilot review)
       const hitBase = event.cacheReadTokens + event.noCacheTokens;
       const hitPct = hitBase > 0 ? Math.round((event.cacheReadTokens / hitBase) * 100) : 0;
-      process.stderr.write(
+      writeStderr(
         `[debug:cache] step=${event.step} read=${event.cacheReadTokens} write=${event.cacheWriteTokens} no-cache=${event.noCacheTokens} out=${event.outputTokens} hit=${hitPct}%\n`,
       );
       return;
@@ -178,20 +192,20 @@ function logLevelRank(level: ParsedArgs['logLevel']): number {
 function renderToolResult(event: ProgressEvent, showContent: boolean): void {
   const prefix = event.blocked ? '[blocked]' : '[result]';
   const summary = event.summary ?? '(no summary)';
-  process.stderr.write(`       → ${prefix} ${summary}\n`);
+  writeStderr(`       → ${prefix} ${summary}\n`);
 
   // If the tool attached structured data, surface a compact preview on
   // one line. Long values are truncated; secrets in `data` should never
   // make it here (it's for metadata like `bytes`, `lines`, `rule`).
   if (event.data && Object.keys(event.data).length > 0) {
     const compact = formatData(event.data);
-    if (compact) process.stderr.write(`         data: ${compact}\n`);
+    if (compact) writeStderr(`         data: ${compact}\n`);
   }
 
   if (showContent) {
     const body = formatFullResult(event.toolResult);
     if (body) {
-      process.stderr.write(
+      writeStderr(
         `         ─── content ───\n${indent(body, '         ')}\n         ────────────────\n`,
       );
     }

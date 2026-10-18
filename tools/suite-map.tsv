@@ -38,6 +38,7 @@ src/cli/resolve-model.ts	tests/cli-agents.test.ts tests/cli-args.test.ts tests/c
 src/cli/scheduled-tasks-cmd.ts	tests/cli-scheduled-tasks.test.ts
 src/cli/script.ts	tests/script-import.test.ts
 src/cli/shellm.ts	tests/shellm.test.ts
+src/cli/terminal-safety.ts	tests/cli-permissions.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/cli-terminal-safety.test.ts tests/script-import.test.ts
 src/cli/warnings.ts	tests/cli-scheduled-tasks.test.ts tests/cli-warnings.test.ts tests/script-import.test.ts
 src/debug-middleware.ts	tests/browser-entry.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts
 src/debug.ts	tests/browser-entry.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts

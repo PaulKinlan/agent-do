@@ -28,6 +28,7 @@ import { emitSandboxWarning } from './warnings.js';
 import { matchesCron, validateScheduledTasks } from '../scheduled-tasks.js';
 import { readStatus, runScheduledTask } from '../scheduled-tasks/fs.js';
 import type { ScheduledTask } from '../scheduled-tasks.js';
+import { sanitiseForTerminal } from './terminal-safety.js';
 
 /** Tasks file: a JSON array of ScheduledTask, optionally with `description`. */
 const TasksFileSchema = z.array(
@@ -174,7 +175,9 @@ async function runOne(tasksFile: string, memoryDir: string, taskId: string, args
     return;
   }
   if (!result.ok) {
-    process.stderr.write(`[scheduled-tasks] "${taskId}" failed: ${result.error}\n`);
+    // `result.error` comes from a whole agent run, so it can embed provider or tool output: the operator's
+    // terminal is a consumer of that text and has to be defended the same way the model is (agent-do-9zk).
+    process.stderr.write(sanitiseForTerminal(`[scheduled-tasks] "${taskId}" failed: ${result.error}\n`));
     process.exit(1);
   }
 }
@@ -213,7 +216,11 @@ async function runForegroundLoop(tasksFile: string, args: ParsedArgs): Promise<v
       // Reuse runOne so the lock + status + agent wiring is identical to the
       // crontab-driven path. Swallow errors — a failing task mustn't kill the loop.
       await runOne(tasksFile, memoryDir, t.id, args).catch((err) => {
-        process.stderr.write(`[scheduled-tasks] "${t.id}" errored: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.stderr.write(
+          sanitiseForTerminal(
+            `[scheduled-tasks] "${t.id}" errored: ${err instanceof Error ? err.message : String(err)}\n`,
+          ),
+        );
       });
     }
   }

@@ -151,3 +151,85 @@ describe('renderEvent', () => {
     expect(handled).toBe(false);
   });
 });
+
+describe('renderEvent neutralises terminal control sequences in tool-derived text (agent-do-9zk)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stderrSpy: any;
+  beforeEach(() => {
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderrSpy.mockRestore();
+  });
+  const captured = (): string =>
+    stderrSpy.mock.calls.map((c: unknown[]) => c[0] as string).join('');
+  const RAW =
+    /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
+
+  it('neutralises an OSC 52 clipboard write in a tool summary', () => {
+    renderEvent(
+      {
+        type: 'tool-result',
+        content: '',
+        toolName: 'shell',
+        summary: 'ok \x1b]52;c;ZXZpbA==\x07 done',
+        data: {},
+        step: 0,
+        totalSteps: 20,
+      } as ProgressEvent,
+      { verbose: true, showContent: false, logLevel: 'verbose' },
+    );
+    const out = captured();
+    expect(out, 'a raw control sequence reached the operator terminal').not.toMatch(RAW);
+    expect(out).toContain('[U+001B]');
+    expect(out).toContain('[U+0007]');
+    expect(out).toContain('ZXZpbA=='); // visible as inert text, so the attempt is legible
+  });
+
+  it('neutralises CSI in the data preview and bidi in a --show-content body', () => {
+    renderEvent(
+      {
+        type: 'tool-result',
+        content: '',
+        toolName: 'read_file',
+        summary: 'read',
+        data: { path: 'src/\u202Eevil.ts' },
+        toolResult: { modelContent: 'line1\n\x1b[2Jline2\x1b[H', userSummary: 'x', data: {} },
+        step: 0,
+        totalSteps: 20,
+      } as ProgressEvent,
+      { verbose: true, showContent: true, logLevel: 'verbose' },
+    );
+    const out = captured();
+    expect(out).not.toMatch(RAW);
+    expect(out).toContain('[U+202E]');
+    expect(out).toContain('[U+001B]');
+  });
+
+  it('neutralises thinking content, which can echo tool output', () => {
+    renderEvent(
+      { type: 'thinking', content: 'considering \x1b]0;title\x07' } as ProgressEvent,
+      { verbose: true, showContent: false, logLevel: 'verbose' },
+    );
+    expect(captured()).not.toMatch(RAW);
+  });
+
+  it('does not alter ordinary tool output', () => {
+    renderEvent(
+      {
+        type: 'tool-result',
+        content: '',
+        toolName: 'read_file',
+        summary: '[read_file] src/app.ts — 1254 bytes, 42 lines',
+        data: { path: 'src/app.ts', bytes: 1254 },
+        step: 0,
+        totalSteps: 20,
+      } as ProgressEvent,
+      { verbose: true, showContent: false, logLevel: 'verbose' },
+    );
+    const out = captured();
+    expect(out).toContain('[read_file] src/app.ts — 1254 bytes, 42 lines');
+    expect(out).toContain('bytes=1254');
+    expect(out).not.toContain('[U+');
+  });
+});
