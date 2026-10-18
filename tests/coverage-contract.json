@@ -1,6 +1,7 @@
 {
   "src/agent.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/orchestrator.test.ts",
@@ -13,6 +14,7 @@
   ],
   "src/cache.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -33,10 +35,17 @@
     "tests/script-import.test.ts",
     "tests/trust-boundary.test.ts"
   ],
+  "src/cli/answer-stream.ts": [
+    "tests/cli-answer-stream.test.ts",
+    "tests/cli-prompt-stream.test.ts",
+    "tests/cli-scheduled-tasks.test.ts",
+    "tests/script-import.test.ts"
+  ],
   "src/cli/args.ts": [
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/debug-observability.test.ts",
@@ -45,17 +54,23 @@
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/debug-config.ts": [
+    "tests/cli-prompt-stream.test.ts",
     "tests/debug-observability.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/permission-handler.ts": [
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/script-import.test.ts"
+  ],
+  "src/cli/prompt.ts": [
+    "tests/cli-prompt-stream.test.ts"
   ],
   "src/cli/provider-tools.ts": [
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -65,6 +80,7 @@
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/render.ts": [
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
     "tests/script-import.test.ts"
   ],
@@ -72,6 +88,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -89,22 +106,27 @@
     "tests/script-import.test.ts"
   ],
   "src/cli/shellm.ts": [
+    "tests/cli-prompt-stream.test.ts",
     "tests/shellm.test.ts"
   ],
   "src/cli/terminal-safety.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-terminal-safety.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/warnings.ts": [
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-warnings.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/debug-middleware.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -122,6 +144,7 @@
   ],
   "src/debug.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -150,6 +173,7 @@
   ],
   "src/frontmatter.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -176,6 +200,7 @@
   ],
   "src/loop-history.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -194,6 +219,7 @@
   ],
   "src/loop.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -214,6 +240,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -253,6 +280,7 @@
   "src/permissions.ts": [
     "tests/browser-entry.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -270,6 +298,7 @@
   ],
   "src/policies.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -303,6 +332,7 @@
   ],
   "src/routines.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -327,6 +357,7 @@
   ],
   "src/sandbox/connectors/host.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/path-resolution.test.ts",
@@ -347,6 +378,7 @@
   ],
   "src/sandbox/types.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/path-resolution.test.ts",
@@ -362,6 +394,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -401,6 +434,7 @@
   ],
   "src/skills.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -420,6 +454,7 @@
   ],
   "src/slash-commands.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -437,6 +472,7 @@
   ],
   "src/step-bookkeeping.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -454,6 +490,7 @@
   ],
   "src/stores.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/eval-assertions.test.ts",
@@ -472,6 +509,7 @@
   ],
   "src/stores/agent-id.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/file-lock.test.ts",
@@ -485,6 +523,7 @@
   ],
   "src/stores/file-lock.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
@@ -498,6 +537,7 @@
   ],
   "src/stores/filesystem.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/file-lock.test.ts",
@@ -520,6 +560,7 @@
   ],
   "src/stores/sandbox.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/path-resolution.test.ts",
@@ -529,6 +570,7 @@
   ],
   "src/stores/search-matcher.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/eval-assertions.test.ts",
@@ -547,6 +589,7 @@
   ],
   "src/system-prompt.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -563,6 +606,7 @@
     "tests/tool-result-integration.test.ts"
   ],
   "src/testing/index.ts": [
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
     "tests/debug-observability.test.ts",
@@ -578,6 +622,7 @@
   ],
   "src/tools-build.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -598,6 +643,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -635,6 +681,7 @@
   ],
   "src/tools/deny-list.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/script-import.test.ts",
@@ -642,6 +689,7 @@
   ],
   "src/tools/file-tools.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/eval-runner.test.ts",
@@ -651,6 +699,7 @@
   ],
   "src/tools/memory-tools.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/memory-tools.test.ts",
@@ -663,6 +712,7 @@
   ],
   "src/tools/types.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",
@@ -687,6 +737,7 @@
   ],
   "src/tools/workspace-tools.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/script-import.test.ts",
@@ -697,6 +748,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-provider-tools.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
@@ -730,6 +782,7 @@
   ],
   "src/usage.ts": [
     "tests/browser-entry.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/conversation-history.test.ts",
     "tests/cost-runaway.test.ts",

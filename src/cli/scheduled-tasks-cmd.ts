@@ -29,6 +29,7 @@ import { matchesCron, validateScheduledTasks } from '../scheduled-tasks.js';
 import { readStatus, runScheduledTask } from '../scheduled-tasks/fs.js';
 import type { ScheduledTask } from '../scheduled-tasks.js';
 import { sanitiseForTerminal } from './terminal-safety.js';
+import { writeAnswerChunk } from './answer-stream.js';
 
 /** Tasks file: a JSON array of ScheduledTask, optionally with `description`. */
 const TasksFileSchema = z.array(
@@ -164,7 +165,9 @@ async function runOne(tasksFile: string, memoryDir: string, taskId: string, args
     statusFile: resolveStatusFile(memoryDir),
     run: async (payloadText) => {
       const out = await agent.run(payloadText);
-      if (!args.json) process.stdout.write(out + '\n');
+      // `out` is the agent's answer - model output shaped by whatever the task read - so it goes through the same
+      // seam as the interactive/one-shot answers rather than straight to the terminal (agent-do-wcq sweep).
+      if (!args.json) writeAnswerChunk(out + '\n');
       return out;
     },
     payload: task.payload,

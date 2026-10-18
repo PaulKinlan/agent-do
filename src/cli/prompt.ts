@@ -24,6 +24,7 @@ import { buildProviderTools } from './provider-tools.js';
 import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
+import { writeAnswerChunk } from './answer-stream.js';
 
 export async function runPromptMode(args: ParsedArgs): Promise<void> {
   // Emit the sandbox warning first — before model init or stdin reads —
@@ -184,7 +185,7 @@ async function runOneShot(
     // The renderer leaves `done` for the caller so the final answer can
     // go to stdout (scripts can pipe it) rather than stderr.
     if (event.type === 'done') {
-      if (!args.verbose) process.stdout.write(event.content);
+      if (!args.verbose) writeAnswerChunk(event.content);
       process.stdout.write('\n');
     }
     // ...and `error` so the caller can set a non-zero exit code. Don't
@@ -230,7 +231,10 @@ async function runInteractive(
       if (handled) continue;
       if (event.type === 'done') {
         response = event.content;
-        if (!args.verbose) process.stdout.write(response);
+        // Interactive mode is a third streaming loop, and it assigns to a local before writing - which is why a
+        // pattern matching `stdout.write(event.` could never see it (agent-do-wcq). Everything model-derived goes
+        // through the same seam as the other two.
+        if (!args.verbose) writeAnswerChunk(response);
         process.stdout.write('\n\n');
       }
       // Errors don't terminate interactive mode — the user can keep
