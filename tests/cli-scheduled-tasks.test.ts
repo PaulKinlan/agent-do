@@ -113,6 +113,22 @@ describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
     expect(text).toContain('daily');
   });
 
+  it('a description containing a newline cannot forge a list row (agent-do-bc4)', async () => {
+    // The listing is a table: rows are our structure, values are not. Escaping the assembled row instead left this
+    // open, because the row sanitiser preserves newlines - so a task description could print an extra line that
+    // looks like another task.
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'sweep', cron: '*/15 * * * *', payload: 'triage', description: 'ok\nforged-task\t*/1 * * * *' },
+    ]));
+    const args = parseArgs(['scheduled-tasks', 'list', '--tasks', tasksFile]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    expect(text).toContain('sweep');
+    expect(text, 'a newline in a description started a new row').not.toMatch(/^forged-task/m);
+    expect(text, 'a tab in a description forged a column').not.toContain('?row\t');
+    expect(text).not.toContain('\t*/1 * * * *');
+    expect(text, 'the attempt should be visible').toContain('?');
+  });
+
   it('install emits one crontab line per task invoking `scheduled-tasks run`', async () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },

@@ -28,7 +28,7 @@ import { emitSandboxWarning } from './warnings.js';
 import { matchesCron, validateScheduledTasks } from '../scheduled-tasks.js';
 import { readStatus, runScheduledTask } from '../scheduled-tasks/fs.js';
 import type { ScheduledTask } from '../scheduled-tasks.js';
-import { sanitiseForTerminal } from './terminal-safety.js';
+import { sanitiseForLine, sanitiseRow } from './terminal-safety.js';
 import { writeAnswerChunk } from './answer-stream.js';
 
 /** Tasks file: a JSON array of ScheduledTask, optionally with `description`. */
@@ -89,8 +89,11 @@ async function printList(tasksFile: string): Promise<void> {
     return;
   }
   for (const t of tasks) {
-    const desc = t.description ? ` — ${t.description}` : '';
-    console.log(`${t.id}\t${t.cron}${desc}`);
+    // Note the separation: the tab-separated rows are OUR structure, so the separator and the ` — description`
+    // suffix are emitted as-is, and only the values are single-lined. Escaping the assembled row instead (the
+    // previous code) left a description able to forge a row, because the row sanitiser preserves newlines
+    // (agent-do-bc4 follow-up).
+    console.log(sanitiseRow([t.id, t.cron], '\t', t.description ? ` — ${t.description}` : ''));
   }
 }
 
@@ -107,9 +110,9 @@ async function printStatus(tasksFile: string, memoryDir: string): Promise<void> 
     const s = status[t.id];
     const last = s?.lastRunAt ? new Date(s.lastRunAt).toISOString().replace('T', ' ').slice(0, 19) : 'never';
     const outcome = s?.lastOutcome ?? '-';
-    console.log(`${t.id}\t${t.cron}\t${last}\t${outcome}\t${s?.runCount ?? 0}`);
+    console.log(sanitiseRow([t.id, t.cron, last, outcome, s?.runCount ?? 0]));
   }
-  console.log(`\n(status at ${statusFile})`);
+  console.log(`\n(status at ${sanitiseForLine(statusFile)})`);
 }
 
 /**
@@ -178,9 +181,10 @@ async function runOne(tasksFile: string, memoryDir: string, taskId: string, args
     return;
   }
   if (!result.ok) {
-    // `result.error` comes from a whole agent run, so it can embed provider or tool output: the operator's
-    // terminal is a consumer of that text and has to be defended the same way the model is (agent-do-9zk).
-    process.stderr.write(sanitiseForTerminal(`[scheduled-tasks] "${taskId}" failed: ${result.error}\n`));
+    // `result.error` comes from a whole agent run, so it can embed provider or tool output: the operator's terminal
+    // is a consumer of that text and has to be defended the same way the model is (agent-do-9zk). Single-line,
+    // because this is ONE log line: a newline inside the message would forge a second one (agent-do-bc4 follow-up).
+    process.stderr.write(`[scheduled-tasks] "${sanitiseForLine(taskId)}" failed: ${sanitiseForLine(String(result.error))}\n`);
     process.exit(1);
   }
 }
@@ -220,9 +224,9 @@ async function runForegroundLoop(tasksFile: string, args: ParsedArgs): Promise<v
       // crontab-driven path. Swallow errors — a failing task mustn't kill the loop.
       await runOne(tasksFile, memoryDir, t.id, args).catch((err) => {
         process.stderr.write(
-          sanitiseForTerminal(
-            `[scheduled-tasks] "${t.id}" errored: ${err instanceof Error ? err.message : String(err)}\n`,
-          ),
+          `[scheduled-tasks] "${sanitiseForLine(t.id)}" errored: ${sanitiseForLine(
+            err instanceof Error ? err.message : String(err),
+          )}\n`,
         );
       });
     }

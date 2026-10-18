@@ -7,7 +7,13 @@
  * as a different path — so a future edit that "cleans up" the sanitiser fails with a reason attached.
  */
 import { describe, expect, it } from 'vitest';
-import { sanitiseForTerminal } from '../src/cli/terminal-safety.js';
+import {
+  isSingleLineUnsafe,
+  isTerminalUnsafe,
+  sanitiseForLine,
+  sanitiseForTerminal,
+  sanitiseRow,
+} from '../src/cli/terminal-safety.js';
 
 /** Every byte class the sanitiser must remove. */
 const RAW = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/;
@@ -69,5 +75,52 @@ describe('sanitiseForTerminal', () => {
     const out = sanitiseForTerminal(hostile);
     expect(out).not.toMatch(RAW);
     expect(out.endsWith('\n')).toBe(true); // a trailing newline is the renderer's, and survives
+  });
+});
+
+describe('the unsafe-character sets', () => {
+  it('treats newline and tab as unsafe only inside a single line', () => {
+    // Layout in a multi-line answer; a way to forge a second line inside a table cell or a diagnostic.
+    expect(isTerminalUnsafe('\n')).toBe(false);
+    expect(isSingleLineUnsafe('\n')).toBe(true);
+    expect(isTerminalUnsafe('\t')).toBe(false);
+    expect(isSingleLineUnsafe('\t')).toBe(true);
+    for (const ch of ['\u001b', '\u009b', '\u202E', '\u2066', '\u007F']) {
+      expect(isTerminalUnsafe(ch), ch).toBe(true);
+      expect(isSingleLineUnsafe(ch), ch).toBe(true);
+    }
+    expect(isTerminalUnsafe('a')).toBe(false);
+    expect(isSingleLineUnsafe('a')).toBe(false);
+  });
+
+  it('does not misclassify every second character', () => {
+    // Both patterns are global, and a global regex remembers `lastIndex` between `test` calls. Without the reset in
+    // the predicate, alternating characters would classify as safe/unsafe/safe - so this assertion is the guard for
+    // a bug that looks like a passing test suite.
+    const chars = ['\u001b', 'a', '\u001b', 'a', '\u202E', 'a', '\u202E'];
+    expect(chars.map((c) => isTerminalUnsafe(c))).toEqual([true, false, true, false, true, false, true]);
+  });
+});
+
+describe('sanitiseForLine / sanitiseRow (fields vs structure)', () => {
+  it('turns newline, tab and bidi into ? in a field, and keeps the text', () => {
+    // A field is one line: these are not layout here, they are a way to forge a row or a column.
+    expect(sanitiseForLine('a\nb\tc\u202Ed')).toBe('a?b?c?d');
+    expect(sanitiseForLine('\u001b]52;c;x\u0007')).toBe('?]52;c;x?');
+    expect(sanitiseForLine('plain text — ok')).toBe('plain text — ok');
+  });
+
+  it('keeps the separator and suffix OURS while single-lining every cell', () => {
+    const row = sanitiseRow(['sweep', '*/15 * * * *'], '\t', ' — ok\nforged');
+    // Structure survives: one tab between the two cells, none inside them.
+    expect(row.startsWith('sweep\t*/15 * * * *')).toBe(true);
+    // A newline in any cell or the suffix cannot start a second line.
+    expect(row).not.toContain('\n');
+    expect(row).toContain(' — ok?forged');
+  });
+
+  it('single-lines every cell of a multi-column row', () => {
+    const row = sanitiseRow(['id\nx', 'cron', 'last\r', 'out\tcome', 7]);
+    expect(row).toBe('id?x\tcron\tlast?\tout?come\t7');
   });
 });

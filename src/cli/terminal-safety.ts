@@ -31,6 +31,68 @@ const CONTROLS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 /** Bidirectional overrides, embeddings and isolates, plus the two marks that force direction. */
 const BIDI = /[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
+/**
+ * Is this single character unsafe on a terminal?
+ *
+ * Exported so the two renderings share ONE definition: `sanitiseForTerminal` replaces such a character with a
+ * visible `[U+XXXX]` marker, while `printable` (used by the saved-agent listings, agent-do-2ey) replaces it with
+ * `?` because a table wants a fixed width. Two separate character classes would drift, and the earlier `printable`
+ * missed the bidi controls entirely.
+ */
+export function isTerminalUnsafe(ch: string): boolean {
+  return isUnsafeSet(ch);
+}
+
+/**
+ * Is this character unsafe inside a SINGLE-LINE field (a table cell, one diagnostic line)?
+ *
+ * Strictly more than {@link isTerminalUnsafe}: newline, carriage return and tab are layout in a multi-line answer,
+ * but inside one line they let planted content forge a second line - which is exactly what the saved-agent
+ * diagnostics defend against (agent-do-2ey). Sharing only the unsafe *set* and forgetting this distinction broke
+ * those tests for real when this module was introduced: `printable` had been replacing every C0 character, and
+ * delegating it to the multi-line predicate quietly stopped it replacing newlines (agent-do-bc4).
+ */
+export function isSingleLineUnsafe(ch: string): boolean {
+  return ch === '\n' || ch === '\r' || ch === '\t' || isUnsafeSet(ch);
+}
+
+/**
+ * Replace every single-line-unsafe character with `?` (agent-do-bc4, agent-do-wcq follow-up).
+ *
+ * This is the rendering for a FIELD: a table cell, one diagnostic line, one row. Unlike
+ * {@link sanitiseForTerminal} it does not preserve newline or tab - inside one field those characters are not
+ * layout, they are a way for a value to forge another row or another column.
+ */
+export function sanitiseForLine(text: string): string {
+  let out = '';
+  for (const ch of text) out += isSingleLineUnsafe(ch) ? '?' : ch;
+  return out;
+}
+
+/**
+ * Build one table row from untrusted cells: the STRUCTURE is ours, the CELLS are not.
+ *
+ * `separator` and the optional `suffix` are our formatting (a tab between columns, a ` — description` tail), so
+ * they are emitted as-is; every cell and the suffix's interpolated value go through {@link sanitiseForLine}, so no
+ * value can start a new row or add a column. Escaping the whole assembled row instead was the bug: the row
+ * sanitiser preserves newlines, which left a description able to forge a line in `scheduled-tasks list`.
+ */
+export function sanitiseRow(
+  cells: readonly (string | number)[],
+  separator = '\t',
+  suffix = '',
+): string {
+  return cells.map((cell) => sanitiseForLine(String(cell))).join(separator) + sanitiseForLine(suffix);
+}
+
+function isUnsafeSet(ch: string): boolean {
+  // Both patterns are global, and a global regex remembers `lastIndex` between `test` calls - so reset it, or
+  // every second character would be misclassified.
+  CONTROLS.lastIndex = 0;
+  BIDI.lastIndex = 0;
+  return CONTROLS.test(ch) || BIDI.test(ch);
+}
+
 function visible(match: string): string {
   const code = match.codePointAt(0) ?? 0;
   return `[U+${code.toString(16).toUpperCase().padStart(4, '0')}]`;

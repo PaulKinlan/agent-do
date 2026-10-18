@@ -20,3 +20,13 @@ output stays byte-identical, so consumers that parse the answer are unaffected.
 Interactive mode's answer and a scheduled task's answer are covered too — both are separate streaming loops that
 assign the model output to a local before printing it, which is why a check that looked for `stdout.write(event.*)`
 could not see them (agent-do-wcq).
+
+The saved-agent listings and the scheduled-task listings are covered too, and the invariant that keeps stdout writes
+honest now examines `console.log`/`info`/`debug` as well as `process.stdout.write` (agent-do-bc4). A line written
+directly to stdout must be a literal, a template whose every interpolation is sanitised, a machine format
+(JSON/CSV/crontab), or go through the sanitising seam; `printable`, the listing renderer, now shares the unsafe
+character set with the sanitiser and therefore also neutralises bidi overrides.
+
+Table rows are built from our structure and single-lined cells: a task description, an agent name or a status
+outcome can no longer forge another row or column in `scheduled-tasks list`/`status` or the saved-agent listings,
+because a newline or tab inside a value is part of a field rather than layout (agent-do-bc4 review).
