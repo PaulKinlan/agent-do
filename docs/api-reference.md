@@ -233,7 +233,9 @@ Evaluate whether a tool call is permitted based on the permission configuration.
 1. If mode is `'accept-all'`, return `true` (unless per-tool override is `'never'`)
 2. If mode is `'deny-all'`, return `false` (unless per-tool override is `'always'`)
 3. Check per-tool overrides: `'always'` returns `true`, `'never'` returns `false`
-4. If `'ask'` or no override: calls `onPermissionRequest` callback (defaults to `true`)
+4. If `'ask'` or no override: calls `onPermissionRequest`. The callback is **required** for mode `'ask'`: a
+   config without it is rejected at construction by `validatePermissionConfig`, because falling open would
+   silently allow every tool.
 
 ---
 

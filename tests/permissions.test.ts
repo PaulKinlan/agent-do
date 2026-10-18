@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { evaluatePermission } from '../src/permissions.js';
-import type { PermissionConfig } from '../src/types.js';
+import { evaluatePermission, validatePermissionConfig } from '../src/permissions.js';
+import { createAgent } from '../src/agent.js';
+import { createMockModel } from '../src/testing/index.js';
+import type { AgentConfig, PermissionConfig } from '../src/types.js';
 
 describe('evaluatePermission', () => {
   it('accept-all mode returns true', async () => {
@@ -69,8 +71,29 @@ describe('evaluatePermission', () => {
     expect(await evaluatePermission('tool', {}, config)).toBe(false);
   });
 
-  it('ask mode with no callback defaults to true', async () => {
+  it('ask mode with no callback denies rather than silently allowing', async () => {
+    // agent-do-40r: this used to return true, which made "a human decides" mean "allow everything".
     const config: PermissionConfig = { mode: 'ask' };
-    expect(await evaluatePermission('tool', {}, config)).toBe(true);
+    expect(await evaluatePermission('tool', {}, config)).toBe(false);
+  });
+
+  it('rejects mode "ask" without a callback at config time', () => {
+    expect(() => validatePermissionConfig({ mode: 'ask' })).toThrow(/onPermissionRequest/);
+    expect(() => validatePermissionConfig({ mode: 'accept-all' })).not.toThrow();
+    expect(() => validatePermissionConfig({ mode: 'deny-all' })).not.toThrow();
+    expect(() =>
+      validatePermissionConfig({ mode: 'ask', onPermissionRequest: async () => true }),
+    ).not.toThrow();
+  });
+
+  it('createAgent refuses a config that asks without a way to ask', () => {
+    expect(() =>
+      createAgent({
+        id: 'a',
+        name: 'A',
+        model: createMockModel({ responses: [] }) as unknown as AgentConfig['model'],
+        permissions: { mode: 'ask' },
+      }),
+    ).toThrow(/onPermissionRequest/);
   });
 });

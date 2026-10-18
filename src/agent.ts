@@ -2,6 +2,7 @@ import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './t
 import { runAgentLoop, streamAgentLoop } from './loop.js';
 import { validateSlashCommands, markHasSlashCommands } from './slash-commands.js';
 import { validateScheduledTasks } from './scheduled-tasks.js';
+import { validatePermissionConfig } from './permissions.js';
 
 /**
  * Create an Agent instance from configuration.
@@ -23,6 +24,11 @@ export function createAgent(config: AgentConfig): Agent {
   // surfaces at construction, not on the first firing (#79).
   if (config.scheduledTasks) {
     validateScheduledTasks(config.scheduledTasks);
+  }
+  // Mode 'ask' with no callback used to silently allow every tool; reject it at construction so a config
+  // that reads as "ask me first" cannot quietly become "allow everything" (agent-do-40r).
+  if (config.permissions) {
+    validatePermissionConfig(config.permissions);
   }
 
   let abortController: AbortController | null = null;

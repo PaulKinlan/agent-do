@@ -187,8 +187,9 @@ permissions: {
 2. Check per-tool override:
    - `'always'`: allow
    - `'never'`: deny
-3. Call `onPermissionRequest` callback (if provided)
-4. Default to allow if no callback
+3. Call `onPermissionRequest` callback. It is **required** for `mode: 'ask'`: a config without it is
+   rejected when the agent is created, and a call is denied rather than allowed if such a config reaches the
+   check.
 
 ### Custom Permission Handler
 
