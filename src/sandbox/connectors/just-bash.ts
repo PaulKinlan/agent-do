@@ -7,10 +7,15 @@
  * filesystem. Useful for agents that need shell-shaped tooling without
  * the privileges that come with `child_process`.
  *
- * Network policy: just-bash intercepts `fetch`/`curl` inside its
- * interpreter. Pass `allowNet` to gate which hosts the sandbox can reach
- * (the connector forwards it to the underlying Sandbox config when
- * supported).
+ * Network policy: just-bash intercepts `fetch`/`curl` inside its interpreter, so
+ * a network policy exists — but this connector can only *set* one through the
+ * factory. `createJustBashSandbox({ allowNet })` forwards it to the underlying
+ * Sandbox config, passing `allowNet: false` when omitted — it is never left unset
+ * for the Sandbox to default.
+ * `wrapJustBashSandbox(jb)` takes a caller-constructed instance and can neither
+ * set nor attest its network policy: whatever the caller configured applies, and
+ * nothing in agent-do reports it. If you need a gated network, use the factory,
+ * or establish and check the instance's policy yourself before wrapping it.
  *
  * Two construction styles are supported:
  *
@@ -24,7 +29,8 @@
  *   //    a clear error if the package isn't installed.
  *   const sandbox = await createJustBashSandbox({ files, allowNet });
  *
- * Style (1) is the principal API; (2) is a thin wrapper.
+ * Style (1) is the principal API; (2) is a thin wrapper — and the only path that
+ * can set a network policy.
  */
 
 import type {
