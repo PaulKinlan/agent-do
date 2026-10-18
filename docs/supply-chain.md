@@ -127,8 +127,23 @@ range upstream tested against on every consumer of agent-do.
 
 `@ai-sdk/provider-utils@5` (shipped with `ai@7`) moved to
 `undici@^7.28.0`, which is past the fix line — so the upgrade closed
-this without an override. `npm audit` is currently clean. Re-check on
-every `@ai-sdk/*` bump.
+this without an override.
+
+That closes the **runtime** advisories, not every advisory in the repository. Two
+commands, two answers — re-run both on every `@ai-sdk/*` bump and record the date
+with the numbers, because they rot:
+
+| command | result | what it means |
+|---|---|---|
+| `npm audit --omit=dev` | **0 vulnerabilities** | the published package resolves nothing with a known advisory. **This is the release gate.** |
+| `npm audit` | **19 advisories, all dev-only** (15 high, 4 moderate, 0 critical) | release tooling only: they arrive through `@changesets/cli` (the only direct one) and its tree — `braces`, `micromatch`, `fast-glob`, `globby`, `js-yaml`, `argparse`, `sprintf-js`, `@manypkg/get-packages`, `read-yaml-file` |
+
+Both figures are measured on 2026-10-18. The dev-tree advisories are triaged as
+**not shipped**: they live in the `@changesets/cli` release toolchain, which no
+consumer of agent-do installs, and the available fixes are semver-major bumps of a
+release tool. An unqualified "`npm audit` is clean" was what made this paragraph
+unverifiable — it read as the release gate and failed the moment a dev dependency
+gained an advisory.
 
 ### Provider-validated dynamic import (#40)
 
