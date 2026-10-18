@@ -24,6 +24,7 @@ import { buildProviderTools } from './provider-tools.js';
 import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
+import { writeAnswerChunk } from './answer-stream.js';
 
 export async function runPromptMode(args: ParsedArgs): Promise<void> {
   // Emit the sandbox warning first — before model init or stdin reads —
@@ -184,7 +185,7 @@ async function runOneShot(
     // The renderer leaves `done` for the caller so the final answer can
     // go to stdout (scripts can pipe it) rather than stderr.
     if (event.type === 'done') {
-      if (!args.verbose) process.stdout.write(event.content);
+      if (!args.verbose) writeAnswerChunk(event.content);
       process.stdout.write('\n');
     }
     // ...and `error` so the caller can set a non-zero exit code. Don't

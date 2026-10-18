@@ -33,6 +33,10 @@
     "tests/script-import.test.ts",
     "tests/trust-boundary.test.ts"
   ],
+  "src/cli/answer-stream.ts": [
+    "tests/cli-answer-stream.test.ts",
+    "tests/script-import.test.ts"
+  ],
   "src/cli/args.ts": [
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
@@ -92,6 +96,7 @@
     "tests/shellm.test.ts"
   ],
   "src/cli/terminal-safety.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",

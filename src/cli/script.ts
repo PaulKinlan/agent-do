@@ -50,6 +50,7 @@ import { buildDebugConfigFromArgs } from './debug-config.js';
 import { buildProviderTools } from './provider-tools.js';
 import type { Agent, ProviderOptions } from '../types.js';
 import type { ToolSet } from 'ai';
+import { writeAnswerChunk } from './answer-stream.js';
 
 /**
  * Extensions that identify a positional as a script path rather than a
@@ -427,7 +428,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
     const { handled } = renderEvent(event, renderOpts);
     if (handled) continue;
     if (event.type === 'done') {
-      if (!args.verbose) process.stdout.write(event.content);
+      if (!args.verbose) writeAnswerChunk(event.content);
       process.stdout.write('\n');
     }
     if (event.type === 'error') sawError = true;
@@ -516,7 +517,7 @@ async function runSavedAgent(
     const { handled } = renderEvent(event, renderOpts);
     if (handled) continue;
     if (event.type === 'done') {
-      if (!args.verbose) process.stdout.write(event.content);
+      if (!args.verbose) writeAnswerChunk(event.content);
       process.stdout.write('\n');
     }
     if (event.type === 'error') sawError = true;

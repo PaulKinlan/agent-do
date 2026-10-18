@@ -12,3 +12,7 @@ bidi override to display a different path from the one printed.
 The interactive approval prompt is covered too (`rl.question` prints the model-chosen tool name and argument
 preview straight to the TTY); the non-TTY denial notice and the prompt now share the sanitiser, which is how the
 gap between them closed.
+
+The streamed answer on stdout is covered too, and only when stdout is a terminal
+(`src/cli/answer-stream.ts`): a terminal obeys control sequences, a file or pipe does not. Redirected and piped
+output stays byte-identical, so consumers that parse the answer are unaffected.
