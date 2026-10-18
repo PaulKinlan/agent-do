@@ -354,9 +354,17 @@ export interface RunUsage {
 export type PermissionLevel = 'always' | 'ask' | 'never';
 export type PermissionMode = 'accept-all' | 'deny-all' | 'ask';
 
+/**
+ * How tool calls are gated.
+ *
+ * `'ask'` means a human decides, so it requires {@link PermissionConfig.onPermissionRequest}. An `'ask'`
+ * config without one is rejected by `validatePermissionConfig` when the agent is created (agent-do-40r):
+ * the mode that exists to be fail-closed must never silently fall back to allowing everything.
+ */
 export interface PermissionConfig {
   mode: PermissionMode;
   tools?: Record<string, PermissionLevel>; // per-tool overrides
+  /** Required when `mode` is `'ask'`: decides each tool call that no per-tool override answers. */
   onPermissionRequest?: (request: {
     toolName: string;
     args: unknown;

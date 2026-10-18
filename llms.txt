@@ -144,7 +144,7 @@
 
 - `mode: 'accept-all' | 'deny-all' | 'ask'`
 - Per-tool overrides: `tools: { read_file: 'always', delete_file: 'never' }`
-- `onPermissionRequest(toolName, args): Promise<boolean>`
+- `onPermissionRequest(toolName, args): Promise<boolean>` (required for `mode: 'ask'`)
 
 ## Usage Tracking
 

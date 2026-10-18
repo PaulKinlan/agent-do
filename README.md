@@ -1331,7 +1331,8 @@ const agent = createAgent({
 1. If mode is `accept-all`, allow (but still check per-tool `never` overrides)
 2. If mode is `deny-all`, deny (but still check per-tool `always` overrides)
 3. Check per-tool override: `always` -> allow, `never` -> deny
-4. If `ask` or no override: call `onPermissionRequest` (defaults to allow if no callback)
+4. If `ask` or no override: call `onPermissionRequest`. Mode `ask` **requires** this callback: a config with
+   `mode: 'ask'` and no callback is rejected when the agent is created, and never falls back to allowing.
 
 ## Usage Tracking
 
