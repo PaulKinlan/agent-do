@@ -17,6 +17,8 @@
 #   * A changed test file maps to ITSELF, before this file is consulted (docs/speed.md R14 names
 #     "changed test files that do not map to themselves" as a measured defect).
 #   * A row beats an exemption (rows are consulted first).
+#   * `// @reads <glob>` in a suite adds the files it inspects as DATA (the graph cannot see a readFileSync),
+#     e.g. tests/cli-answer-stream.test.ts asserts on the text of every src/cli module (agent-do-9im).
 #   * A module that NO suite reaches is deliberately absent: `tools/fast-gate.sh` then FAILS LOUDLY on a
 #     change to it. Adding coverage is the fix; an exemption is a claim that no suite can ever cover it.
 #   * `package.json`, `package-lock.json` and `vitest.config.ts` are deliberately absent for the same
@@ -28,21 +30,21 @@
 src/agent.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/script-import.test.ts tests/slash-commands.test.ts
 src/browser.ts	tests/browser-entry.test.ts
 src/cache.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts
-src/cli/agents.ts	tests/cli-agents.test.ts tests/script-import.test.ts tests/trust-boundary.test.ts
+src/cli/agents.ts	tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/script-import.test.ts tests/trust-boundary.test.ts
 src/cli/answer-stream.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/script-import.test.ts
-src/cli/args.ts	tests/cli-agents.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
-src/cli/debug-config.ts	tests/cli-prompt-stream.test.ts tests/debug-observability.test.ts tests/script-import.test.ts
-src/cli/eval-cmd.ts	tests/csv.test.ts
-src/cli/permission-handler.ts	tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/script-import.test.ts
-src/cli/prompt.ts	tests/cli-prompt-stream.test.ts
-src/cli/provider-tools.ts	tests/cli-agents.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-provider-tools.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
-src/cli/render.ts	tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/script-import.test.ts
-src/cli/resolve-model.ts	tests/cli-agents.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-provider-tools.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/resolve-model.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts tests/usage.test.ts
-src/cli/scheduled-tasks-cmd.ts	tests/cli-scheduled-tasks.test.ts
-src/cli/script.ts	tests/script-import.test.ts
-src/cli/shellm.ts	tests/cli-prompt-stream.test.ts tests/shellm.test.ts
+src/cli/args.ts	tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
+src/cli/debug-config.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/debug-observability.test.ts tests/script-import.test.ts
+src/cli/eval-cmd.ts	tests/cli-answer-stream.test.ts tests/csv.test.ts
+src/cli/permission-handler.ts	tests/cli-answer-stream.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/script-import.test.ts
+src/cli/prompt.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts
+src/cli/provider-tools.ts	tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-provider-tools.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
+src/cli/render.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/script-import.test.ts
+src/cli/resolve-model.ts	tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-provider-tools.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/resolve-model.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts tests/usage.test.ts
+src/cli/scheduled-tasks-cmd.ts	tests/cli-answer-stream.test.ts tests/cli-scheduled-tasks.test.ts
+src/cli/script.ts	tests/cli-answer-stream.test.ts tests/script-import.test.ts
+src/cli/shellm.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/shellm.test.ts
 src/cli/terminal-safety.ts	tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/cli-terminal-safety.test.ts tests/script-import.test.ts tests/trust-boundary.test.ts
-src/cli/warnings.ts	tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/cli-warnings.test.ts tests/csv.test.ts tests/script-import.test.ts
+src/cli/warnings.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/cli-warnings.test.ts tests/csv.test.ts tests/script-import.test.ts
 src/csv.ts	tests/csv.test.ts tests/eval-runner.test.ts
 src/debug-middleware.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts
 src/debug.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts

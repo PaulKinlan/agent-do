@@ -1,3 +1,4 @@
+// @reads src/cli/*.ts
 /**
  * The streamed answer on stdout (agent-do-ftb).
  *

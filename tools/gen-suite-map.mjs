@@ -101,6 +101,31 @@ function specifiersOf(file) {
   return out;
 }
 
+/**
+ * Match a repo-relative path against a bash-pattern glob, in the dialect this file documents for its rows:
+ * `*` also crosses `/`, so `src/cli/*.ts` means "everything under src/cli".
+ */
+function matchesGlob(path, glob) {
+  const pattern = glob
+    .split('')
+    .map((ch) => (ch === '*' ? '.*' : ch === '?' ? '.' : ch.replace(/[.+^${}()|[\]\\]/g, '\\$&')))
+    .join('');
+  return new RegExp(`^${pattern}$`).test(path);
+}
+
+/**
+ * Directories/files a suite reads AS DATA, declared with `// @reads <glob>` in the suite itself.
+ *
+ * A suite that `readFileSync`s source text and asserts on it has a real dependency the import graph cannot see -
+ * so without this, a change to a file it inspects maps to other suites only, and the invariant sits green while it is
+ * broken (agent-do-9im: the fast gate passed while `cli-answer-stream.test.ts` failed on `eval-cmd.ts`). The marker
+ * lives in the suite that does the reading, so it moves with the test rather than drifting in a sidecar list.
+ */
+function readsPatterns(suite) {
+  const source = readFileSync(join(ROOT, suite), 'utf8');
+  return [...source.matchAll(/^\s*\/\/\s*@reads\s+(\S+)\s*$/gm)].map((m) => m[1]);
+}
+
 /** Every repo module reachable from `entry` through relative imports. */
 function reachable(entry) {
   const seen = new Set();
@@ -123,7 +148,13 @@ const helpers = new Set(allFiles.filter((p) => !isSuite(p)));
 const rows = new Map(); // module -> Set<suite>
 const unmappedModules = new Set(); // modules nothing reaches: expected, and they stay off the map
 for (const suite of suites) {
-  for (const file of reachable(suite)) {
+  const reached = reachable(suite);
+  // A `// @reads <glob>` declaration is a dependency too: the suite inspects those files as text, so it must be
+  // selected when one of them changes, exactly as if it imported them (agent-do-9im).
+  for (const pattern of readsPatterns(suite)) {
+    for (const file of allFiles) if (matchesGlob(file, pattern)) reached.add(file);
+  }
+  for (const file of reached) {
     const isModule =
       file.startsWith('src/') || (file.startsWith('tests/') && !isSuite(file) && helpers.has(file));
     if (!isModule) continue;
@@ -155,6 +186,8 @@ const lines = [
   '#   * A changed test file maps to ITSELF, before this file is consulted (docs/speed.md R14 names',
   '#     "changed test files that do not map to themselves" as a measured defect).',
   '#   * A row beats an exemption (rows are consulted first).',
+  '#   * `// @reads <glob>` in a suite adds the files it inspects as DATA (the graph cannot see a readFileSync),',
+  '#     e.g. tests/cli-answer-stream.test.ts asserts on the text of every src/cli module (agent-do-9im).',
   '#   * A module that NO suite reaches is deliberately absent: `tools/fast-gate.sh` then FAILS LOUDLY on a',
   '#     change to it. Adding coverage is the fix; an exemption is a claim that no suite can ever cover it.',
   '#   * `package.json`, `package-lock.json` and `vitest.config.ts` are deliberately absent for the same',
