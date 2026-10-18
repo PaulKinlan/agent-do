@@ -85,6 +85,8 @@ const SAFE_WRAPPERS = [
   'JSON.stringify(',
   'printable(',
   'sanitiseForTerminal(',
+  'sanitiseForLine(',
+  'sanitiseRow(',
   'sanitiseForStream(',
   'writeAnswerChunk(',
   'writeOperatorLine(',
@@ -143,7 +145,11 @@ function isSafeStdoutArg(arg: string): boolean {
   // Machine-format output is DATA, not operator-facing text: `--json`, the CSV eval rows, and the crontab lines
   // `scheduled-tasks install` emits. Escaping belongs to the format (JSON does it; a CSV cell and a crontab line are
   // read by a parser, not a terminal). The human-readable versions of the same content go through the renderer.
-  if (/^(?:JSON\.stringify|lines\.join|[A-Za-z_$][\w$]*\.join)\(/.test(arg)) return true;
+  // Only the two real machine-format emitters, named: the CSV rows in `eval-cmd` and the crontab lines in
+  // `scheduled-tasks install`. An earlier version exempted ANY `<identifier>.join(...)`, which is the same
+  // name-matching mistake as the `event.content` pattern - it would have waved through `answerParts.join('')`
+  // (agent-do-bc4 review).
+  if (/^(?:JSON\.stringify|lines\.join)\(/.test(arg)) return true;
   if (/^'(?:[^'\\]|\\.)*'$/.test(arg)) return true;
   if (/^"(?:[^"\\]|\\.)*"$/.test(arg)) return true;
   if (startsWithSafeWrapper(arg)) return true;

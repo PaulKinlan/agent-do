@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import type { ParsedArgs } from './args.js';
 import { validateCliProviderToolNames } from './provider-tools.js';
-import { isSingleLineUnsafe } from './terminal-safety.js';
+import { sanitiseForLine } from './terminal-safety.js';
 
 /**
  * Schema for a saved agent JSON file. See issue #22 — earlier
@@ -266,14 +266,11 @@ export async function listSavedAgents(): Promise<void> {
  * never by letting an untrusted value supply the line break.
  */
 function printable(value: string): string {
-  let out = '';
-  for (const ch of value) {
-    // `?` rather than the `[U+XXXX]` marker `sanitiseForTerminal` uses: a listing column wants a fixed width. The
-    // set of characters considered unsafe is shared, so this cannot drift from the sanitiser - and it now covers the
-    // bidi overrides, which the previous hand-rolled check here did not (agent-do-bc4).
-    out += isSingleLineUnsafe(ch) ? '?' : ch;
-  }
-  return out;
+  // The listing's name for the shared single-line rendering: `?` rather than the `[U+XXXX]` marker
+  // `sanitiseForTerminal` uses, because a table column wants a fixed width. Delegating means the unsafe set cannot
+  // drift from the sanitiser, and it covers the bidi overrides the previous hand-rolled check here missed
+  // (agent-do-bc4).
+  return sanitiseForLine(value);
 }
 
 /**

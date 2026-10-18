@@ -26,3 +26,7 @@ honest now examines `console.log`/`info`/`debug` as well as `process.stdout.writ
 directly to stdout must be a literal, a template whose every interpolation is sanitised, a machine format
 (JSON/CSV/crontab), or go through the sanitising seam; `printable`, the listing renderer, now shares the unsafe
 character set with the sanitiser and therefore also neutralises bidi overrides.
+
+Table rows are built from our structure and single-lined cells: a task description, an agent name or a status
+outcome can no longer forge another row or column in `scheduled-tasks list`/`status` or the saved-agent listings,
+because a newline or tab inside a value is part of a field rather than layout (agent-do-bc4 review).

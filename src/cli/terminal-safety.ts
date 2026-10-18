@@ -56,6 +56,35 @@ export function isSingleLineUnsafe(ch: string): boolean {
   return ch === '\n' || ch === '\r' || ch === '\t' || isUnsafeSet(ch);
 }
 
+/**
+ * Replace every single-line-unsafe character with `?` (agent-do-bc4, agent-do-wcq follow-up).
+ *
+ * This is the rendering for a FIELD: a table cell, one diagnostic line, one row. Unlike
+ * {@link sanitiseForTerminal} it does not preserve newline or tab - inside one field those characters are not
+ * layout, they are a way for a value to forge another row or another column.
+ */
+export function sanitiseForLine(text: string): string {
+  let out = '';
+  for (const ch of text) out += isSingleLineUnsafe(ch) ? '?' : ch;
+  return out;
+}
+
+/**
+ * Build one table row from untrusted cells: the STRUCTURE is ours, the CELLS are not.
+ *
+ * `separator` and the optional `suffix` are our formatting (a tab between columns, a ` — description` tail), so
+ * they are emitted as-is; every cell and the suffix's interpolated value go through {@link sanitiseForLine}, so no
+ * value can start a new row or add a column. Escaping the whole assembled row instead was the bug: the row
+ * sanitiser preserves newlines, which left a description able to forge a line in `scheduled-tasks list`.
+ */
+export function sanitiseRow(
+  cells: readonly (string | number)[],
+  separator = '\t',
+  suffix = '',
+): string {
+  return cells.map((cell) => sanitiseForLine(String(cell))).join(separator) + sanitiseForLine(suffix);
+}
+
 function isUnsafeSet(ch: string): boolean {
   // Both patterns are global, and a global regex remembers `lastIndex` between `test` calls - so reset it, or
   // every second character would be misclassified.

@@ -10,7 +10,9 @@ import { describe, expect, it } from 'vitest';
 import {
   isSingleLineUnsafe,
   isTerminalUnsafe,
+  sanitiseForLine,
   sanitiseForTerminal,
+  sanitiseRow,
 } from '../src/cli/terminal-safety.js';
 
 /** Every byte class the sanitiser must remove. */
@@ -97,5 +99,28 @@ describe('the unsafe-character sets', () => {
     // a bug that looks like a passing test suite.
     const chars = ['\u001b', 'a', '\u001b', 'a', '\u202E', 'a', '\u202E'];
     expect(chars.map((c) => isTerminalUnsafe(c))).toEqual([true, false, true, false, true, false, true]);
+  });
+});
+
+describe('sanitiseForLine / sanitiseRow (fields vs structure)', () => {
+  it('turns newline, tab and bidi into ? in a field, and keeps the text', () => {
+    // A field is one line: these are not layout here, they are a way to forge a row or a column.
+    expect(sanitiseForLine('a\nb\tc\u202Ed')).toBe('a?b?c?d');
+    expect(sanitiseForLine('\u001b]52;c;x\u0007')).toBe('?]52;c;x?');
+    expect(sanitiseForLine('plain text — ok')).toBe('plain text — ok');
+  });
+
+  it('keeps the separator and suffix OURS while single-lining every cell', () => {
+    const row = sanitiseRow(['sweep', '*/15 * * * *'], '\t', ' — ok\nforged');
+    // Structure survives: one tab between the two cells, none inside them.
+    expect(row.startsWith('sweep\t*/15 * * * *')).toBe(true);
+    // A newline in any cell or the suffix cannot start a second line.
+    expect(row).not.toContain('\n');
+    expect(row).toContain(' — ok?forged');
+  });
+
+  it('single-lines every cell of a multi-column row', () => {
+    const row = sanitiseRow(['id\nx', 'cron', 'last\r', 'out\tcome', 7]);
+    expect(row).toBe('id?x\tcron\tlast?\tout?come\t7');
   });
 });
