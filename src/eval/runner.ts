@@ -17,6 +17,7 @@ import type {
 } from './types.js';
 import { evaluateAssertion } from './assertions.js';
 import { runAgentLoop } from '../loop.js';
+import { csvRow } from '../csv.js';
 import { createFileTools } from '../tools/file-tools.js';
 import { InMemoryMemoryStore } from '../stores/in-memory.js';
 import type { MemoryStore } from '../stores.js';
@@ -438,18 +439,20 @@ function formatCsv(result: EvalResult): string {
 
   for (const provider of result.providers) {
     for (const c of provider.cases) {
+      // One shared writer: a comma or line break in a case name or error must not
+      // shift columns or forge a row (agent-do-wcz).
       lines.push(
-        [
+        csvRow([
           result.timestamp,
-          csvEscape(provider.provider),
-          csvEscape(provider.model),
-          csvEscape(c.name),
+          provider.provider,
+          provider.model,
+          c.name,
           c.passed,
           c.cost.toFixed(6),
           c.durationMs,
           c.steps,
-          csvEscape(c.error ?? ''),
-        ].join(','),
+          c.error ?? '',
+        ]),
       );
     }
   }
@@ -457,9 +460,3 @@ function formatCsv(result: EvalResult): string {
   return lines.join('\n');
 }
 
-function csvEscape(s: string): string {
-  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}

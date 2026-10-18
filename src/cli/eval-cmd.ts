@@ -15,7 +15,42 @@ import type { ParsedArgs } from './args.js';
 import { resolveModel, resolveCompareProviders } from './resolve-model.js';
 import { emitSandboxWarning } from './warnings.js';
 import { runEvals } from '../eval/runner.js';
-import type { EvalSuiteConfig, RunEvalsOptions } from '../eval/types.js';
+import { csvRow } from '../csv.js';
+import type { EvalResult, EvalSuiteConfig, RunEvalsOptions } from '../eval/types.js';
+
+/**
+ * CSV for a multi-suite run: one header, then one row per case across every suite
+ * and provider.
+ *
+ * Exported so it can be tested without running an eval suite. The fast gate maps a
+ * changed module only to the suites that import it, and this CLI module had none;
+ * a module that no test reaches is the false-green case the gate refuses
+ * (agent-do-wcz).
+ */
+export function formatCombinedEvalLines(results: readonly EvalResult[]): string[] {
+  const lines = ['timestamp,suite,provider,model,case,passed,cost_usd,duration_ms,steps,error'];
+  for (const result of results) {
+    for (const provider of result.providers) {
+      for (const c of provider.cases) {
+        lines.push(
+          csvRow([
+            result.timestamp,
+            result.name,
+            provider.provider,
+            provider.model,
+            c.name,
+            c.passed,
+            c.cost.toFixed(6),
+            c.durationMs,
+            c.steps,
+            c.error ?? '',
+          ]),
+        );
+      }
+    }
+  }
+  return lines;
+}
 
 export async function runEvalMode(args: ParsedArgs): Promise<void> {
   if (!args.file) {
@@ -79,26 +114,11 @@ export async function runEvalMode(args: ParsedArgs): Promise<void> {
     if (args.output === 'json') {
       console.log(JSON.stringify(allResults, null, 2));
     } else {
-      // CSV: emit header once, then rows from all results
-      const lines = ['timestamp,suite,provider,model,case,passed,cost_usd,duration_ms,steps,error'];
-      for (const result of allResults) {
-        for (const provider of result.providers) {
-          for (const c of provider.cases) {
-            lines.push([
-              result.timestamp,
-              csvEscape(result.name),
-              csvEscape(provider.provider),
-              csvEscape(provider.model),
-              csvEscape(c.name),
-              c.passed,
-              c.cost.toFixed(6),
-              c.durationMs,
-              c.steps,
-              csvEscape(c.error ?? ''),
-            ].join(','));
-          }
-        }
-      }
+      // `lines.join(...)` on purpose: the stdout invariant in
+      // tests/cli-answer-stream.test.ts exempts exactly this named machine-format
+      // shape (and deliberately not any `<identifier>.join`), so emit CSV that way
+      // rather than through a wrapper it does not know.
+      const lines = formatCombinedEvalLines(allResults);
       console.log(lines.join('\n'));
     }
   }
@@ -160,9 +180,3 @@ async function loadSuiteFile(filePath: string): Promise<EvalSuiteConfig> {
   return suite;
 }
 
-function csvEscape(s: string): string {
-  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
-}
