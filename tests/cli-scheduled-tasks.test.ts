@@ -9,7 +9,7 @@ import { parseArgs } from '../src/cli/args.js';
 // exceeded vitest's default 5s test timeout and turned unrelated lanes' gates
 // red (agent-do-512). Module evaluation has no side effects that depend on the
 // per-test env stub below, so hoisting is behaviour-preserving.
-import { runScheduledTasksMode } from '../src/cli/scheduled-tasks-cmd.js';
+import { loadTasks, runScheduledTasksMode } from '../src/cli/scheduled-tasks-cmd.js';
 
 // ── args parsing for the new subcommand ─────────────────────────────────
 
@@ -179,3 +179,62 @@ async function captureStdout(fn: () => Promise<unknown>): Promise<string> {
 }
 
 void readFile; // keep import used across describe blocks
+
+describe('task payloads are data, not structure (agent-do-upf)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'sched-payload-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps payload keys that look like pollution keys', async () => {
+    // Raw JSON text, not an object literal: a literal's `__proto__:` sets the
+    // prototype and creates NO own property, so JSON.stringify would emit no such
+    // key and the test would prove nothing (agent-do-kux).
+    //
+    // A dropping reviver at the loader erased `constructor` and `prototype`, so the
+    // agent received only {"body":"hello"} (agent-do-upf).
+    const file = join(dir, 'tasks.json');
+    await writeFile(
+      file,
+      '[{"id":"daily","cron":"* * * * *","payload":{"constructor":"report","prototype":"v1","body":"hello"}}]',
+    );
+    const tasks = await loadTasks(file);
+    const payload = tasks[0].payload as Record<string, unknown>;
+    expect(payload.constructor).toBe('report');
+    expect(payload.prototype).toBe('v1');
+    expect(payload.body).toBe('hello');
+  });
+
+  it('drops an own __proto__ payload key without applying or inheriting it', async () => {
+    // Measured limit (agent-do-kux): JSON.parse makes `__proto__` an own property,
+    // then Zod's record rebuild drops it. Safe - no prototype is retargeted and
+    // nothing is inherited - but not preserved, and the comment above says so.
+    const file = join(dir, 'tasks-proto-payload.json');
+    await writeFile(
+      file,
+      '[{"id":"daily","cron":"* * * * *","payload":{"__proto__":{"body":"evil","inherited":true},"body":"hello"}}]',
+    );
+    const tasks = await loadTasks(file);
+    const payload = tasks[0].payload as Record<string, unknown>;
+    expect(Object.hasOwn(payload, '__proto__')).toBe(false);
+    expect(Object.getPrototypeOf(payload)).toBe(Object.prototype);
+    expect(payload.inherited).toBeUndefined();
+    expect(payload.body).toBe('hello');
+    expect(({} as Record<string, unknown>).inherited).toBeUndefined();
+  });
+
+  it('still discards structural keys at the task level', async () => {
+    const file = join(dir, 'tasks-structural.json');
+    await writeFile(
+      file,
+      '[{"id":"daily","cron":"* * * * *","payload":"text","__proto__":{"polluted":true}}]',
+    );
+    const tasks = await loadTasks(file);
+    expect(tasks[0].id).toBe('daily');
+    expect(tasks[0]).not.toHaveProperty('__proto__');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});

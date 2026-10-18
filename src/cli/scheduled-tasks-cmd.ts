@@ -66,7 +66,11 @@ export async function runScheduledTasksMode(args: ParsedArgs): Promise<void> {
   }
 }
 
-async function loadTasks(tasksFile: string): Promise<ScheduledTask[]> {
+/**
+ * Exported so the payload-preservation guarantee below can be tested without
+ * running a task (agent-do-upf).
+ */
+export async function loadTasks(tasksFile: string): Promise<ScheduledTask[]> {
   let raw: string;
   try {
     raw = await readFile(tasksFile, 'utf-8');
@@ -78,6 +82,23 @@ async function loadTasks(tasksFile: string): Promise<ScheduledTask[]> {
     }
     throw err;
   }
+  // Deliberately a bare JSON.parse, NOT a prototype-pollution reviver: `payload`
+  // is opaque user data (`z.record(z.string(), z.unknown())`), so a legitimate key
+  // named `constructor` or `prototype` inside it is DATA and must survive. A
+  // dropping reviver here silently erased those fields before the payload was
+  // stringified for the agent (agent-do-upf).
+  //
+  // One honest limit, measured rather than assumed (agent-do-kux): an OWN
+  // `__proto__` key inside a payload does not survive. JSON.parse creates it as an
+  // own property, and Zod's record rebuild then drops it — it is not applied to any
+  // prototype (the rebuilt object still has Object.prototype, and nothing is
+  // inherited from the hostile value), so it is safe, but it is not preserved
+  // either. Preserving it would mean bypassing that rebuild, which is not worth it
+  // for a field name that exists only to be a prototype key.
+  //
+  // Structure is still safe: the array and task objects are rebuilt by Zod from the
+  // declared fields only, so a `__proto__` at the structural level is discarded
+  // rather than merged, and nothing here assigns parsed keys onto another object.
   const parsed = TasksFileSchema.parse(JSON.parse(raw));
   return validateScheduledTasks(parsed);
 }
