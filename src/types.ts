@@ -456,8 +456,9 @@ export interface AgentConfig {
    * system prompt on every subsequent run sharing the same store, a
    * prompt-injected agent with install access could rewrite its own
    * future instructions — a persistent jailbreak. Set `true` only when
-   * the caller also runs a human-in-the-loop permission layer
-   * (`permissions: { mode: 'ask' }` or `hooks.onPreToolUse`).
+   * the caller also runs a human-in-the-loop permission layer - `mode: 'ask'`
+   * with an `onPermissionRequest` callback (that config is rejected at
+   * construction without one), or `hooks.onPreToolUse`.
    */
   allowSkillInstall?: boolean;
   /**
