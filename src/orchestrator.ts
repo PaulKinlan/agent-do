@@ -7,11 +7,44 @@
 
 import type { Agent, AgentConfig, ProgressEvent } from './types.js';
 import { createAgent } from './agent.js';
+import { wrapForModel } from './tools/content-guards.js';
+import type { ToolResult } from './tools/types.js';
 import { tool } from 'ai';
 import { z } from 'zod';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const s = (schema: z.ZodType): any => schema;
+
+/**
+ * Frame a worker's result before the master sees it.
+ *
+ * A worker is a separate agent whose context is built from whatever it read: files, web pages, tool output.
+ * From the master's point of view its result is third-party content, and it arrives as a tool result - the
+ * highest-trust position in the prompt. So it gets exactly what MCP responses get (`wrapForModel`): a
+ * `<tool_output>` frame the content cannot close, prompt-injection markers redacted, and a size cap.
+ * agent-do-4ya; the same class as agent-do-hvz and agent-do-dte.
+ *
+ * The counts travel in `data` so an operator (or a later tool) can see what was cut or redacted without
+ * parsing the framed string.
+ */
+export function frameWorkerResult(agentId: string, result: string): ToolResult {
+  const wrapped = wrapForModel(result, { tool: 'delegate_task', path: agentId });
+  const size = wrapped.truncated
+    ? `${wrapped.totalBytes} bytes, truncated to ${wrapped.includedBytes}`
+    : `${wrapped.totalBytes} bytes`;
+  return {
+    modelContent: wrapped.content,
+    userSummary: `[delegate_task] worker "${agentId}" returned ${size}`,
+    data: {
+      agentId,
+      totalBytes: wrapped.totalBytes,
+      includedBytes: wrapped.includedBytes,
+      truncated: wrapped.truncated,
+      redactedMarkerCount: wrapped.redactedMarkerCount,
+      neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+    },
+  };
+}
 
 export interface OrchestratorConfig {
   master: AgentConfig;
@@ -92,11 +125,26 @@ export function createOrchestrator(config: OrchestratorConfig): Orchestrator {
             // Notify via messaging
             await messaging.send(config.master.id, agentId, task);
             const result = await worker.run(task);
+            // Internal plumbing, not model-facing: the unframed copy stays as it is.
             await messaging.send(agentId, config.master.id, result);
-            return result;
+            return frameWorkerResult(agentId, result);
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            return `Error: Worker "${agentId}" failed: ${message}`;
+            // The worker's message is third-party content too - it can quote whatever the worker read - so it
+            // is framed rather than spliced into the result (agent-do-4ya, same rule as the success path).
+            const framed = wrapForModel(message, { tool: 'delegate_task', path: agentId });
+            return {
+              modelContent: `Error: Worker "${agentId}" failed:\n${framed.content}`,
+              userSummary: `[delegate_task] worker "${agentId}" failed`,
+              data: {
+                error: true,
+                agentId,
+                totalBytes: framed.totalBytes,
+                truncated: framed.truncated,
+                redactedMarkerCount: framed.redactedMarkerCount,
+                neutralisedDelimiterCount: framed.neutralisedDelimiterCount,
+              },
+            };
           } finally {
             busyWorkers.delete(agentId);
           }
