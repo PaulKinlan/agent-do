@@ -13,6 +13,8 @@
  * Testing only (1) would let an over-eager fix (sanitise unconditionally) pass, and testing only (2) would let the
  * defect back in. The teeth below are therefore aimed at both.
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { writeAnswerChunk } from '../src/cli/answer-stream.js';
 
@@ -75,5 +77,19 @@ describe('writeAnswerChunk', () => {
     const ordinary = 'Here is the answer:\n\tindented ─── done 🚀\n';
     writeAnswerChunk(ordinary);
     expect(written()).toBe(ordinary);
+  });
+});
+
+describe('no CLI module writes streamed answer content straight to stdout', () => {
+  // A source assertion, deliberately. The invariant is the ABSENCE of a pattern across every file in src/cli/,
+  // which no runtime test can observe: a fourth streaming site could be added tomorrow in a mode nothing drives,
+  // and every test here would still pass. This is exactly the class of regression that produced agent-do-193 (one
+  // write guarded, its sibling four lines below not), so it is worth pinning where a behavioural test cannot.
+  it('routes every `event.content` stdout write through writeAnswerChunk', () => {
+    const dir = new URL('../src/cli/', import.meta.url);
+    const offenders = readdirSync(dir)
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => /process\.stdout\.write\(\s*event\./.test(readFileSync(fileURLToPath(new URL(f, dir)), 'utf8')));
+    expect(offenders, 'these write model output to stdout unguarded').toEqual([]);
   });
 });
