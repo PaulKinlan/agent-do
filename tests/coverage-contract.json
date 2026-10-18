@@ -33,6 +33,7 @@
   ],
   "src/cli/agents.ts": [
     "tests/cli-agents.test.ts",
+    "tests/cli-answer-stream.test.ts",
     "tests/script-import.test.ts",
     "tests/trust-boundary.test.ts"
   ],
@@ -44,6 +45,7 @@
   ],
   "src/cli/args.ts": [
     "tests/cli-agents.test.ts",
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
@@ -56,23 +58,28 @@
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/debug-config.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/debug-observability.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/eval-cmd.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/csv.test.ts"
   ],
   "src/cli/permission-handler.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/prompt.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts"
   ],
   "src/cli/provider-tools.ts": [
     "tests/cli-agents.test.ts",
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
@@ -86,12 +93,14 @@
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/render.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/resolve-model.ts": [
     "tests/cli-agents.test.ts",
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
@@ -107,12 +116,15 @@
     "tests/usage.test.ts"
   ],
   "src/cli/scheduled-tasks-cmd.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts"
   ],
   "src/cli/script.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/shellm.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/shellm.test.ts"
   ],
@@ -128,6 +140,7 @@
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/warnings.ts": [
+    "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-warnings.test.ts",

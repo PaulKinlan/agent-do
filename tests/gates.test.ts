@@ -913,3 +913,37 @@ describe('the gate re-checks its own generated metadata (agent-do-s5u)', () => {
     expect(staticCmd!).not.toContain('--check ||');
   });
 });
+
+describe('the suite map sees suites that read source as DATA (agent-do-9im)', () => {
+  // The import graph cannot see a `readFileSync`, so an invariant suite that asserts on the TEXT of source files
+  // used to be invisible to affected-only selection: the fast gate passed while `cli-answer-stream.test.ts` failed on
+  // `src/cli/eval-cmd.ts`, and the reviewer caught it rather than the gate. Suites now declare what they read with
+  // `// @reads <glob>`; these assertions pin that the declaration actually reaches the map, and that it keeps
+  // working for files that do not exist yet.
+  const mapRows = (): Map<string, string[]> => {
+    const rows = new Map<string, string[]>();
+    for (const line of readFileSync(join(REPO, 'tools/suite-map.tsv'), 'utf8').split('\n')) {
+      if (!line || line.startsWith('#')) continue;
+      const [glob, ...suites] = line.split('\t');
+      if (!suites.length) continue;
+      rows.set(glob, suites.join(' ').split(/\s+/).filter(Boolean));
+    }
+    return rows;
+  };
+
+  it('maps every src/cli module to the stdout invariant suite', () => {
+    const rows = mapRows();
+    const cliModules = readdirSync(join(REPO, 'src/cli'))
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => `src/cli/${f}`);
+    expect(cliModules.length).toBeGreaterThan(5);
+    const uncovered = cliModules.filter((m) => !(rows.get(m) ?? []).includes('tests/cli-answer-stream.test.ts'));
+    expect(uncovered, 'these src/cli modules would change without the stdout invariant being selected').toEqual([]);
+  });
+
+  it('still maps the module that exposed the gap', () => {
+    // agent-do-9im's counterexample: this one was reached by no suite at all, so a change to it selected only the
+    // suites whose own files changed.
+    expect(mapRows().get('src/cli/eval-cmd.ts')).toContain('tests/cli-answer-stream.test.ts');
+  });
+});

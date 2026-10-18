@@ -58,6 +58,25 @@ reaches it through relative imports (including `vi.mock(...)` targets, which are
 otherwise miss). One row per module, never a directory-wide glob: with `src/*.ts` a brand-new module would
 inherit the suites of its neighbours, i.e. claim coverage that never existed.
 
+### Suites that read source as DATA — `// @reads <glob>`
+
+The graph sees imports, so it cannot see a suite that `readFileSync`s source text and asserts on it (a
+stdout-safety invariant, a secret scan, an import rule). Without a declaration such a suite is invisible to
+selection: a change to a file it inspects maps to the suites that *import* that file, the invariant is not run, and
+the gate reports PASS while the invariant is broken. Measured once (agent-do-9im): the fast gate passed on a change
+to `src/cli/eval-cmd.ts` while `tests/cli-answer-stream.test.ts` failed on it, and a reviewer found it, not the gate.
+
+So a suite can declare what it reads, in the suite itself:
+
+```ts
+// @reads src/cli/*.ts
+```
+
+`tools/gen-suite-map.mjs` adds every matching module to that suite's row, exactly as if it had imported them, so the
+invariant is selected whenever a file it inspects changes. The marker uses the same bash-pattern dialect as the map's
+rows (`*` crosses `/`), it lives with the code that does the reading rather than in a sidecar that drifts, and it is
+covered by `tests/gates.test.ts` (which asserts every `src/cli` module maps to the stdout invariant).
+
 The same graph also writes **`tests/coverage-contract.json`**, and that file is not a duplicate — it exists
 because a *second* consumer decides "was this changed file exercised?", and it is not ours.
 `~/fleet/remote/check-coverage.py` (the fleet's coverage extractor, which writes the `coverage` block a
