@@ -107,9 +107,15 @@ export function buildCliPermissions(
     const rl = readline.createInterface({ input: stdin, output: stderr });
     try {
       const answer: string = await new Promise((resolve) => {
+        // The prompt itself, not just the non-TTY denial above. Both the tool name and the argument preview
+        // are model-chosen - readline writes this straight to the TTY, so an attacker-supplied tool name or
+        // argument could rewrite the line the human is about to answer (agent-do-193). Guarding one of the two
+        // writes in this file and not the other is exactly how that finding arose.
         rl.question(
-          `\n[agent-do] Agent wants to call ${req.toolName}(${argsPreview}).\n` +
-          `           Allow? [y]es / [n]o / [a]lways (this session): `,
+          sanitiseForTerminal(
+            `\n[agent-do] Agent wants to call ${req.toolName}(${argsPreview}).\n` +
+              `           Allow? [y]es / [n]o / [a]lways (this session): `,
+          ),
           resolve,
         );
       });

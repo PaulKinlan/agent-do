@@ -8,3 +8,7 @@ stderr through one `writeStderr` helper that replaces C0/C1 controls (except new
 with visible `[U+XXXX]` markers. An attacker-influenced file, page or MCP response could previously rewrite the
 operator's window title, put text on their clipboard (OSC 52), erase or overwrite already-printed lines, or use a
 bidi override to display a different path from the one printed.
+
+The interactive approval prompt is covered too (`rl.question` prints the model-chosen tool name and argument
+preview straight to the TTY); the non-TTY denial notice and the prompt now share the sanitiser, which is how the
+gap between them closed.
