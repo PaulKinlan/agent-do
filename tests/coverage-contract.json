@@ -89,6 +89,13 @@
   "src/cli/shellm.ts": [
     "tests/shellm.test.ts"
   ],
+  "src/cli/terminal-safety.ts": [
+    "tests/cli-permissions.test.ts",
+    "tests/cli-render.test.ts",
+    "tests/cli-scheduled-tasks.test.ts",
+    "tests/cli-terminal-safety.test.ts",
+    "tests/script-import.test.ts"
+  ],
   "src/cli/warnings.ts": [
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-warnings.test.ts",

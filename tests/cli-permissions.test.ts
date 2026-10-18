@@ -258,3 +258,62 @@ describe('buildCliPermissions + evaluatePermission integration', () => {
     expect(await evaluatePermission('delete_file', {}, cfg)).toBe(true);
   });
 });
+
+describe('the interactive prompt neutralises control sequences (agent-do-193)', () => {
+  // Same harness as above: a fake TTY stdin we can answer, and a writable stderr we can read back.
+  function mockStdin(isTTY: boolean, answers: string[] = []): NodeJS.ReadStream {
+    const r = new Readable({
+      read() {
+        for (const ans of answers) this.push(ans + '\n');
+        this.push(null);
+      },
+    });
+    (r as unknown as { isTTY: boolean }).isTTY = isTTY;
+    return r as unknown as NodeJS.ReadStream;
+  }
+  function mockStderr(isTTY = true): { stream: NodeJS.WriteStream; written: string[] } {
+    const written: string[] = [];
+    const w = new Writable({
+      write(chunk: Buffer | string, _enc, cb) {
+        written.push(chunk.toString());
+        cb();
+      },
+    });
+    (w as unknown as { isTTY: boolean }).isTTY = isTTY;
+    return { stream: w as unknown as NodeJS.WriteStream, written };
+  }
+
+  it('sanitises the tool name and the argument preview in the approval question', async () => {
+    const { stream: stderr, written } = mockStderr(true);
+    const stdin = mockStdin(true, ['n']);
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const ok = await cfg.onPermissionRequest!({
+      toolName: 'shell\u001b]52;c;ZXZpbA==\u0007',
+      args: { cmd: 'src/\u202Eevil.ts' },
+    });
+    expect(ok).toBe(false); // the answer still works
+    const out = written.join('');
+    // NOTE on why this does not assert "no ESC anywhere": readline emits its OWN cursor/erase sequences to the
+    // output stream while editing the line (`\u001b[1G\u001b[0J` and friends). Asserting a blanket absence would
+    // therefore test readline, and would fail for the wrong reason. What must hold is that OUR text cannot carry
+    // the attack: the OSC 52 introducer is broken, the payload is inert, and bidi (which readline never emits)
+    // is gone entirely.
+    expect(out, 'the OSC 52 introducer survived').not.toMatch(/\u001b\]52/);
+    expect(out, 'a raw bidi override reached the prompt').not.toMatch(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/);
+    expect(out).toContain('[U+001B]');
+    expect(out).toContain('[U+0007]');
+    expect(out).toContain('[U+202E]');
+    expect(out).toContain('Allow?'); // the question is still legible
+  });
+
+  it('leaves an ordinary prompt readable', async () => {
+    const { stream: stderr, written } = mockStderr(true);
+    const stdin = mockStdin(true, ['y']);
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const ok = await cfg.onPermissionRequest!({ toolName: 'write_file', args: { path: 'a.txt' } });
+    expect(ok).toBe(true);
+    const out = written.join('');
+    expect(out).toContain('Agent wants to call write_file');
+    expect(out).not.toContain('[U+');
+  });
+});
