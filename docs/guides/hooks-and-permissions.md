@@ -176,8 +176,15 @@ permissions: {
     write_file: 'ask',      // Defers to onPermissionRequest
     delete_file: 'never',   // Always denied, even in 'accept-all' mode
   },
+  // 'ask' REQUIRES this callback: a config with mode 'ask' and no onPermissionRequest is rejected when the
+  // agent is created, rather than silently allowing every tool.
+  onPermissionRequest: async ({ toolName }) => toolName !== 'delete_file',
 }
 ```
+
+A per-tool `'ask'` only defers to the callback in `'ask'` mode. In `'accept-all'` or `'deny-all'` the mode
+decides, so a per-tool `'ask'` is allowed by `'accept-all'` and denied by `'deny-all'` — the override's
+remaining job there is `'always'` and `'never'`.
 
 ### Permission Evaluation Pipeline
 
