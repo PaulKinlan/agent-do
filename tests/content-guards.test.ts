@@ -247,3 +247,21 @@ it('neutralises a forged opening tool_output tag', () => {
   });
   expect(out.content.match(/<tool_output/g)).toHaveLength(1);
 });
+
+describe('truncateUtf8ByBytes (agent-do-4ya review)', () => {
+  it('cuts on a code-point boundary: no replacement character and no overshoot', () => {
+    // A cap that bisects a multi-byte character used to decode a split sequence into U+FFFD, which both
+    // corrupts the text and re-encodes to three bytes - so `includedBytes` could exceed the cap it claims.
+    for (const [ch, size] of [['\u00e9', 2], ['\u20ac', 3], ['\u{1F600}', 4]] as const) {
+      for (const cap of [1, 2, 3, 5, 7, 9]) {
+        const body = ch.repeat(10);
+        const out = truncateUtf8ByBytes(body, cap);
+        expect(out, `${ch} cap ${cap} replacement char`).not.toContain('\uFFFD');
+        expect(utf8ByteLength(out), `${ch} cap ${cap} overshoot`).toBeLessThanOrEqual(cap);
+        expect(body.startsWith(out), `${ch} cap ${cap} prefix`).toBe(true);
+        expect(out.length % 1, `decoded length is code points, not bytes (${size})`).toBe(0);
+      }
+    }
+  });
+});
+

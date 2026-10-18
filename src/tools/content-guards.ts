@@ -109,7 +109,15 @@ export function utf8ByteLength(s: string): number {
 export function truncateUtf8ByBytes(s: string, maxBytes: number): string {
   const bytes = utf8Encoder.encode(s);
   if (bytes.length <= maxBytes) return s;
-  return utf8Decoder.decode(bytes.subarray(0, maxBytes));
+  // Cut on a code-point boundary. A byte in the middle of a multi-byte character is a continuation byte
+  // (0b10xxxxxx), and decoding from there yields U+FFFD - a corrupted character that also re-encodes to
+  // three bytes, which can push the result back over maxBytes and make `includedBytes` a lie. The default
+  // cap happens to be a multiple of four so this never showed at the default, but any caller passing a cap
+  // that bisects a character hit it (agent-do-4ya review). At most three bytes are walked back, because the
+  // longest UTF-8 sequence is four bytes.
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] & 0b1100_0000) === 0b1000_0000) end--;
+  return utf8Decoder.decode(bytes.subarray(0, end));
 }
 
 export interface WrappedContent {
