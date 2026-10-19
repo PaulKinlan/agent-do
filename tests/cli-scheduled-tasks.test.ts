@@ -206,6 +206,39 @@ describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
     expect(text).toContain('a?b.json');
   });
 
+  // parseCron tokenises with expr.trim().split(/\s+/): a trailing newline is trimmed away and a newline
+  // between fields splits into the same five tokens, so the cron STRING can carry a raw \n/\r through
+  // validation and split the emitted row into an uninstallable crontab — real `crontab -n` rejects the
+  // whole file ("bad month"), so every task stops being scheduled (agent-do-bw1).
+  it("a trailing newline in the cron spec cannot split the emitted row (agent-do-bw1)", async () => {
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'evil', cron: '0 0 * * *\n', payload: 'hi' },
+    ]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const rows = text.split('\n').filter((l) => l.length > 0 && !l.startsWith('#'));
+    expect(rows, 'the trailing newline must not split the row in two').toHaveLength(1);
+    expect(rows[0]).toMatch(/^0 0 \* \* \* /);
+    expect(rows[0]).toContain('scheduled-tasks run evil');
+  });
+
+  it('newlines and CRs between cron fields are normalised to single spaces (agent-do-bw1)', async () => {
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'evil-nl', cron: '0 0 *\n* *', payload: 'hi' },
+      { id: 'evil-cr', cron: '0 0 *\r* *', payload: 'hi' },
+    ]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const rows = text.split('\n').filter((l) => l.length > 0 && !l.startsWith('#'));
+    expect(rows, 'each task is still exactly one row').toHaveLength(2);
+    for (const row of rows) {
+      // The spec is the normalised five fields; no raw newline or CR survives into the row.
+      expect(row).toMatch(/^0 0 \* \* \* /);
+      expect(row.includes('\r'), 'a raw CR must not survive into the row').toBe(false);
+      expect(row).toContain('scheduled-tasks run evil-');
+    }
+  });
+
   it('status shows the last-run table and reads from the status file', async () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },

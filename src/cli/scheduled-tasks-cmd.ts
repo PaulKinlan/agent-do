@@ -172,15 +172,38 @@ function shQuote(value: string): string {
 }
 
 /**
+ * Normalise a task's cron spec into one line of single-spaced fields, without
+ * changing which minutes it selects.
+ *
+ * The cron value is FUNCTIONAL text, so {@link cronSafe}'s `?` markers are the
+ * wrong tool here — replacing a newline with `?` would leave a spec that still
+ * fails to install (agent-do-bw1). The trap is that `parseCron` tokenises with
+ * `expr.trim().split(/\s+/)`: a trailing newline is trimmed away and a newline
+ * or CR between fields splits into the same five tokens, so an expression whose
+ * STRING still carries a raw `\n`/`\r` passes validation yet reached the row
+ * verbatim, splitting it into an uninstallable crontab (real `crontab -n`:
+ * "bad minute" / "bad month" / "bad day-of-week") — the whole file fails, so
+ * every task silently stops being scheduled. Collapsing every whitespace run to
+ * one space is semantics-identical to that tokenisation (`matchesCron` splits
+ * on `/\s+/` too, so the emitted spec and the foreground loop agree
+ * field-for-field) and makes a newline or CR impossible in the emitted spec by
+ * construction.
+ */
+function normaliseCronSpec(spec: string): string {
+  return spec.trim().split(/\s+/).join(' ');
+}
+
+/**
  * Emit crontab lines that invoke `agent-do scheduled-tasks run <id>` per task.
  * The operator appends the output to their crontab / systemd timer. We use the
  * resolved absolute tasks-file path so the fired job reads the same file
  * regardless of the cron user's cwd.
  *
  * Everything interpolated into a row comes from the tasks JSON or the
- * filesystem, none of it is trusted as structure: `t.cron` and `t.id` are
- * constrained upstream (`parseCron` accepts exactly 5 whitespace-separated
- * fields, ids are `[a-zA-Z0-9_-]+`); paths and descriptions are quoted and
+ * filesystem, none of it is trusted as structure: ids are constrained upstream
+ * (`[a-zA-Z0-9_-]+`), the cron spec is whitespace-normalised here (see
+ * {@link normaliseCronSpec} — parseCron's tokenisation tolerates newlines the
+ * string may still carry), and paths and descriptions are quoted and
  * single-lined here, so a hostile task can emit no more than its one inert row.
  */
 async function printInstall(tasksFile: string, args: ParsedArgs): Promise<void> {
@@ -194,9 +217,10 @@ async function printInstall(tasksFile: string, args: ParsedArgs): Promise<void> 
     `# memory dir: ${sanitiseForLine(memory)}`,
   ];
   for (const t of tasks) {
+    const spec = normaliseCronSpec(t.cron);
     const comment = t.description ? ` # ${cronSafe(t.description)}` : '';
     lines.push(
-      `${t.cron} ${bin} scheduled-tasks run ${t.id} --tasks ${shQuote(absTasks)} --memory ${shQuote(memory)}${comment}`,
+      `${spec} ${bin} scheduled-tasks run ${t.id} --tasks ${shQuote(absTasks)} --memory ${shQuote(memory)}${comment}`,
     );
   }
   console.log(lines.join('\n'));
