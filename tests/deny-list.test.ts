@@ -469,3 +469,84 @@ describe('agent-do-0fr — a name cannot forge an entry line in a listing', () =
     expect(res.modelContent).not.toMatch(/^\[file\] public$/m);
   });
 });
+
+describe('.agent-doignore cannot relax the operator rules (agent-do-2wq)', () => {
+  // The workspace file can arrive with a cloned hostile repository, so it must be able to ADD restrictions and never
+  // remove one. Before this, it was concatenated into the same `ignore` instance as the defaults, which is gitignore
+  // semantics: `!.env` re-included what the defaults had denied.
+  //
+  // Every case CREATES the file it is about: a path that does not exist resolves to `unresolved` and is blocked for a
+  // different reason, so an assertion on `blocked` alone would pass without the glob layer ever being consulted.
+  async function makeFiles(...relPaths: string[]): Promise<void> {
+    for (const rel of relPaths) {
+      const abs = path.join(workDir, rel);
+      await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+      await fs.promises.writeFile(abs, 'x');
+    }
+  }
+  async function writeIgnore(lines: string[]): Promise<void> {
+    await fs.promises.writeFile(path.join(workDir, '.agent-doignore'), lines.join('\n') + '\n');
+  }
+
+  it('does not re-open a built-in read deny', async () => {
+    await makeFiles('.env', 'server.pem', 'id_rsa');
+    await writeIgnore(['!.env', '!*.pem', '!id_rsa']);
+    const g = createDenyGuard(workDir);
+
+    const env = await g.checkRead('.env');
+    expect(env.blocked, 'a workspace `!.env` re-opened the built-in secret deny').toBe(true);
+    // The RULE matters as much as the verdict: it proves the built-in layer decided, not an unrelated failure.
+    expect(env.rule).toBe('.env');
+    expect((await g.checkRead('server.pem')).blocked).toBe(true);
+    expect((await g.checkRead('id_rsa')).blocked).toBe(true);
+  });
+
+  it('does not re-open a built-in write deny', async () => {
+    await makeFiles('.git/hooks/pre-commit', '.env');
+    await writeIgnore(['!.git/**', '!.env']);
+    const g = createDenyGuard(workDir);
+    expect((await g.checkWrite('.git/hooks/pre-commit')).blocked).toBe(true);
+    expect((await g.checkWrite('.env')).blocked).toBe(true);
+  });
+
+  it('does not cancel an operator --exclude', async () => {
+    await makeFiles('secrets/token.txt');
+    await writeIgnore(['!secrets/**']);
+    const g = createDenyGuard(workDir, { extra: ['secrets/**'] });
+    const d = await g.checkRead('secrets/token.txt');
+    expect(d.blocked, 'a workspace negation cancelled an operator --exclude').toBe(true);
+    expect(d.rule).toBe('secrets/**');
+  });
+
+  it('can still ADD restrictions', async () => {
+    await makeFiles('private/notes.md');
+    await writeIgnore(['private/**']);
+    const d = await createDenyGuard(workDir).checkRead('private/notes.md');
+    expect(d.blocked).toBe(true);
+    expect(d.rule).toBe('private/**');
+  });
+
+  it('a negation still relaxes the workspace file OWN patterns', async () => {
+    await makeFiles('tmp/keep.txt', 'tmp/other.txt');
+    await writeIgnore(['tmp/**', '!tmp/keep.txt']);
+    const g = createDenyGuard(workDir);
+    expect((await g.checkRead('tmp/keep.txt')).blocked).toBe(false);
+    expect((await g.checkRead('tmp/other.txt')).blocked).toBe(true);
+  });
+
+  it('includeSensitive still reopens the built-ins - that flag is the sanctioned override', async () => {
+    await makeFiles('.env');
+    await writeIgnore(['!.env']);
+    expect((await createDenyGuard(workDir, { includeSensitive: true }).checkRead('.env')).blocked).toBe(false);
+  });
+
+  it('filterReadable applies the same precedence', async () => {
+    await makeFiles('.env', 'ok.txt');
+    await writeIgnore(['!.env']);
+    const kept = await createDenyGuard(workDir).filterReadable([
+      { path: '.env', bytes: 1 },
+      { path: 'ok.txt', bytes: 1 },
+    ] as never);
+    expect(kept.map((k: { path: string }) => k.path)).toEqual(['ok.txt']);
+  });
+});
