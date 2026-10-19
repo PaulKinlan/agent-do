@@ -188,7 +188,12 @@ execution.
 `createWorkspaceTools(workingDir)` normally reads a project-local
 `.agent-doignore` file from disk to extend the deny-list. Extension is the
 only direction: the file can add restrictions, never relax the built-in
-defaults or your `exclude` patterns (agent-do-2wq). When you
+defaults or your `exclude` patterns (agent-do-2wq).
+
+An `exclude` pattern is different, because it is **yours**: a negation you
+pass yourself, `exclude: ['!.env']`, re-opens a default exactly as
+`includeSensitive` does (agent-do-54g). The distinction is provenance, not
+syntax — a rule the workspace supplied may only add. When you
 pass `{ sandbox }`, that file lookup is **automatically skipped** —
 the workspace's substrate is now the sandbox, not the host, so a
 host-side `.agent-doignore` would either be missing or describe a

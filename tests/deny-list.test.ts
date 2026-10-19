@@ -540,6 +540,19 @@ describe('.agent-doignore cannot relax the operator rules (agent-do-2wq)', () =>
     expect((await createDenyGuard(workDir, { includeSensitive: true }).checkRead('.env')).blocked).toBe(false);
   });
 
+  it('an explicit operator --exclude negation DOES reopen a default, and that is documented', async () => {
+    // agent-do-54g: the README describes `--exclude` as the operator's own instruction, so a negation in it is an
+    // explicit override - the same intent as `--include-sensitive`. This test exists so that prose cannot rot: if
+    // someone later makes `extra` additive-only, this fails and the documentation has to change with it.
+    await makeFiles('.env');
+    expect((await createDenyGuard(workDir, { extra: ['!.env'] }).checkRead('.env')).blocked).toBe(false);
+
+    // The contrast in one test, because the distinction is about PROVENANCE, not syntax: the same `!` line coming
+    // from the workspace file is ineffective.
+    await writeIgnore(['!.env']);
+    expect((await createDenyGuard(workDir).checkRead('.env')).blocked).toBe(true);
+  });
+
   it('filterReadable applies the same precedence', async () => {
     await makeFiles('.env', 'ok.txt');
     await writeIgnore(['!.env']);

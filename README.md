@@ -352,7 +352,12 @@ hooks or clobber installed modules.
 
 Layer your own policy on top:
 
-- `--exclude 'secrets/**,*.cred'` — per-invocation patterns.
+- `--exclude 'secrets/**,*.cred'` — per-invocation patterns. These come
+  from you, so a negation in them is an explicit override:
+  `--exclude '!.env'` re-opens `.env`, the same intent as
+  `--include-sensitive`. A `.agent-doignore` shipped inside the workspace
+  cannot do that (next bullet) — the difference is who supplied the rule,
+  not the syntax.
 - `.agent-doignore` at the workspace root — project-scoped, gitignore-
   style file. It can ADD restrictions; it cannot lift the built-in
   defaults or your `--exclude` patterns, because the workspace can
