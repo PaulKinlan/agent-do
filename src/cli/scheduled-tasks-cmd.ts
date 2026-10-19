@@ -137,25 +137,66 @@ async function printStatus(tasksFile: string, memoryDir: string): Promise<void> 
 }
 
 /**
+ * Make a value structurally inert for a crontab.
+ *
+ * Whatever this receives — a task description from the tasks JSON, a filesystem
+ * path — it must not be able to change the SHAPE of the emitted crontab
+ * (agent-do-hvh):
+ *
+ * - A crontab's structure is NEWLINE-delimited, and cron's line parser does not
+ *   see shell quoting, so a raw newline inside even a quoted path started a
+ *   second, standalone crontab entry that system cron executed on schedule.
+ *   `sanitiseForLine` collapses newlines (and other control characters) to a
+ *   visible `?` — the attempt stays visible, but cannot add rows.
+ * - An unescaped `%` is cron's command/stdin separator: everything after the
+ *   first one is fed to the command's stdin, and the command is truncated
+ *   before it (which would also leave a shell quote unclosed). `%` gets cron's
+ *   documented `\%` escape.
+ */
+function cronSafe(value: string): string {
+  return sanitiseForLine(value).replace(/%/g, '\\%');
+}
+
+/**
+ * Quote a value so the shell cron uses to run commands (`/bin/sh -c`) treats it
+ * as ONE literal argument. POSIX single quotes with the `'\''` splice: nothing
+ * between single quotes is interpreted, and the only character that can end
+ * them is `'` itself, which is closed, escaped and reopened mid-string. The
+ * previous double quotes were inert-looking but real: a `$(`, backtick or `"`
+ * inside a tasks-file path executed in the fired job. Values pass through
+ * {@link cronSafe} first — quoting is for the SHELL, but cron splits entries at
+ * newlines long before the shell sees anything (agent-do-hvh).
+ */
+function shQuote(value: string): string {
+  return `'${cronSafe(value).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * Emit crontab lines that invoke `agent-do scheduled-tasks run <id>` per task.
  * The operator appends the output to their crontab / systemd timer. We use the
  * resolved absolute tasks-file path so the fired job reads the same file
  * regardless of the cron user's cwd.
+ *
+ * Everything interpolated into a row comes from the tasks JSON or the
+ * filesystem, none of it is trusted as structure: `t.cron` and `t.id` are
+ * constrained upstream (`parseCron` accepts exactly 5 whitespace-separated
+ * fields, ids are `[a-zA-Z0-9_-]+`); paths and descriptions are quoted and
+ * single-lined here, so a hostile task can emit no more than its one inert row.
  */
 async function printInstall(tasksFile: string, args: ParsedArgs): Promise<void> {
   const tasks = await loadTasks(tasksFile);
   const absTasks = resolve(tasksFile);
   const memory = resolve(args.memoryDir);
-  const bin = process.argv[1] ?? 'agent-do';
+  const bin = shQuote(process.argv[1] ?? 'agent-do');
   const lines: string[] = [
     '# agent-do scheduled tasks — append to your crontab (crontab -e) or systemd timer.',
-    `# tasks file: ${absTasks}`,
-    `# memory dir: ${memory}`,
+    `# tasks file: ${sanitiseForLine(absTasks)}`,
+    `# memory dir: ${sanitiseForLine(memory)}`,
   ];
   for (const t of tasks) {
-    const comment = t.description ? ` # ${t.description}` : '';
+    const comment = t.description ? ` # ${cronSafe(t.description)}` : '';
     lines.push(
-      `${t.cron} ${bin} scheduled-tasks run ${t.id} --tasks "${absTasks}" --memory "${memory}"${comment}`,
+      `${t.cron} ${bin} scheduled-tasks run ${t.id} --tasks ${shQuote(absTasks)} --memory ${shQuote(memory)}${comment}`,
     );
   }
   console.log(lines.join('\n'));

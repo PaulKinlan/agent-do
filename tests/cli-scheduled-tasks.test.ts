@@ -140,6 +140,72 @@ describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
     expect(text).toContain('--memory');
   });
 
+  // Rows are our structure; the description is data. Install used to interpolate it raw, so a newline
+  // in a description emitted a SECOND, standalone crontab row that system cron would execute on
+  // schedule (agent-do-hvh) — the install counterpart of the list-row fix (agent-do-bc4).
+  it("a description containing a newline cannot forge a crontab entry (agent-do-hvh)", async () => {
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'safe', cron: '0 0 * * *', payload: 'hi', description: 'ordinary\n* * * * * /bin/echo ROGUE_JOB' },
+    ]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const rows = text.split('\n').filter((l) => l.length > 0 && !l.startsWith('#'));
+    expect(rows, 'the description must not add a second executable row').toHaveLength(1);
+    expect(rows[0]).toContain('scheduled-tasks run safe');
+    // The attempt stays visible but inert: the newline became `?`, so the forged
+    // cron fields are text inside the one row's trailing comment.
+    expect(rows[0]).toContain('ordinary?* * * * * /bin/echo ROGUE_JOB');
+  });
+
+  it('a bare % in a description cannot start cron stdin injection (agent-do-hvh)', async () => {
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'safe', cron: '0 0 * * *', payload: 'hi', description: 'report%50%done' },
+    ]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const row = text.split('\n').find((l) => l.includes('scheduled-tasks run safe'))!;
+    expect(row).toContain('report\\%50\\%done');
+    // Every % in the row is cron-escaped; an unescaped one would end the command
+    // and feed the rest of the line to the job's stdin.
+    expect(row).not.toMatch(/(^|[^\\])%/);
+  });
+
+  it('install single-quotes paths so shell metacharacters cannot break out (agent-do-hvh)', async () => {
+    // cron runs the row with `/bin/sh -c`; inside unescaped double quotes a `$(`,
+    // backtick or `"` in the path executed in the fired job.
+    const evil = join(dir, 'ta"sks;$(reboot).json');
+    await writeFile(evil, JSON.stringify([{ id: 'sweep', cron: '*/15 * * * *', payload: 'triage' }]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', evil, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const row = text.split('\n').find((l) => l.includes('scheduled-tasks run sweep'))!;
+    expect(row).toContain(`--tasks '${evil}'`);
+    expect(row).toContain(`--memory '${dir}'`);
+  });
+
+  it('a single quote or % inside a path is escaped, not broken out of (agent-do-hvh)', async () => {
+    const evil = join(dir, "it's 50%.json");
+    await writeFile(evil, JSON.stringify([{ id: 'sweep', cron: '*/15 * * * *', payload: 'triage' }]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', evil, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const row = text.split('\n').find((l) => l.includes('scheduled-tasks run sweep'))!;
+    // The exact documented encoding: `'` → `'\''` (sh splice), `%` → `\%` (cron escape).
+    expect(row).toContain(
+      `--tasks '${evil.replace(/'/g, `'\\''`).replace(/%/g, '\\%')}'`,
+    );
+  });
+
+  it('a newline in a tasks path cannot forge a header line either (agent-do-hvh)', async () => {
+    // POSIX paths may contain newlines; the `# tasks file:` header used to interpolate the path raw.
+    const evil = join(dir, 'a\nb.json');
+    await writeFile(evil, JSON.stringify([{ id: 'sweep', cron: '*/15 * * * *', payload: 'triage' }]));
+    const args = parseArgs(['scheduled-tasks', 'install', '--tasks', evil, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const rows = text.split('\n').filter((l) => l.length > 0 && !l.startsWith('#'));
+    expect(rows, 'the header path must not add an executable row').toHaveLength(1);
+    expect(rows[0]).toContain('scheduled-tasks run sweep');
+    expect(text).toContain('a?b.json');
+  });
+
   it('status shows the last-run table and reads from the status file', async () => {
     await writeFile(tasksFile, JSON.stringify([
       { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },
