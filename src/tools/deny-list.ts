@@ -189,11 +189,26 @@ export function createDenyGuard(
     ? []
     : readAgentDoIgnore(workingDir);
 
-  const readRules = [...readBase, ...extra, ...ignorePatterns];
-  const writeRules = [...writeBase, ...extra, ...ignorePatterns];
+  // TWO LAYERS, because they are not equally trustworthy (agent-do-2wq).
+  //
+  // The defaults and `--exclude` are the OPERATOR's rules: they come from this process's configuration. The
+  // `.agent-doignore` file comes from the WORKSPACE, which can arrive with a cloned hostile repository - and it used
+  // to be concatenated into the same `ignore` instance, which gives gitignore semantics: a later `!.env` line
+  // re-included what the defaults had denied, so a repository could talk the agent into reading `.env`, key material
+  // or `.git/hooks` just by shipping a file.
+  //
+  // Precedence is now: operator rules are ABSOLUTE; the workspace file may only ADD restrictions, and a `!` line in
+  // it can only relax its own patterns. An operator who really means to read secrets has `includeSensitive`, which is
+  // a flag on the command line - not a file that a repository can supply.
+  const readAbsoluteRules = [...readBase, ...extra];
+  const readWorkspaceRules = [...ignorePatterns];
+  const writeAbsoluteRules = [...writeBase, ...extra];
+  const writeWorkspaceRules = [...ignorePatterns];
 
-  const readIg: Ignore = ignore().add(readRules);
-  const writeIg: Ignore = ignore().add(writeRules);
+  const readAbsoluteIg: Ignore = ignore().add(readAbsoluteRules);
+  const readWorkspaceIg: Ignore = ignore().add(readWorkspaceRules);
+  const writeAbsoluteIg: Ignore = ignore().add(writeAbsoluteRules);
+  const writeWorkspaceIg: Ignore = ignore().add(writeWorkspaceRules);
 
   // One substrate and one resolver. For a host workspace the substrate *is* the
   // host filesystem, so it goes through createHostSandbox rather than getting a
@@ -245,6 +260,30 @@ export function createDenyGuard(
     return undefined;
   };
 
+  /**
+   * Decide one path against the two layers, absolute first.
+   *
+   * `rel` is already canonical and workspace-relative. A `..` segment is blocked rather than reported clean - treating
+   * it as clean is precisely the bypass this guard exists to stop - and it is reported with the caller's rules.
+   */
+  const decide = (
+    absoluteRules: readonly string[],
+    absoluteIg: Ignore,
+    workspaceRules: readonly string[],
+    workspaceIg: Ignore,
+    rel: string,
+  ): { blocked: boolean; rule?: string } => {
+    if (!rel) return { blocked: false };
+    if (rel.split('/').includes('..')) return { blocked: true };
+    if (isBlocked(absoluteIg, rel)) {
+      return { blocked: true, rule: firstMatchingRule(absoluteRules, rel) };
+    }
+    if (isBlocked(workspaceIg, rel)) {
+      return { blocked: true, rule: firstMatchingRule(workspaceRules, rel) };
+    }
+    return { blocked: false };
+  };
+
   const isBlocked = (ig: Ignore, rel: string): boolean => {
     // Canonicalisation upstream means a `..` segment should never reach this
     // point. If one does, it is blocked rather than reported as policy-clean:
@@ -262,20 +301,21 @@ export function createDenyGuard(
     async checkRead(relPath) {
       const target = await policyPath(relPath);
       if ('decision' in target) return target.decision;
-      if (!isBlocked(readIg, target.rel)) return { blocked: false };
-      return { blocked: true, rule: firstMatchingRule(readRules, target.rel) };
+      return decide(readAbsoluteRules, readAbsoluteIg, readWorkspaceRules, readWorkspaceIg, target.rel);
     },
     async checkWrite(relPath) {
       const target = await policyPath(relPath);
       if ('decision' in target) return target.decision;
-      if (!isBlocked(writeIg, target.rel)) return { blocked: false };
-      return { blocked: true, rule: firstMatchingRule(writeRules, target.rel) };
+      return decide(writeAbsoluteRules, writeAbsoluteIg, writeWorkspaceRules, writeWorkspaceIg, target.rel);
     },
     async filterReadable(items) {
       const kept: typeof items = [];
       for (const item of items) {
         const target = await policyPath(item.path);
-        const blocked = 'decision' in target ? target.decision.blocked : isBlocked(readIg, target.rel);
+        const blocked =
+          'decision' in target
+            ? target.decision.blocked
+            : decide(readAbsoluteRules, readAbsoluteIg, readWorkspaceRules, readWorkspaceIg, target.rel).blocked;
         if (!blocked) kept.push(item);
       }
       return kept;

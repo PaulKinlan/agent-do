@@ -354,10 +354,15 @@ Layer your own policy on top:
 
 - `--exclude 'secrets/**,*.cred'` — per-invocation patterns.
 - `.agent-doignore` at the workspace root — project-scoped, gitignore-
-  style file. Merged with the defaults.
+  style file. It can ADD restrictions; it cannot lift the built-in
+  defaults or your `--exclude` patterns, because the workspace can
+  arrive with a cloned repository and a file in it must not be able to
+  talk the agent into reading `.env`. A `!` line relaxes only the file's
+  own patterns.
 - `--include-sensitive` — opt out of the built-in defaults when you
-  explicitly want the old fully-open behaviour. `.agent-doignore` and
-  `--exclude` still apply.
+  explicitly want the old fully-open behaviour. This is a flag on your
+  command line, not a file a repository can supply.
+  `.agent-doignore` and `--exclude` still apply.
 
 Blocked operations surface in `--verbose` logs as `[blocked]` entries
 with the matched rule; the model sees only that it was blocked (not

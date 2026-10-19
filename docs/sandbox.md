@@ -186,7 +186,9 @@ execution.
 ## `.agent-doignore` and sandboxed workspace tools
 
 `createWorkspaceTools(workingDir)` normally reads a project-local
-`.agent-doignore` file from disk to extend the deny-list. When you
+`.agent-doignore` file from disk to extend the deny-list. Extension is the
+only direction: the file can add restrictions, never relax the built-in
+defaults or your `exclude` patterns (agent-do-2wq). When you
 pass `{ sandbox }`, that file lookup is **automatically skipped** —
 the workspace's substrate is now the sandbox, not the host, so a
 host-side `.agent-doignore` would either be missing or describe a
