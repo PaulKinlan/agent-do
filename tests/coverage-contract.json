@@ -229,7 +229,8 @@
     "tests/skills.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
-    "tests/tool-result-integration.test.ts"
+    "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts"
   ],
   "src/index.ts": [
     "tests/browser-entry.test.ts",
@@ -311,6 +312,7 @@
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts",
     "tests/trust-boundary.test.ts",
     "tests/usage.test.ts",
     "tests/workspace-tools.test.ts"
@@ -339,7 +341,8 @@
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
-    "tests/tool-result-integration.test.ts"
+    "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts"
   ],
   "src/policies.ts": [
     "tests/browser-entry.test.ts",
@@ -397,7 +400,8 @@
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
-    "tests/tool-result-integration.test.ts"
+    "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts"
   ],
   "src/routines/filesystem.ts": [
     "tests/browser-entry.test.ts",
@@ -473,6 +477,7 @@
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts",
     "tests/trust-boundary.test.ts",
     "tests/usage.test.ts",
     "tests/workspace-tools.test.ts"
@@ -503,7 +508,8 @@
     "tests/skills.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
-    "tests/tool-result-integration.test.ts"
+    "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts"
   ],
   "src/slash-commands.ts": [
     "tests/browser-entry.test.ts",
@@ -700,7 +706,8 @@
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
-    "tests/tool-result-integration.test.ts"
+    "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts"
   ],
   "src/tools/content-guards.ts": [
     "tests/browser-entry.test.ts",
@@ -741,6 +748,7 @@
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts",
     "tests/trust-boundary.test.ts",
     "tests/usage.test.ts",
     "tests/workspace-tools.test.ts"
@@ -822,6 +830,7 @@
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
     "tests/tool-result.test.ts",
+    "tests/tools-build.test.ts",
     "tests/workspace-tools.test.ts"
   ],
   "src/tools/workspace-tools.ts": [
@@ -867,6 +876,7 @@
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
+    "tests/tools-build.test.ts",
     "tests/trust-boundary.test.ts",
     "tests/usage.test.ts",
     "tests/workspace-tools.test.ts"

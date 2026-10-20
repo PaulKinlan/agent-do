@@ -4,6 +4,7 @@ import {
   parseProviderOptions,
   hasProviderTools,
   validateCliProviderToolNames,
+  expandProviderToolAllowNames,
 } from '../src/cli/provider-tools.js';
 
 describe('parseProviderOptions', () => {
@@ -161,6 +162,67 @@ describe('buildProviderTools', () => {
       'google__googleSearch',
       'google__urlContext',
     ]);
+  });
+});
+
+describe('expandProviderToolAllowNames', () => {
+  // Registration keys are namespaced (`google__googleSearch`) and alias
+  // resolution can land on a dated canonical (`anthropic__webSearch_20260209`).
+  // A bare `--allow webSearch` would otherwise match nothing and the tool
+  // would stay denied (agent-do-dul).
+  it('passes entries through when no provider tools are enabled', async () => {
+    const out = expandProviderToolAllowNames('google', ['read_file'], {});
+    expect(out).toEqual(['read_file']);
+  });
+
+  it('keeps an entry that already names a registered key', async () => {
+    const tools = await buildProviderTools('google', ['googleSearch']);
+    const out = expandProviderToolAllowNames(
+      'google',
+      ['google__googleSearch', 'read_file'],
+      tools,
+    );
+    expect(out.sort()).toEqual(['google__googleSearch', 'read_file']);
+  });
+
+  it('expands the bare canonical name to its namespaced key', async () => {
+    const tools = await buildProviderTools('google', ['googleSearch']);
+    const out = expandProviderToolAllowNames('google', ['googleSearch'], tools);
+    // The original entry stays (the flag granted it, however literally);
+    // the expansion is added alongside.
+    expect(out.sort()).toEqual(['googleSearch', 'google__googleSearch']);
+  });
+
+  it('expands an alias to the dated canonical key', async () => {
+    const tools = await buildProviderTools('anthropic', ['webSearch']);
+    const out = expandProviderToolAllowNames('anthropic', ['webSearch'], tools);
+    expect(out.sort()).toEqual(['anthropic__webSearch_20260209', 'webSearch']);
+  });
+
+  it('expands a directly-typed dated canonical', async () => {
+    const tools = await buildProviderTools('anthropic', ['bash_20250124']);
+    const out = expandProviderToolAllowNames('anthropic', ['bash_20250124'], tools);
+    expect(out.sort()).toEqual(['anthropic__bash_20250124', 'bash_20250124']);
+  });
+
+  it('leaves non-provider entries (local tools) untouched', async () => {
+    const tools = await buildProviderTools('google', ['googleSearch']);
+    const out = expandProviderToolAllowNames(
+      'google',
+      ['read_file', 'memory_write'],
+      tools,
+    );
+    expect(out.sort()).toEqual(['memory_write', 'read_file']);
+  });
+
+  it('never removes or duplicates entries', async () => {
+    const tools = await buildProviderTools('google', ['googleSearch']);
+    const out = expandProviderToolAllowNames(
+      'google',
+      ['googleSearch', 'google__googleSearch'],
+      tools,
+    );
+    expect(out.sort()).toEqual(['googleSearch', 'google__googleSearch']);
   });
 });
 

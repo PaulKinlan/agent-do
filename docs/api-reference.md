@@ -255,6 +255,21 @@ Evaluate whether a tool call is permitted based on the permission configuration.
 
 `'accept-all' | 'deny-all' | 'ask'`
 
+### Provider-executed tools (no local `execute`)
+
+Tools executed server-side by the provider (Anthropic `bash`/`textEditor`/`computer`, OpenAI
+`applyPatch`, Google `codeExecution`, …) have no local `execute` function, and the AI SDK never routes
+provider-executed calls through local code — so no per-call interception is possible. Their permission
+gate is therefore applied at **registration** (in `buildTools`): a tool the policy cannot allow without
+asking is omitted from the tool set entirely, so the provider is never offered it (a `console.warn`
+names the omission).
+
+- mode `'accept-all'`, or a per-tool `'always'` override → registered
+- mode `'deny-all'`, a `'never'` override, or mode `'ask'` without an `'always'` override → not registered
+
+Hooks (`onPreToolUse` / `onPostToolUse`) and the `toolLimits` counters cannot observe provider-side
+executions of such tools.
+
 ---
 
 ## Skills
