@@ -271,35 +271,42 @@ describe('stripStaleToolOutputs', () => {
   });
 });
 
-// ─── cost of the walker (agent-do-ztb) ───────────────────────────────────────
+// ─── the walker on large input (agent-do-ztb, agent-do-t23) ──────────────────
+//
+// The bug behind this section was a *shape* change, not a wrong answer: finding the matching
+// `</tool_output>` with a backwards `s.lastIndexOf(...)` per opening tag made a body of M
+// openers with no closers O(M·N) — 1,491 ms at 20,000 openers and 9,724 ms at 40,000 on a
+// 2-vCPU VM, against ~8 ms and ~21 ms for the shipped precomputed-close-positions walk.
+//
+// The COST is deliberately not asserted here (agent-do-t23): a wall-clock bound in a suite is
+// the P3 pathology of docs/speed.md §6, and on a loaded shared VM it fails a tree that did not
+// change. The suite keeps the deterministic half — every large input below must still produce
+// the byte-identical right answer, by reference where nothing is redactable — and the timing
+// lives in `tools/bench-redact-cost.mjs`, which neither gate runs. Read them together when you
+// touch the close search.
 
-describe('redactToolOutputBlocksInString: cost on malformed input', () => {
-  /**
-   * Finding the matching closer used to be a backwards `s.lastIndexOf(...)`
-   * per opening tag, so a body of M openers with no closers walked to index 0
-   * M times: 1,491 ms for 20,000 openers and 9,724 ms for 40,000 on a 2-vCPU
-   * VM. The close positions are now collected once and searched by binary
-   * search — the same input takes ~8 ms and ~21 ms.
-   *
-   * The bound is deliberately ~60x the measured cost rather than a tight
-   * threshold: this test exists to catch a return to the quadratic shape (the
-   * old code misses it by 3x at 20,000 and 19x at 40,000), not to police how
-   * busy the machine is. A wall-clock assertion in the low milliseconds would
-   * be flaky on a shared fleet VM; this one cannot be.
-   */
-  it('stays bounded on a body of unbalanced opening tags', () => {
+describe('redactToolOutputBlocksInString: large and malformed input', () => {
+  it('returns the same string by reference for a body of unbalanced opening tags', () => {
     for (const openers of [20_000, 40_000]) {
       const input = '<tool_output>'.repeat(openers);
-
-      const started = Date.now();
       const out = redactToolOutputBlocksInString(input);
-      const elapsed = Date.now() - started;
 
       // Nothing is redactable here, so the reference-identity fast path
       // contract still holds: no rewrite means the same string comes back.
       expect(out).toBe(input);
-      expect(elapsed).toBeLessThan(500);
     }
+  });
+
+  it('redacts every block in a long run of balanced blocks', () => {
+    const block = '<tool_output tool="read_file" path="a.txt">\nsecret\n</tool_output>';
+    const blocks = 2_000;
+    const input = block.repeat(blocks);
+
+    const out = redactToolOutputBlocksInString(input);
+    expect(out).toBe('<tool_output tool="read_file" path="a.txt" redacted="stale"/>'.repeat(blocks));
+
+    // Already-redacted markers pass through unchanged, so a second pass is a no-op — at scale too.
+    expect(redactToolOutputBlocksInString(out)).toBe(out);
   });
 
   it('still redacts balanced blocks and leaves surrounding text intact', () => {

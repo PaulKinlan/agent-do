@@ -180,7 +180,10 @@ Three named pathologies from the fleet standard, and what each means here:
 - **P3 — asserting on the machine.** No wall-clock latency bounds, no fixed ports, no assertions about other
   lanes' files. `tests/file-lock.test.ts` is the suite to watch here: it has two `setTimeout`s, and both are
   inside waits for a real resource (a lock), not latency bounds — keep it that way. A gate bound that fires
-  (exit 124/137/143) reads as **unknown**, never as a pass.
+  (exit 124/137/143) reads as **unknown**, never as a pass. When a fix has a cost claim attached, the suite
+  asserts the deterministic half and the timing goes in a benchmark that neither gate runs —
+  `npx tsx tools/bench-redact-cost.mjs` for the tool-output redaction walk (agent-do-t23), which is how
+  agent-do-ztb's quadratic close search is still caught without a wall-clock assertion in CI.
 
 ## 7. Speed is a design constraint for a change, not only for a gate
 
