@@ -129,6 +129,126 @@ describe('provider-executed tool calls: toolLimits enforcement (run loop)', () =
   });
 });
 
+describe('provider-executed tool calls: per-iteration budget (agent-do-7kf)', () => {
+  const twoProviderCalls = {
+    toolCalls: [
+      { toolName: 'web', args: {}, providerExecuted: true },
+      { toolName: 'news', args: {}, providerExecuted: true },
+    ],
+    providerToolResults: [
+      { toolName: 'web', result: 'w' },
+      { toolName: 'news', result: 'n' },
+    ],
+  };
+
+  function providerToolSet2(): AgentConfig['tools'] {
+    return {
+      web: { type: 'provider', name: 'webSearch', inputSchema: s(z.object({})) },
+      news: { type: 'provider', name: 'newsSearch', inputSchema: s(z.object({})) },
+    } as unknown as AgentConfig['tools'];
+  }
+
+  it('a step whose provider calls exceed maxToolCallsPerIteration stops the run post-hoc', async () => {
+    let modelCalls = 0;
+    const model = mockModel({
+      responses: [twoProviderCalls, { text: 'unreachable' }],
+    });
+    const anyModel = model as unknown as {
+      doStream: (opts: unknown) => Promise<{ stream: ReadableStream }>;
+    };
+    const origDoStream = anyModel.doStream.bind(anyModel);
+    anyModel.doStream = async (opts) => {
+      modelCalls += 1;
+      return origDoStream(opts);
+    };
+    const config = baseConfig({
+      model,
+      tools: providerToolSet2(),
+      permissions: { mode: 'accept-all' },
+      // Run-level cap absent: the per-iteration trip is under test.
+      toolLimits: { maxToolCallsPerIteration: 1 },
+      maxIterations: 10,
+    });
+    const events: ProgressEvent[] = [];
+    for await (const ev of streamAgentLoop(config, 'run')) events.push(ev);
+    // Only one model call: the run stopped after the burst step.
+    expect(modelCalls).toBe(1);
+    expect(events.some((e) => e.type === 'error' && /tool-call limit/i.test(e.content))).toBe(true);
+    expect(events.some((e) => e.type === 'done')).toBe(false);
+  });
+
+  it('local calls are never denied by provider counts (order-independence)', async () => {
+    const executeFn = vi.fn().mockResolvedValue('pong');
+    // Local call LAST in the response — the order that used to deny it.
+    const model = mockModel({
+      responses: [
+        {
+          toolCalls: [
+            { toolName: 'web', args: {}, providerExecuted: true },
+            { toolName: 'ping', args: {} },
+          ],
+          providerToolResults: [{ toolName: 'web', result: 'ok' }],
+        },
+        { text: 'final' },
+      ],
+    });
+    const config = baseConfig({
+      model,
+      tools: {
+        ...providerToolSet(),
+        ping: tool({
+          description: 'ping',
+          inputSchema: s(z.object({})),
+          execute: executeFn,
+        }),
+      },
+      permissions: { mode: 'accept-all' },
+      toolLimits: { maxToolCallsPerIteration: 1 },
+      maxIterations: 10,
+    });
+    const result = await runAgentLoop(config, 'run');
+    // The local call executed (its per-iteration budget is local-only now)...
+    expect(executeFn).toHaveBeenCalledTimes(1);
+    // ...and the single provider call did not trip the cap (1 not > 1).
+    expect(result.aborted).toBe(false);
+    expect(result.text).toBe('final');
+  });
+
+  it('mixed local+provider over the per-iteration cap: local executes, run stops after the step', async () => {
+    const executeFn = vi.fn().mockResolvedValue('pong');
+    const model = mockModel({
+      responses: [
+        {
+          ...twoProviderCalls,
+          toolCalls: [
+            ...twoProviderCalls.toolCalls,
+            { toolName: 'ping', args: {} },
+          ],
+        },
+        { text: 'unreachable' },
+      ],
+    });
+    const config = baseConfig({
+      model,
+      tools: {
+        ...providerToolSet2(),
+        ping: tool({
+          description: 'ping',
+          inputSchema: s(z.object({})),
+          execute: executeFn,
+        }),
+      },
+      permissions: { mode: 'accept-all' },
+      toolLimits: { maxToolCallsPerIteration: 1 },
+      maxIterations: 10,
+    });
+    const result = await runAgentLoop(config, 'run');
+    expect(executeFn).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBe(true);
+    expect(result.steps).toBe(1);
+  });
+});
+
 describe('provider-executed tool calls: hooks and result enrichment', () => {
   it('stream loop: fires onPostToolUse (never onPreToolUse) and enriches the tool-result event', async () => {
     const onPreToolUse = vi.fn();

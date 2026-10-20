@@ -277,6 +277,11 @@ surface as bounded `tool-result` events (`PROVIDER ERROR`, text clipped at 200 c
 `onPreToolUse` is deliberately **not** fired for them: its deny/stop decisions would be unenforceable
 after server-side execution.
 
+The per-iteration cap is enforced per call by the wrapper for local tools only — a local call is
+never denied because provider calls happened in the same response (agent-do-7kf). The provider side
+of `maxToolCallsPerIteration` is enforced post-hoc: a model response whose provider calls alone
+exceed the cap stops the run after that step.
+
 ---
 
 ## Skills
