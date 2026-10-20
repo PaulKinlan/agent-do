@@ -57,3 +57,34 @@ a defect to be fixed; it is what shell execution in a directory means, and the h
   workspace, and exists for operators who have decided the boundary is elsewhere.
 - A connector that can *see* a symlink but cannot read it is refused rather than permitted, so a substrate with
   partial symlink support fails closed; the resolution rules are in `docs/sandbox.md`.
+
+## Provider-native tools: guarded as far as the provider protocol allows
+
+Provider packages ship **provider-executed** tools — Google `googleSearch` / `urlContext`, Anthropic `webSearch_*` /
+`webFetch_*`, OpenAI `webSearch` — whose results the provider produces server-side. `--provider-tool` enables them
+from the CLI, and a script export can register them under any tool key. Their results carry arbitrary third-party
+web content into the model's context, so they are not exempt from the guards the file, memory, shell, MCP and
+orchestrator tools apply (`tools/content-guards.ts`); they go through them via `tools/provider-output-guard.ts`,
+installed by `buildTools` on any tool that reports `type: 'provider'` with `isProviderExecuted: true`.
+
+What the guard guarantees, and why it is not simply `wrapForModel`:
+
+- **A text result is framed exactly like any other tool result** — `<tool_output tool="…" source="provider-native">`
+  boundary, injection markers redacted, byte cap applied.
+- **A structured (JSON) result is redacted in place.** Every string leaf gets the same treatment (boundary tags
+  escaped, injection markers replaced) while keys, value types and structure are preserved, so the payload still
+  satisfies the provider's own `outputSchema`. It is **not** framed and **not** truncated: the provider converts the
+  payload back into its wire format on the next request, and a payload rewritten into a `<tool_output>` string (or a
+  capped `encryptedContent`, or a half-base64 document) is dropped or rejected there — which breaks the
+  `tool_use` / `tool_result` pairing and fails the whole conversation instead of protecting it. Redaction is the part
+  that carries no such cost.
+
+So the boundary is honest about its edges:
+
+- **Content the provider synthesises into its answer is not framed here.** Grounded answers and citations come back
+  as the assistant's own text parts, not as tool results, so no guard in this process sees them. Treat a grounded
+  answer as web content: the model may quote it and should not obey it.
+- **The guard is a cost-raiser, not a solution.** Redaction catches the obvious injection openers and escapes forged
+  boundary tags; it cannot recognise a hostile page phrased to look like ordinary results. A tool that fetches
+  arbitrary URLs is a trust decision, not a toggle: leave `--provider-tool` off when the agent's own instructions are
+  the thing worth protecting.
