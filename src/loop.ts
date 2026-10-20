@@ -80,26 +80,43 @@ function normaliseProviderToolError(toolName: string, error: unknown): ToolResul
 }
 
 /**
- * Post-hoc enforcement of the run-level tool-call limit for
- * provider-executed calls (agent-do-cgh).
+ * Post-hoc enforcement of the tool-call limits for provider-executed calls
+ * (agent-do-cgh, agent-do-7kf).
  *
- * Provider-side executions cannot be denied pre-invocation, so once the
- * observed total (local + provider) exceeds `maxToolCalls` — and the run
- * actually made provider calls, keeping pure-local runs on the wrapper's
- * per-call denial semantics — no further iterations are scheduled. The
- * provider-side cost of the current step is already spent; this bounds
- * the runaway, it cannot un-spend it.
+ * Provider-side executions cannot be denied pre-invocation, so both caps
+ * are enforced after the step that overshot — the provider-side cost is
+ * already spent; stopping bounds the runaway, it cannot un-spend it.
+ *
+ * - `'run'`: the observed total (local + provider) exceeds `maxToolCalls`
+ *   and the run actually made provider calls, keeping pure-local runs on
+ *   the wrapper's per-call denial semantics.
+ * - `'iteration'`: this step's provider calls alone exceed
+ *   `maxToolCallsPerIteration`. That budget is LOCAL-only for the wrapper
+ *   (a local call is never denied by provider counts — agent-do-7kf), so
+ *   the provider side of it is enforced by stopping the run after the
+ *   burst step: continuing would be exactly the tight fan-out the cap
+ *   exists to stop.
  */
-function providerToolLimitExceeded(
+function providerLimitTrip(
   config: AgentConfig,
   toolCounters: ToolCallCounters,
   providerToolCalls: number,
-): boolean {
-  return (
+  providerPerIteration: number,
+): 'run' | 'iteration' | null {
+  if (
     providerToolCalls > 0 &&
     config.toolLimits?.maxToolCalls !== undefined &&
     toolCounters.total > config.toolLimits.maxToolCalls
-  );
+  ) {
+    return 'run';
+  }
+  if (
+    config.toolLimits?.maxToolCallsPerIteration !== undefined &&
+    providerPerIteration > config.toolLimits.maxToolCallsPerIteration
+  ) {
+    return 'iteration';
+  }
+  return null;
 }
 
 import { UsageTracker } from './usage.js';
@@ -205,6 +222,10 @@ async function runAgentLoopDirect(
   // (agent-do-cgh). Counted from the stream; never increments from the
   // local wrapper path.
   let providerToolCalls = 0;
+  // Provider-executed calls in THIS iteration (agent-do-7kf): the local
+  // wrapper's per-iteration budget stays local-only, so the provider side
+  // of that cap gets its own counter, enforced post-hoc per step.
+  let providerPerIteration = 0;
   // Outer-iteration counter kept separately from `tracker.records`
   // since PR #65 made the tracker record per *inner* model step.
   // `RunResult.steps` historically meant "how many outer iterations
@@ -255,8 +276,10 @@ async function runAgentLoopDirect(
     // passes know what counts as "fresh".
     iterationStarts.push(messages.length);
 
-    // Reset per-iteration tool-call counter (#27).
+    // Reset per-iteration tool-call counter (#27) and this step's
+    // provider-call counter (agent-do-7kf).
     toolCounters.perIteration = 0;
+    providerPerIteration = 0;
 
     // Build tools for this step (so hooks get the current step number)
     const tools = buildTools(config, i, resultCache, toolCounters);
@@ -315,7 +338,12 @@ async function runAgentLoopDirect(
             if (isProviderExecuted(part)) {
               providerToolCalls += 1;
               toolCounters.total += 1;
-              toolCounters.perIteration += 1;
+              // Per-iteration: provider calls get their own budget counter
+              // (agent-do-7kf) — the wrapper's per-iteration cap stays
+              // local-only so a local call is never denied by provider
+              // counts; the provider side trips post-hoc (see
+              // providerLimitTrip).
+              providerPerIteration += 1;
             }
             break;
           }
@@ -395,11 +423,20 @@ async function runAgentLoopDirect(
     if (aborted) break;
 
     // Post-hoc tool-limit enforcement for provider-executed calls
-    // (agent-do-cgh). See providerToolLimitExceeded.
-    if (providerToolLimitExceeded(config, toolCounters, providerToolCalls)) {
+    // (agent-do-cgh, agent-do-7kf). See providerLimitTrip.
+    const limitTrip = providerLimitTrip(config, toolCounters, providerToolCalls, providerPerIteration);
+    if (limitTrip === 'run') {
       console.warn(
         `[agent-do] Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, ` +
           `including ${providerToolCalls} provider-executed calls). Stopping the run.`,
+      );
+      aborted = true;
+      break;
+    }
+    if (limitTrip === 'iteration') {
+      console.warn(
+        `[agent-do] Per-iteration tool-call limit exceeded by provider-executed calls ` +
+          `(${providerPerIteration} > ${config.toolLimits?.maxToolCallsPerIteration}). Stopping the run.`,
       );
       aborted = true;
       break;
@@ -579,6 +616,10 @@ async function* streamAgentLoopDirect(
   // (agent-do-cgh). Counted from the stream; never increments from the
   // local wrapper path.
   let providerToolCalls = 0;
+  // Provider-executed calls in THIS iteration (agent-do-7kf): the local
+  // wrapper's per-iteration budget stays local-only, so the provider side
+  // of that cap gets its own counter, enforced post-hoc per step.
+  let providerPerIteration = 0;
 
   for (let i = 0; i < maxIterations; i++) {
     // Check abort
@@ -639,6 +680,7 @@ async function* streamAgentLoopDirect(
 
     iterationStarts.push(messages.length);
     toolCounters.perIteration = 0;
+    providerPerIteration = 0;
 
     // Build tools for this step
     const tools = buildTools(config, i, resultCache, toolCounters);
@@ -712,7 +754,10 @@ async function* streamAgentLoopDirect(
             if (providerExecuted) {
               providerToolCalls += 1;
               toolCounters.total += 1;
-              toolCounters.perIteration += 1;
+              // Per-iteration: provider calls get their own budget counter
+              // (agent-do-7kf) — the wrapper's per-iteration cap stays
+              // local-only; the provider side trips post-hoc.
+              providerPerIteration += 1;
             }
             const toolArgs =
               'args' in part
@@ -882,8 +927,9 @@ async function* streamAgentLoopDirect(
     }
 
     // Post-hoc tool-limit enforcement for provider-executed calls
-    // (agent-do-cgh). See providerToolLimitExceeded.
-    if (providerToolLimitExceeded(config, toolCounters, providerToolCalls)) {
+    // (agent-do-cgh, agent-do-7kf). See providerLimitTrip.
+    const limitTrip = providerLimitTrip(config, toolCounters, providerToolCalls, providerPerIteration);
+    if (limitTrip === 'run') {
       console.warn(
         `[agent-do] Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, ` +
           `including ${providerToolCalls} provider-executed calls). Stopping the run.`,
@@ -891,6 +937,19 @@ async function* streamAgentLoopDirect(
       yield {
         type: 'error',
         content: `Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, including provider-executed calls)`,
+        step: i,
+        totalSteps: maxIterations,
+      };
+      aborted = true;
+    }
+    if (limitTrip === 'iteration') {
+      console.warn(
+        `[agent-do] Per-iteration tool-call limit exceeded by provider-executed calls ` +
+          `(${providerPerIteration} > ${config.toolLimits?.maxToolCallsPerIteration}). Stopping the run.`,
+      );
+      yield {
+        type: 'error',
+        content: `Per-iteration tool-call limit exceeded by provider-executed calls (${providerPerIteration} > ${config.toolLimits?.maxToolCallsPerIteration})`,
         step: i,
         totalSteps: maxIterations,
       };

@@ -590,13 +590,18 @@ export interface AgentConfig {
    *   tight per-iteration fan-out.
    *
    * Provider-executed tools (server-side; no local `execute`) cannot be
-   * denied per call, so their calls are counted by the loop from the
-   * model stream and the run-level limit is enforced post-hoc: once the
-   * observed total (local + provider) exceeds `maxToolCalls`, no further
-   * iterations are scheduled (the run ends with `aborted: true`). The
-   * per-iteration limit remains local-only — a provider burst inside one
-   * model response cannot be interrupted without discarding the response
-   * (agent-do-cgh).
+   * denied per call, so both caps are enforced by the loop post-hoc
+   * (agent-do-cgh, agent-do-7kf):
+   *
+   * - Run level: provider calls count toward `maxToolCalls`; once the
+   *   observed total (local + provider) exceeds it, no further iterations
+   *   are scheduled (the run ends with `aborted: true`).
+   * - Per iteration: the wrapper's cap stays LOCAL-only — a local call is
+   *   never denied because provider calls happened in the same response.
+   *   The provider side is enforced after the step: a response whose
+   *   provider calls alone exceed `maxToolCallsPerIteration` stops the
+   *   run. The provider-side cost of that step is already spent; stopping
+   *   bounds the fan-out, it cannot un-spend it.
    *
    * Omit to disable (default). A sensible safe pair is `maxToolCalls: 100,
    * maxToolCallsPerIteration: 25`.
