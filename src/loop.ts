@@ -23,7 +23,7 @@ import { tryRouteSlashCommandRun } from './slash-commands.js';
 // Re-exported so importers of the loop module (and its tests) keep working unchanged.
 export { buildOnStepEnd };
 import { addCacheControl } from './cache.js';
-import { normaliseToolResult } from './tools/types.js';
+import type { ToolResult } from './tools/types.js';
 
 // The Anthropic model-cache helpers live in ./cache.js now (agent-do-4os). `isAnthropicModel` is
 // re-exported here so existing importers of the loop module keep working unchanged.
@@ -36,6 +36,47 @@ export { isAnthropicModel } from './cache.js';
  */
 function isProviderExecuted(part: unknown): boolean {
   return (part as { providerExecuted?: boolean } | undefined)?.providerExecuted === true;
+}
+
+/** JSON-stringify that never throws and never returns undefined. */
+function safeJsonStringify(v: unknown): string {
+  try {
+    const json = JSON.stringify(v);
+    if (typeof json === 'string') return json;
+  } catch { /* fall through */ }
+  return String(v);
+}
+
+/**
+ * Bounded ToolResult for a provider-executed (server-side) tool result
+ * (agent-do-dul review P1). The event stream emits `summary` and `data`
+ * by default — `emitFullResult` only gates `toolResult` — so neither may
+ * carry the payload: `userSummary` is a bounded descriptor, `data` records
+ * provenance + size, and the full payload lives only in `modelContent`,
+ * which reaches consumers via `emitFullResult` and hooks.
+ */
+function normaliseProviderToolResult(toolName: string, raw: unknown): ToolResult {
+  const payload = safeJsonStringify(raw);
+  return {
+    modelContent: payload,
+    userSummary: `[${toolName}] provider-executed result (${payload.length} bytes)`,
+    data: { providerExecuted: true, bytes: payload.length },
+  };
+}
+
+/**
+ * Bounded ToolResult for a provider-executed tool error (agent-do-dul
+ * review P2). Server error text is clipped before it reaches the operator
+ * stream; the full text stays in `modelContent` for hooks / emitFullResult.
+ */
+function normaliseProviderToolError(toolName: string, error: unknown): ToolResult {
+  const text = typeof error === 'string' ? error : safeJsonStringify(error);
+  const clipped = text.length > 200 ? `${text.slice(0, 197)}...` : text;
+  return {
+    modelContent: `Error: provider-executed tool "${toolName}" failed: ${text}`,
+    userSummary: `[${toolName}] PROVIDER ERROR — ${clipped}`,
+    data: { providerExecuted: true, error: clipped },
+  };
 }
 
 /**
@@ -284,7 +325,10 @@ async function runAgentLoopDirect(
             // caches the normalised result here (agent-do-cgh).
             if (!isProviderExecuted(part)) break;
             const raw = 'output' in part ? (part as { output?: unknown }).output : undefined;
-            const normalised = normaliseToolResult(raw);
+            const normalised = normaliseProviderToolResult(
+              (part as { toolName?: string }).toolName ?? 'unknown',
+              raw,
+            );
             const callId = (part as { toolCallId?: string }).toolCallId;
             if (callId && !resultCache.has(callId)) resultCache.set(callId, normalised);
             if (config.hooks?.onPostToolUse) {
@@ -292,6 +336,29 @@ async function runAgentLoopDirect(
                 toolName: (part as { toolName?: string }).toolName ?? 'unknown',
                 args: (part as { input?: unknown }).input,
                 result: normalised,
+                step: i,
+                durationMs: 0,
+                providerExecuted: true,
+              });
+            }
+            break;
+          }
+          case 'tool-error': {
+            // Provider-side tool errors (agent-do-dul review P2): surface
+            // them to the post hook with a bounded ToolResult. Local tool
+            // errors keep flowing through the SDK's own response history.
+            if (!isProviderExecuted(part)) break;
+            const errNormalised = normaliseProviderToolError(
+              (part as { toolName?: string }).toolName ?? 'unknown',
+              (part as { error?: unknown }).error,
+            );
+            const errCallId = (part as { toolCallId?: string }).toolCallId;
+            if (errCallId && !resultCache.has(errCallId)) resultCache.set(errCallId, errNormalised);
+            if (config.hooks?.onPostToolUse) {
+              await config.hooks.onPostToolUse({
+                toolName: (part as { toolName?: string }).toolName ?? 'unknown',
+                args: (part as { input?: unknown }).input,
+                result: errNormalised,
                 step: i,
                 durationMs: 0,
                 providerExecuted: true,
@@ -682,7 +749,10 @@ async function* streamAgentLoopDirect(
             // `onPreToolUse` is deliberately not fired: its deny/stop
             // decisions would be unenforceable after server-side execution.
             if (isProviderExecuted(part)) {
-              const normalisedProviderResult = normaliseToolResult(rawResult);
+              const normalisedProviderResult = normaliseProviderToolResult(
+                part.toolName,
+                rawResult,
+              );
               if (partToolCallId && !resultCache.has(partToolCallId)) {
                 resultCache.set(partToolCallId, normalisedProviderResult);
               }
@@ -737,6 +807,42 @@ async function* streamAgentLoopDirect(
             };
 
             if (partToolCallId) resultCache.delete(partToolCallId);
+            break;
+          }
+
+          case 'tool-error': {
+            // Provider-side tool errors (agent-do-dul review P2): surface
+            // them as a bounded tool-result event + post hook. Local tool
+            // errors keep flowing through the SDK's own response history.
+            if (!isProviderExecuted(part)) break;
+            const errName = (part as { toolName?: string }).toolName ?? 'unknown';
+            const errNormalised = normaliseProviderToolError(
+              errName,
+              (part as { error?: unknown }).error,
+            );
+            const errCallId = (part as { toolCallId?: string }).toolCallId;
+            if (errCallId && !resultCache.has(errCallId)) resultCache.set(errCallId, errNormalised);
+            if (config.hooks?.onPostToolUse) {
+              await config.hooks.onPostToolUse({
+                toolName: errName,
+                args: 'input' in part ? (part as { input?: unknown }).input : undefined,
+                result: errNormalised,
+                step: i,
+                durationMs: 0,
+                providerExecuted: true,
+              });
+            }
+            yield {
+              type: 'tool-result',
+              content: '',
+              toolName: errName,
+              summary: errNormalised.userSummary,
+              data: errNormalised.data,
+              toolResult: emitFullResult ? errNormalised : undefined,
+              providerExecuted: true,
+              step: i,
+              totalSteps: maxIterations,
+            };
             break;
           }
         }

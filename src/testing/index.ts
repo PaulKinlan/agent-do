@@ -22,8 +22,14 @@ export interface MockResponse {
    * Server-side results for provider-executed calls, paired with the
    * `providerExecuted` tool calls by tool name (agent-do-cgh). Emitted as
    * raw `tool-result` stream/content parts like real provider streams do.
+   * `isError: true` mirrors providers' error results — the SDK surfaces
+   * those as `tool-error` parts.
    */
-  providerToolResults?: Array<{ toolName: string; result: unknown }>;
+  providerToolResults?: Array<{
+    toolName: string;
+    result: unknown;
+    isError?: boolean;
+  }>;
 }
 
 export interface MockModelOptions {
@@ -126,6 +132,7 @@ function buildStreamParts(
           toolCallId: `call-${callIndex}-${tr.toolName}`,
           toolName: tr.toolName,
           result: tr.result,
+          ...(tr.isError ? { isError: true } : {}),
         });
       }
     }
@@ -168,6 +175,7 @@ function buildGenerateContent(
           toolName: tr.toolName,
           output: tr.result,
           providerExecuted: true,
+          ...(tr.isError ? { isError: true } : {}),
         });
       }
     }

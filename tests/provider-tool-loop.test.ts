@@ -156,23 +156,65 @@ describe('provider-executed tool calls: hooks and result enrichment', () => {
     expect(callEvent?.providerExecuted).toBe(true);
     expect(callEvent?.toolName).toBe('web');
 
-    // The tool-result event carries the normalised structured result.
+    // The tool-result event carries a bounded descriptor, NOT the payload
+    // (P1 finding): summary flows by default, so the provider payload only
+    // appears behind emitFullResult, inside the cached ToolResult.
     const resultEvent = events.find((e) => e.type === 'tool-result');
     expect(resultEvent?.providerExecuted).toBe(true);
-    expect(resultEvent?.summary).toContain('42');
-    expect(resultEvent?.toolResult).toEqual({ modelContent: '{"answer":42}', userSummary: '{"answer":42}' });
+    expect(resultEvent?.summary).toBe('[web] provider-executed result (13 bytes)');
+    expect(resultEvent?.summary).not.toContain('answer');
+    expect(resultEvent?.data).toEqual({ providerExecuted: true, bytes: 13 });
+    expect(resultEvent?.toolResult).toEqual({
+      modelContent: '{"answer":42}',
+      userSummary: '[web] provider-executed result (13 bytes)',
+      data: { providerExecuted: true, bytes: 13 },
+    });
 
-    // Post hook observes the server-side result; pre hook stays silent
-    // (its decisions would be unenforceable after server-side execution).
+    // Post hook observes the server-side result (full fidelity via the
+    // ToolResult's modelContent); pre hook stays silent — its decisions
+    // would be unenforceable after server-side execution.
     expect(onPostToolUse).toHaveBeenCalledTimes(1);
     expect(onPostToolUse).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: 'web',
         providerExecuted: true,
         step: 0,
+        result: expect.objectContaining({ modelContent: '{"answer":42}' }),
       }),
     );
     expect(onPreToolUse).not.toHaveBeenCalled();
+  });
+
+  it('stream loop: provider tool errors surface as bounded events, not payload leaks', async () => {
+    const onPostToolUse = vi.fn();
+    const config = baseConfig({
+      model: mockModel({
+        responses: [
+          {
+            toolCalls: [{ toolName: 'web', args: {}, providerExecuted: true }],
+            providerToolResults: [
+              { toolName: 'web', result: 'E'.repeat(1000), isError: true },
+            ],
+          },
+          { text: 'done' },
+        ],
+      }),
+      tools: providerToolSet(),
+      permissions: { mode: 'accept-all' },
+      hooks: { onPostToolUse },
+    });
+    const events: ProgressEvent[] = [];
+    for await (const ev of streamAgentLoop(config, 'run')) events.push(ev);
+
+    const errEvent = events.find((e) => e.type === 'tool-result');
+    expect(errEvent).toBeDefined();
+    expect(errEvent?.providerExecuted).toBe(true);
+    // Bounded: the 1000-byte server error is clipped in the summary.
+    expect(errEvent?.summary).toContain('PROVIDER ERROR');
+    expect(errEvent?.summary!.length).toBeLessThan(300);
+    expect(onPostToolUse).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: 'web', providerExecuted: true }),
+    );
   });
 
   it('run loop: fires onPostToolUse for provider-executed results', async () => {

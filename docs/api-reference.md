@@ -271,9 +271,11 @@ For registered provider-executed tools the loop closes the observability gap: th
 into the `toolLimits` counters from the model stream, the run-level `maxToolCalls` cap is enforced
 post-hoc (once the observed total exceeds the cap the run stops — the provider-side cost of the
 current step is already spent), `onPostToolUse` fires for their results (with `providerExecuted: true`;
-`durationMs` is `0`), and `tool-result` progress events carry `providerExecuted: true` plus the
-normalised result. `onPreToolUse` is deliberately **not** fired for them: its deny/stop decisions
-would be unenforceable after server-side execution.
+`durationMs` is `0`), and `tool-result` progress events carry `providerExecuted: true` plus a bounded
+summary — the payload itself only appears behind `emitFullResult: true`, and provider-side errors
+surface as bounded `tool-result` events (`PROVIDER ERROR`, text clipped at 200 chars).
+`onPreToolUse` is deliberately **not** fired for them: its deny/stop decisions would be unenforceable
+after server-side execution.
 
 ---
 
