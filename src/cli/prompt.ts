@@ -20,7 +20,7 @@ import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
-import { buildProviderTools } from './provider-tools.js';
+import { buildProviderTools, expandProviderToolAllowNames } from './provider-tools.js';
 import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
@@ -82,11 +82,15 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
       tools = { ...tools, ...createMemoryTools(memStore, 'cli-agent') };
     }
   }
+  // Provider-executed tools are gated at registration (agent-do-dul): in
+  // the default 'ask' policy they are denied unless explicitly allowed, so
+  // expand --allow entries against the registered keys
+  // (`--allow webSearch` -> `anthropic__webSearch_20260209`).
+  const providerTools =
+    args.providerTool.length > 0
+      ? await buildProviderTools(args.provider, args.providerTool)
+      : {};
   if (args.providerTool.length > 0) {
-    const providerTools = await buildProviderTools(
-      args.provider,
-      args.providerTool,
-    );
     tools = { ...(tools ?? {}), ...providerTools };
   }
 
@@ -99,7 +103,7 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
     maxIterations: args.maxIterations,
     permissions: buildCliPermissions({
       acceptAll: args.acceptAll,
-      allow: args.allow,
+      allow: expandProviderToolAllowNames(args.provider, args.allow, providerTools),
     }),
     usage: { enabled: true },
     providerOptions: args.providerOptions,

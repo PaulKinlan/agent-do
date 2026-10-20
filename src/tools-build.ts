@@ -62,6 +62,35 @@ export interface ToolCallCounters {
   perIteration: number;
 }
 
+/**
+ * Name-level permission decision for tools with no local `execute`
+ * (provider-executed tools — Anthropic bash/textEditor/computer, OpenAI
+ * applyPatch, Google codeExecution — and deferred tools).
+ *
+ * The AI SDK never routes provider-executed tool calls through local
+ * execute (it filters them out of the client-side execution set), so the
+ * per-call wrapper below cannot intercept them: no permission check, no
+ * hooks, no counters. The gate therefore moves to registration: a policy
+ * that would not allow the tool keeps it out of the returned ToolSet
+ * entirely — the provider never sees it, so it can never run.
+ *
+ * Per-call modes cannot apply: 'ask' would have to fire
+ * onPermissionRequest once per step with fabricated empty args (and a
+ * one-off "yes" answer would re-prompt every step). Consistent with the
+ * fail-closed rule for the ask mode (agent-do-40r), an execute-less tool
+ * is only registered when the policy allows it *without asking*:
+ * an explicit 'always' override, or mode 'accept-all'.
+ */
+function isExecuteLessToolAllowed(
+  name: string,
+  permissions: NonNullable<AgentConfig['permissions']>,
+): boolean {
+  const toolLevel = permissions.tools?.[name];
+  if (toolLevel === 'always') return true;
+  if (toolLevel === 'never') return false;
+  return permissions.mode === 'accept-all';
+}
+
 function wrapToolWithPermissions(
   name: string,
   originalTool: ToolSet[string],
@@ -69,9 +98,26 @@ function wrapToolWithPermissions(
   step: number,
   resultCache: ToolResultCache,
   counters: ToolCallCounters,
-): ToolSet[string] {
+): ToolSet[string] | null {
   const originalExecute = originalTool.execute;
-  if (!originalExecute) return withProviderOutputGuard(name, originalTool);
+  if (!originalExecute) {
+    // Provider-executed / deferred tool. Registration-time gate (see
+    // isExecuteLessToolAllowed): return null to omit it from the ToolSet.
+    if (config.permissions && !isExecuteLessToolAllowed(name, config.permissions)) {
+      console.warn(
+        `[agent-do] Provider-executed tool "${name}" was not registered: the ` +
+          `permission policy (mode "${config.permissions.mode}") cannot allow it ` +
+          `without a per-call check, which provider-executed tools do not support. ` +
+          `Allow it explicitly with a per-tool 'always' override (CLI: --allow ${name}) ` +
+          `or run with mode "accept-all" (CLI: --accept-all).`,
+      );
+      return null;
+    }
+    // Registered provider-executed tools get the content guards installed
+    // (agent-do-7hu) — their server-side output bypasses the execute
+    // wrapper below, so the toModelOutput hook is the only sanitise path.
+    return withProviderOutputGuard(name, originalTool);
+  }
 
   const exec = originalExecute;
 
@@ -257,10 +303,13 @@ export function buildTools(
 ): ToolSet {
   const tools: ToolSet = {};
 
-  // Add user-provided tools
+  // Add user-provided tools. A `null` wrapper means "permission policy
+  // denies this execute-less (provider-executed) tool" — the tool is
+  // omitted so the provider is never offered it.
   if (config.tools) {
     for (const [name, t] of Object.entries(config.tools)) {
-      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      const wrapped = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      if (wrapped) tools[name] = wrapped;
     }
   }
 
@@ -271,7 +320,8 @@ export function buildTools(
       allowInstall: config.allowSkillInstall === true,
     });
     for (const [name, t] of Object.entries(skillTools)) {
-      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      const wrapped = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      if (wrapped) tools[name] = wrapped;
     }
   }
 
@@ -282,7 +332,8 @@ export function buildTools(
       allowSave: config.allowRoutineSave === true,
     });
     for (const [name, t] of Object.entries(routineTools)) {
-      tools[name] = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      const wrapped = wrapToolWithPermissions(name, t, config, step, resultCache, counters);
+      if (wrapped) tools[name] = wrapped;
     }
   }
 

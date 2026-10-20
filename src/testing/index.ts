@@ -15,6 +15,20 @@ export interface MockResponse {
   toolCalls?: Array<{
     toolName: string;
     args: Record<string, unknown>;
+    /** Emit as a provider-executed (server-side) call (agent-do-cgh). */
+    providerExecuted?: boolean;
+  }>;
+  /**
+   * Server-side results for provider-executed calls, paired with the
+   * `providerExecuted` tool calls by tool name (agent-do-cgh). Emitted as
+   * raw `tool-result` stream/content parts like real provider streams do.
+   * `isError: true` mirrors providers' error results — the SDK surfaces
+   * those as `tool-error` parts.
+   */
+  providerToolResults?: Array<{
+    toolName: string;
+    result: unknown;
+    isError?: boolean;
   }>;
 }
 
@@ -91,6 +105,7 @@ function buildStreamParts(
         type: 'tool-input-start',
         id: toolId,
         toolName: tc.toolName,
+        ...(tc.providerExecuted ? { providerExecuted: true } : {}),
       });
       parts.push({
         type: 'tool-input-delta',
@@ -104,7 +119,22 @@ function buildStreamParts(
         toolCallId: toolId,
         toolName: tc.toolName,
         input: JSON.stringify(tc.args),
+        ...(tc.providerExecuted ? { providerExecuted: true } : {}),
       });
+    }
+    // Server-side results for provider-executed calls — the provider runs
+    // the tool and streams the result back, so the model stream itself
+    // carries the `tool-result` (agent-do-cgh).
+    if (response.providerToolResults) {
+      for (const tr of response.providerToolResults) {
+        parts.push({
+          type: 'tool-result',
+          toolCallId: `call-${callIndex}-${tr.toolName}`,
+          toolName: tr.toolName,
+          result: tr.result,
+          ...(tr.isError ? { isError: true } : {}),
+        });
+      }
     }
   }
 
@@ -134,7 +164,20 @@ function buildGenerateContent(
         toolCallId: `call-${callIndex}-${tc.toolName}`,
         toolName: tc.toolName,
         input: JSON.stringify(tc.args),
+        ...(tc.providerExecuted ? { providerExecuted: true } : {}),
       });
+    }
+    if (response.providerToolResults) {
+      for (const tr of response.providerToolResults) {
+        content.push({
+          type: 'tool-result',
+          toolCallId: `call-${callIndex}-${tr.toolName}`,
+          toolName: tr.toolName,
+          output: tr.result,
+          providerExecuted: true,
+          ...(tr.isError ? { isError: true } : {}),
+        });
+      }
     }
   }
 

@@ -47,7 +47,7 @@ import { createMemoryTools } from '../tools/memory-tools.js';
 import { FilesystemMemoryStore } from '../stores/filesystem.js';
 import { buildCliPermissions } from './permission-handler.js';
 import { buildDebugConfigFromArgs } from './debug-config.js';
-import { buildProviderTools } from './provider-tools.js';
+import { buildProviderTools, expandProviderToolAllowNames } from './provider-tools.js';
 import type { Agent, ProviderOptions } from '../types.js';
 import type { ToolSet } from 'ai';
 import { writeAnswerChunk } from './answer-stream.js';
@@ -381,11 +381,15 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       : undefined;
     const effectiveProviderTools =
       exportedProviderTools ?? args.providerTool;
+    // Provider-executed tools are gated at registration (agent-do-dul):
+    // expand --allow entries against the registered keys so the bare
+    // flag form (`--allow webSearch`) grants the namespaced tool.
+    const simpleProvider = (exported.provider as string) ?? args.provider;
+    const providerTools =
+      effectiveProviderTools.length > 0
+        ? await buildProviderTools(simpleProvider, effectiveProviderTools)
+        : {};
     if (effectiveProviderTools.length > 0) {
-      const providerTools = await buildProviderTools(
-        (exported.provider as string) ?? args.provider,
-        effectiveProviderTools,
-      );
       tools = { ...(tools ?? {}), ...providerTools };
     }
 
@@ -396,7 +400,10 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
       systemPrompt: (exported.systemPrompt as string) ?? args.systemPrompt,
       tools,
       maxIterations: (exported.maxIterations as number) ?? args.maxIterations,
-      permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
+      permissions: buildCliPermissions({
+        acceptAll: args.acceptAll,
+        allow: expandProviderToolAllowNames(simpleProvider, args.allow, providerTools),
+      }),
       usage: { enabled: true },
       providerOptions:
         (exported.providerOptions as ProviderOptions | undefined) ??
@@ -479,11 +486,11 @@ async function runSavedAgent(
   const savedProviderTools = saved.providerTools ?? [];
   const effectiveProviderTools =
     args.providerTool.length > 0 ? args.providerTool : savedProviderTools;
+  const providerTools =
+    effectiveProviderTools.length > 0
+      ? await buildProviderTools(saved.provider, effectiveProviderTools)
+      : {};
   if (effectiveProviderTools.length > 0) {
-    const providerTools = await buildProviderTools(
-      saved.provider,
-      effectiveProviderTools,
-    );
     tools = { ...(tools ?? {}), ...providerTools };
   }
 
@@ -494,7 +501,10 @@ async function runSavedAgent(
     systemPrompt: saved.systemPrompt,
     tools,
     maxIterations: saved.maxIterations,
-    permissions: buildCliPermissions({ acceptAll: args.acceptAll, allow: args.allow }),
+    permissions: buildCliPermissions({
+      acceptAll: args.acceptAll,
+      allow: expandProviderToolAllowNames(saved.provider, args.allow, providerTools),
+    }),
     usage: { enabled: true },
     providerOptions:
       args.providerOptions ?? (saved.providerOptions as ProviderOptions | undefined),

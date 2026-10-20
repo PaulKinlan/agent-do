@@ -249,6 +249,14 @@ npx agent-do "latest research on graph neural networks" \
 maps short names to the latest dated versions:
 `webSearch → webSearch_20260209`, `bash → bash_20250124`, etc.
 
+**Permissions:** provider-executed tools run on the provider's
+servers, so they are gated when the run is built rather than per
+call. Under the default permission mode they are only enabled when
+you allow them explicitly — `--allow googleSearch` (bare names expand
+to the registered `google__googleSearch`-style keys) or
+`--accept-all`. A provider tool the policy cannot allow is left out
+of the run entirely, with a warning naming it.
+
 The CLI only accepts tools that work with empty config — currently
 `googleSearch`, `urlContext`, `codeExecution`, `webSearch`,
 `webFetch`, `bash`, `textEditor`, `computer`, `memory`,

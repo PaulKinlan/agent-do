@@ -332,6 +332,54 @@ export async function buildProviderTools(
 }
 
 /**
+ * Expand `--allow` entries against the provider tools actually enabled for
+ * this run (agent-do-dul).
+ *
+ * Provider tools register under namespaced keys — `google__googleSearch` —
+ * and alias resolution can land on a dated canonical
+ * (`--provider-tool webSearch` registers `anthropic__webSearch_20260209`).
+ * Since provider-executed tools are now gated at registration (an 'ask'
+ * policy denies them unless an explicit per-tool 'always' override
+ * exists), a bare `--allow webSearch` would otherwise match nothing and
+ * the documented escape hatch would silently keep the tool denied.
+ *
+ * Each entry is expanded, never replaced: entries that already name a
+ * registered key (or any local tool) pass through untouched, and each
+ * expansion adds exactly the one key `<provider>__<entry-or-alias>`
+ * resolves to. Entries matching nothing are kept as-is (they may name
+ * ordinary local tools this helper cannot see).
+ */
+export function expandProviderToolAllowNames(
+  provider: string,
+  allow: readonly string[],
+  providerTools: ToolSet,
+): string[] {
+  if (allow.length === 0) return [...allow];
+  const keys = Object.keys(providerTools);
+  if (keys.length === 0) return [...allow];
+  const prefix = `${provider}__`;
+  const out = new Set(allow);
+  for (const entry of allow) {
+    if (providerTools[entry] !== undefined) continue;
+    const prefixed = `${prefix}${entry}`;
+    if (providerTools[prefixed] !== undefined) {
+      out.add(prefixed);
+      continue;
+    }
+    // Aliased / dated canonicals: `webSearch` -> `anthropic__webSearch_20260209`.
+    for (const key of keys) {
+      if (!key.startsWith(prefix)) continue;
+      const canonical = key.slice(prefix.length);
+      if (canonical === entry || canonical.replace(/_\d{8}$/, '') === entry) {
+        out.add(key);
+        break;
+      }
+    }
+  }
+  return [...out];
+}
+
+/**
  * Parse a `--provider-options` JSON string into the typed shape
  * `AgentConfig.providerOptions` expects. Throws with a friendly
  * message on parse failure or if the top-level value isn't an object
