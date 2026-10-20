@@ -12,6 +12,11 @@ import { evaluatePermission } from './permissions.js';
 import { createSkillTools } from './skills.js';
 import { createRoutineTools } from './routines.js';
 import { normaliseToolResult, type ToolResult } from './tools/types.js';
+import {
+  sanitiseProviderToolOutput,
+  sanitiseMappedProviderOutput,
+  type ModelToolOutput,
+} from './tools/provider-output-guard.js';
 
 
 /**
@@ -66,7 +71,7 @@ function wrapToolWithPermissions(
   counters: ToolCallCounters,
 ): ToolSet[string] {
   const originalExecute = originalTool.execute;
-  if (!originalExecute) return originalTool;
+  if (!originalExecute) return withProviderOutputGuard(name, originalTool);
 
   const exec = originalExecute;
 
@@ -184,6 +189,58 @@ function wrapToolWithPermissions(
       return recordAndReturn(normalised);
     },
   } as typeof originalTool;
+}
+
+/**
+ * Put provider-executed tool results through the content guards.
+ *
+ * Provider-native tools (`google.tools.googleSearch()`, Anthropic's
+ * `webSearch_*`, OpenAI's `webSearch`, …) run server-side: the provider emits
+ * the tool result and nothing in this process ever sees it as a string, so the
+ * `execute` wrapper below — the path every other tool's output is sanitised on
+ * — never runs for them (agent-do-7hu). Their results were therefore the one
+ * tool surface handing raw third-party web content to the model unframed and
+ * unredacted.
+ *
+ * The supported hook is `toModelOutput`: the AI SDK calls it for every
+ * tool-result part before building the messages it sends back to the model
+ * (`createToolModelOutput` → `toResponseMessages`), including
+ * provider-executed ones. Installing it here keeps the guard in one place for
+ * every provider and for script-defined provider tools alike, and leaves the
+ * provider free to shape its own wire format from the guarded output.
+ *
+ * Tools that already define `toModelOutput` are chained, not replaced: their
+ * mapping runs first, then the guard sanitises what it produced.
+ */
+function withProviderOutputGuard(
+  name: string,
+  tool: ToolSet[string],
+): ToolSet[string] {
+  const meta = tool as { type?: string; isProviderExecuted?: boolean };
+  if (meta.type !== 'provider' || meta.isProviderExecuted !== true) return tool;
+
+  const previous = (tool as { toModelOutput?: unknown }).toModelOutput;
+
+  return {
+    ...tool,
+    toModelOutput: async (options: {
+      toolCallId: string;
+      input: unknown;
+      output: unknown;
+    }): Promise<ModelToolOutput> => {
+      if (typeof previous !== 'function') {
+        return sanitiseProviderToolOutput(options.output, { tool: name });
+      }
+      const mapped = await (previous as (o: unknown) => unknown).call(
+        tool,
+        options,
+      );
+      return sanitiseMappedProviderOutput(
+        mapped as ModelToolOutput,
+        { tool: name },
+      );
+    },
+  } as typeof tool;
 }
 
 /**

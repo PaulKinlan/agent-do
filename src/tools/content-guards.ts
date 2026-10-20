@@ -56,12 +56,14 @@ export type WrapOptions = WrapOrigin & {
 /**
  * Where the wrapped content came from — echoed in the boundary marker
  * attributes. A file/memory read gives a `path`; a command runner (the
- * shell tool) gives a `command`. At least one is required, so a marker
- * always names its origin.
+ * shell tool) gives a `command`; a provider-native tool (web search, URL
+ * context) has neither and gives a `source`. At least one is required, so a
+ * marker always names its origin.
  */
 export type WrapOrigin =
-  | { path: string; command?: string }
-  | { path?: string; command: string };
+  | { path: string; command?: string; source?: string }
+  | { path?: string; command: string; source?: string }
+  | { path?: string; command?: string; source: string };
 
 // Portable UTF-8 helpers. agent-do runs in browsers as well as Node, so we
 // use the WHATWG TextEncoder / TextDecoder rather than `Buffer`. Both are
@@ -164,20 +166,57 @@ export function escapeForLine(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
+/**
+ * Result of {@link sanitiseUntrustedText}: the guarded text plus the two counts
+ * operators and tests need to see what the guard actually altered.
+ */
+export interface SanitisedUntrustedText {
+  /** The text with boundary tags escaped and injection markers redacted. */
+  text: string;
+  /** Count of injection phrases replaced. */
+  redactedMarkerCount: number;
+  /** Count of `<tool_output>` boundary tags escaped so they cannot close a frame. */
+  neutralisedDelimiterCount: number;
+}
+
+/**
+ * Apply the two transforms that make untrusted text safe to place in the
+ * model's context, without adding any framing of its own: escape
+ * `<tool_output>` boundary tags (so content cannot close the frame it sits in)
+ * and replace injection markers with a visible placeholder.
+ *
+ * Split out of {@link wrapForModel} so the provider-native tool guard — which
+ * cannot add a frame around a provider-shaped payload without breaking that
+ * payload's schema (see `tools/provider-output-guard.ts`) — applies exactly the
+ * same transforms rather than a second, drifting copy.
+ *
+ * Order matters and is preserved from `wrapForModel`: boundary tags are
+ * escaped first, then markers are redacted.
+ */
+export function sanitiseUntrustedText(body: string): SanitisedUntrustedText {
+  const { body: neutralised, count: neutralisedDelimiterCount } =
+    neutraliseBoundaryTags(body);
+
+  let redactedMarkerCount = 0;
+  const text = neutralised.replace(INJECTION_MARKER_REGEX, () => {
+    redactedMarkerCount++;
+    return '[redacted prompt-injection marker]';
+  });
+
+  return { text, redactedMarkerCount, neutralisedDelimiterCount };
+}
+
 export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   const cap = opts.maxBytes ?? DEFAULT_MAX_READ_BYTES;
   const totalBytes = utf8ByteLength(body);
   const truncated = totalBytes > cap;
   const clipped = truncated ? truncateUtf8ByBytes(body, cap) : body;
 
-  const { body: neutralised, count: neutralisedDelimiterCount } =
-    neutraliseBoundaryTags(clipped);
-
-  let redactedMarkerCount = 0;
-  const redacted = neutralised.replace(INJECTION_MARKER_REGEX, () => {
-    redactedMarkerCount++;
-    return '[redacted prompt-injection marker]';
-  });
+  const {
+    text: redacted,
+    redactedMarkerCount,
+    neutralisedDelimiterCount,
+  } = sanitiseUntrustedText(clipped);
 
   const trailer = truncated
     ? `\n... [truncated at ${cap} bytes of ${totalBytes}]`
@@ -189,6 +228,9 @@ export function wrapForModel(body: string, opts: WrapOptions): WrappedContent {
   }
   if (opts.command !== undefined) {
     attrs.push(`command="${escapeAttr(opts.command)}"`);
+  }
+  if (opts.source !== undefined) {
+    attrs.push(`source="${escapeAttr(opts.source)}"`);
   }
 
   const content = [
