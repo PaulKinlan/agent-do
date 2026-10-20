@@ -270,3 +270,47 @@ describe('stripStaleToolOutputs', () => {
     expect(messages[0]).toBe(innocuous);
   });
 });
+
+// ─── cost of the walker (agent-do-ztb) ───────────────────────────────────────
+
+describe('redactToolOutputBlocksInString: cost on malformed input', () => {
+  /**
+   * Finding the matching closer used to be a backwards `s.lastIndexOf(...)`
+   * per opening tag, so a body of M openers with no closers walked to index 0
+   * M times: 1,491 ms for 20,000 openers and 9,724 ms for 40,000 on a 2-vCPU
+   * VM. The close positions are now collected once and searched by binary
+   * search — the same input takes ~8 ms and ~21 ms.
+   *
+   * The bound is deliberately ~60x the measured cost rather than a tight
+   * threshold: this test exists to catch a return to the quadratic shape (the
+   * old code misses it by 3x at 20,000 and 19x at 40,000), not to police how
+   * busy the machine is. A wall-clock assertion in the low milliseconds would
+   * be flaky on a shared fleet VM; this one cannot be.
+   */
+  it('stays bounded on a body of unbalanced opening tags', () => {
+    for (const openers of [20_000, 40_000]) {
+      const input = '<tool_output>'.repeat(openers);
+
+      const started = Date.now();
+      const out = redactToolOutputBlocksInString(input);
+      const elapsed = Date.now() - started;
+
+      // Nothing is redactable here, so the reference-identity fast path
+      // contract still holds: no rewrite means the same string comes back.
+      expect(out).toBe(input);
+      expect(elapsed).toBeLessThan(500);
+    }
+  });
+
+  it('still redacts balanced blocks and leaves surrounding text intact', () => {
+    const block = '<tool_output tool="read_file" path="a.txt">\nsecret\n</tool_output>';
+    const input = `before${block}middle${block}after`;
+
+    const out = redactToolOutputBlocksInString(input);
+    expect(out).toBe(
+      'before<tool_output tool="read_file" path="a.txt" redacted="stale"/>' +
+        'middle<tool_output tool="read_file" path="a.txt" redacted="stale"/>' +
+        'after',
+    );
+  });
+});

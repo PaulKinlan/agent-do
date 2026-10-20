@@ -66,11 +66,19 @@ const OPEN_TAG_RE = /<tool_output\b([^>]*)>/g;
  * (worst case: one extra opening tag stays verbatim) and the
  * realistic injection vector is body-with-`</tool_output>`, which is
  * handled correctly.
+ *
+ * Cost: O(N + C log C) in the length of the string, where C is the number of
+ * close tags. The close-tag positions are collected once up front and the
+ * per-block "last closer before the next opener" lookup is a binary search;
+ * searching backwards from each opener instead made a malformed body (M
+ * openers, no closers) O(M·N) — 20,000 openers took ~1.2 s (agent-do-ztb).
  */
 export function redactToolOutputBlocksInString(s: string): string {
   // Fast path — preserves reference identity for the structural-
   // sharing guarantee that downstream callers rely on.
   if (!s.includes(OPEN_PREFIX)) return s;
+
+  const closeIndices = collectCloseTagIndices(s);
 
   const out: string[] = [];
   let pos = 0;
@@ -103,8 +111,10 @@ export function redactToolOutputBlocksInString(s: string): string {
     const searchUpper = nextOpen ? nextOpen.index : s.length;
 
     // The matching close is the *last* `</tool_output>` strictly
-    // before `searchUpper`. lastIndexOf returns -1 if none.
-    const closeIdx = s.lastIndexOf(CLOSE_TAG, searchUpper - 1);
+    // before `searchUpper`. Binary search over the precomputed
+    // positions, so an opener with no closer costs log C rather than
+    // a backwards scan of the whole string; -1 means none.
+    const closeIdx = lastIndexOfBelow(closeIndices, searchUpper);
     if (closeIdx < tagEnd) {
       // Malformed: opening tag with no closer before the next opening
       // or end. Preserve verbatim so we don't drop trailing text.
@@ -122,6 +132,47 @@ export function redactToolOutputBlocksInString(s: string): string {
   // Preserve reference identity when nothing was rewritten — keeps
   // the structural-sharing guarantee for the recursive walker.
   return didReplace ? out.join('') : s;
+}
+
+/**
+ * Every `</tool_output>` position in `s`, ascending. Close tags cannot
+ * overlap, so a forward `indexOf` walk visits each one once and the result is
+ * naturally sorted for {@link lastIndexOfBelow}.
+ */
+function collectCloseTagIndices(s: string): number[] {
+  const indices: number[] = [];
+  let at = s.indexOf(CLOSE_TAG);
+  while (at !== -1) {
+    indices.push(at);
+    at = s.indexOf(CLOSE_TAG, at + CLOSE_TAG.length);
+  }
+  return indices;
+}
+
+/**
+ * The largest value in the ascending `indices` that is strictly less than
+ * `upperExclusive`, or -1 when there is none. Same answer as
+ * `s.lastIndexOf(CLOSE_TAG, upperExclusive - 1)` but logarithmic instead of
+ * linear — the difference between O(N) and O(M·N) for a body of unbalanced
+ * openers.
+ */
+function lastIndexOfBelow(
+  indices: readonly number[],
+  upperExclusive: number,
+): number {
+  let lo = 0;
+  let hi = indices.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (indices[mid]! < upperExclusive) {
+      found = indices[mid]!;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found;
 }
 
 /**
