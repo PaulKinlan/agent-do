@@ -81,7 +81,9 @@ describe('sanitiseProviderToolOutput', () => {
     expect(value.results[0]).toEqual(payload.results[0]);
     // …and free text inside it is redacted.
     expect(value.results[1].title).toBe('[redacted prompt-injection marker]');
-    expect(value.nested.keep[2].deep).toBe('[redacted prompt-injection marker]');
+    expect(((value.nested.keep[2] as { deep: string }).deep)).toBe(
+      '[redacted prompt-injection marker]',
+    );
   });
 
   it('returns the original payload reference when there is nothing to redact', () => {
@@ -94,6 +96,7 @@ describe('sanitiseProviderToolOutput', () => {
 
   it('treats a missing payload as null json rather than throwing', () => {
     const out = sanitiseProviderToolOutput(undefined, { tool: 'x__y' }) as {
+      type: string;
       value: unknown;
     };
     expect(out.type).toBe('json');
