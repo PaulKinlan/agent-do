@@ -57,6 +57,12 @@ export interface ProgressEvent {
   data?: Record<string, unknown>;
   /** True when a `tool-result` represents a blocked / denied operation. */
   blocked?: boolean;
+  /**
+   * True when the tool-call / tool-result was executed server-side by the
+   * provider (agent-do-cgh). Provider-executed calls never pass through
+   * local `execute`; the loop reports them here. Only set when true.
+   */
+  providerExecuted?: boolean;
   step?: number;
   totalSteps?: number;
 }
@@ -383,7 +389,19 @@ export interface PostToolUseEvent {
   args: unknown;
   result: unknown;
   step: number;
+  /**
+   * Wall-clock duration of the local execution. `0` and meaningless when
+   * `providerExecuted` is true — the provider ran the tool server-side
+   * (agent-do-cgh).
+   */
   durationMs: number;
+  /**
+   * True when the tool was executed server-side by the provider
+   * (agent-do-cgh). Such calls never fire `onPreToolUse` (deny/stop would
+   * be unenforceable after execution); `onPostToolUse` is the only hook
+   * that observes them, with the normalised ToolResult.
+   */
+  providerExecuted?: boolean;
 }
 
 export interface StepStartEvent {
@@ -570,6 +588,15 @@ export interface AgentConfig {
    * - `maxToolCallsPerIteration`: resets at the start of each outer
    *   iteration. Same blocked-ToolResult semantics. Defends against
    *   tight per-iteration fan-out.
+   *
+   * Provider-executed tools (server-side; no local `execute`) cannot be
+   * denied per call, so their calls are counted by the loop from the
+   * model stream and the run-level limit is enforced post-hoc: once the
+   * observed total (local + provider) exceeds `maxToolCalls`, no further
+   * iterations are scheduled (the run ends with `aborted: true`). The
+   * per-iteration limit remains local-only — a provider burst inside one
+   * model response cannot be interrupted without discarding the response
+   * (agent-do-cgh).
    *
    * Omit to disable (default). A sensible safe pair is `maxToolCalls: 100,
    * maxToolCallsPerIteration: 25`.

@@ -23,10 +23,43 @@ import { tryRouteSlashCommandRun } from './slash-commands.js';
 // Re-exported so importers of the loop module (and its tests) keep working unchanged.
 export { buildOnStepEnd };
 import { addCacheControl } from './cache.js';
+import { normaliseToolResult } from './tools/types.js';
 
 // The Anthropic model-cache helpers live in ./cache.js now (agent-do-4os). `isAnthropicModel` is
 // re-exported here so existing importers of the loop module keep working unchanged.
 export { isAnthropicModel } from './cache.js';
+
+/**
+ * True when a stream part reports a provider-executed (server-side) tool
+ * call or result (agent-do-cgh). The provider runs these tools itself —
+ * no local `execute` fires — so the loop observes them here.
+ */
+function isProviderExecuted(part: unknown): boolean {
+  return (part as { providerExecuted?: boolean } | undefined)?.providerExecuted === true;
+}
+
+/**
+ * Post-hoc enforcement of the run-level tool-call limit for
+ * provider-executed calls (agent-do-cgh).
+ *
+ * Provider-side executions cannot be denied pre-invocation, so once the
+ * observed total (local + provider) exceeds `maxToolCalls` — and the run
+ * actually made provider calls, keeping pure-local runs on the wrapper's
+ * per-call denial semantics — no further iterations are scheduled. The
+ * provider-side cost of the current step is already spent; this bounds
+ * the runaway, it cannot un-spend it.
+ */
+function providerToolLimitExceeded(
+  config: AgentConfig,
+  toolCounters: ToolCallCounters,
+  providerToolCalls: number,
+): boolean {
+  return (
+    providerToolCalls > 0 &&
+    config.toolLimits?.maxToolCalls !== undefined &&
+    toolCounters.total > config.toolLimits.maxToolCalls
+  );
+}
 
 import { UsageTracker } from './usage.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
@@ -127,6 +160,10 @@ async function runAgentLoopDirect(
 
   let lastText = '';
   let aborted = false;
+  // Observed provider-executed (server-side) tool calls for this run
+  // (agent-do-cgh). Counted from the stream; never increments from the
+  // local wrapper path.
+  let providerToolCalls = 0;
   // Outer-iteration counter kept separately from `tracker.records`
   // since PR #65 made the tracker record per *inner* model step.
   // `RunResult.steps` historically meant "how many outer iterations
@@ -232,9 +269,36 @@ async function runAgentLoopDirect(
           case 'text-delta':
             iterationText += part.text;
             break;
-          case 'tool-call':
+          case 'tool-call': {
             hasToolCalls = true;
+            if (isProviderExecuted(part)) {
+              providerToolCalls += 1;
+              toolCounters.total += 1;
+              toolCounters.perIteration += 1;
+            }
             break;
+          }
+          case 'tool-result': {
+            // Provider-executed results never pass through the local
+            // wrapper, so the loop fires the post-tool-use hook and
+            // caches the normalised result here (agent-do-cgh).
+            if (!isProviderExecuted(part)) break;
+            const raw = 'output' in part ? (part as { output?: unknown }).output : undefined;
+            const normalised = normaliseToolResult(raw);
+            const callId = (part as { toolCallId?: string }).toolCallId;
+            if (callId && !resultCache.has(callId)) resultCache.set(callId, normalised);
+            if (config.hooks?.onPostToolUse) {
+              await config.hooks.onPostToolUse({
+                toolName: (part as { toolName?: string }).toolName ?? 'unknown',
+                args: (part as { input?: unknown }).input,
+                result: normalised,
+                step: i,
+                durationMs: 0,
+                providerExecuted: true,
+              });
+            }
+            break;
+          }
         }
       }
     } catch (err) {
@@ -262,6 +326,17 @@ async function runAgentLoopDirect(
     }
 
     if (aborted) break;
+
+    // Post-hoc tool-limit enforcement for provider-executed calls
+    // (agent-do-cgh). See providerToolLimitExceeded.
+    if (providerToolLimitExceeded(config, toolCounters, providerToolCalls)) {
+      console.warn(
+        `[agent-do] Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, ` +
+          `including ${providerToolCalls} provider-executed calls). Stopping the run.`,
+      );
+      aborted = true;
+      break;
+    }
 
     // Get response messages and append to history
     const response = await result.response;
@@ -433,6 +508,10 @@ async function* streamAgentLoopDirect(
 
   let lastText = '';
   let aborted = false;
+  // Observed provider-executed (server-side) tool calls for this run
+  // (agent-do-cgh). Counted from the stream; never increments from the
+  // local wrapper path.
+  let providerToolCalls = 0;
 
   for (let i = 0; i < maxIterations; i++) {
     // Check abort
@@ -562,6 +641,12 @@ async function* streamAgentLoopDirect(
 
           case 'tool-call': {
             hasToolCalls = true;
+            const providerExecuted = isProviderExecuted(part);
+            if (providerExecuted) {
+              providerToolCalls += 1;
+              toolCounters.total += 1;
+              toolCounters.perIteration += 1;
+            }
             const toolArgs =
               'args' in part
                 ? part.args
@@ -573,6 +658,7 @@ async function* streamAgentLoopDirect(
               content: `Called ${part.toolName}`,
               toolName: part.toolName,
               toolArgs,
+              ...(providerExecuted ? { providerExecuted: true } : {}),
               step: i,
               totalSteps: maxIterations,
             };
@@ -590,6 +676,27 @@ async function* streamAgentLoopDirect(
               'toolCallId' in part
                 ? (part as { toolCallId?: string }).toolCallId
                 : undefined;
+            // Provider-executed results never pass through the local
+            // wrapper — cache the normalised result and fire the post
+            // hook here so enrichment and hooks cover them (agent-do-cgh).
+            // `onPreToolUse` is deliberately not fired: its deny/stop
+            // decisions would be unenforceable after server-side execution.
+            if (isProviderExecuted(part)) {
+              const normalisedProviderResult = normaliseToolResult(rawResult);
+              if (partToolCallId && !resultCache.has(partToolCallId)) {
+                resultCache.set(partToolCallId, normalisedProviderResult);
+              }
+              if (config.hooks?.onPostToolUse) {
+                await config.hooks.onPostToolUse({
+                  toolName: part.toolName,
+                  args: 'input' in part ? (part as { input?: unknown }).input : undefined,
+                  result: normalisedProviderResult,
+                  step: i,
+                  durationMs: 0,
+                  providerExecuted: true,
+                });
+              }
+            }
             const cached = partToolCallId
               ? resultCache.get(partToolCallId)
               : undefined;
@@ -624,6 +731,7 @@ async function* streamAgentLoopDirect(
               // Full raw payload is opt-in — default is summary + data only so
               // secrets and large file contents don't leak through telemetry.
               toolResult: emitFullResult ? (cached ?? rawResult) : undefined,
+              ...(isProviderExecuted(part) ? { providerExecuted: true } : {}),
               step: i,
               totalSteps: maxIterations,
             };
@@ -665,6 +773,22 @@ async function* streamAgentLoopDirect(
         step: i,
         totalSteps: maxIterations,
       };
+    }
+
+    // Post-hoc tool-limit enforcement for provider-executed calls
+    // (agent-do-cgh). See providerToolLimitExceeded.
+    if (providerToolLimitExceeded(config, toolCounters, providerToolCalls)) {
+      console.warn(
+        `[agent-do] Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, ` +
+          `including ${providerToolCalls} provider-executed calls). Stopping the run.`,
+      );
+      yield {
+        type: 'error',
+        content: `Tool-call limit reached (${config.toolLimits?.maxToolCalls} per run, including provider-executed calls)`,
+        step: i,
+        totalSteps: maxIterations,
+      };
+      aborted = true;
     }
 
     if (aborted) break;

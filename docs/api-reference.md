@@ -267,8 +267,13 @@ names the omission).
 - mode `'accept-all'`, or a per-tool `'always'` override → registered
 - mode `'deny-all'`, a `'never'` override, or mode `'ask'` without an `'always'` override → not registered
 
-Hooks (`onPreToolUse` / `onPostToolUse`) and the `toolLimits` counters cannot observe provider-side
-executions of such tools.
+For registered provider-executed tools the loop closes the observability gap: their calls are counted
+into the `toolLimits` counters from the model stream, the run-level `maxToolCalls` cap is enforced
+post-hoc (once the observed total exceeds the cap the run stops — the provider-side cost of the
+current step is already spent), `onPostToolUse` fires for their results (with `providerExecuted: true`;
+`durationMs` is `0`), and `tool-result` progress events carry `providerExecuted: true` plus the
+normalised result. `onPreToolUse` is deliberately **not** fired for them: its deny/stop decisions
+would be unenforceable after server-side execution.
 
 ---
 
