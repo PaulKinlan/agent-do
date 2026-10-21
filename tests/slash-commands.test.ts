@@ -9,6 +9,7 @@ import {
   validateSlashCommands,
 } from '../src/slash-commands.js';
 import { parseArgs } from '../src/cli/args.js';
+import { UsageTracker } from '../src/usage.js';
 import type { Agent, AgentConfig, ProgressEvent } from '../src/types.js';
 
 // Helper to cast a mock model into the AgentConfig['model'] slot. The AI
@@ -384,8 +385,7 @@ describe('slash-command dispatch — usage accounting', () => {
     expect(aborted.aborted).toBe(true);
   });
 
-  it('falls back to zeroed usage for a duck-typed sub without runWithResult', async () => {
-    // Direct tryRouteSlashCommandRun call with a hand-built config that
+  it('falls back to zeroed usage for a duck-typed sub without runWithResult', async () => {    // Direct tryRouteSlashCommandRun call with a hand-built config that
     // never went through createAgent validation: the router must not
     // crash, and must say (via zeroed usage) that it could not see the
     // sub's spend.
@@ -407,6 +407,62 @@ describe('slash-command dispatch — usage accounting', () => {
     expect(result!.usage.totalInputTokens).toBe(0);
     expect(result!.usage.totalCost).toBe(0);
     expect(result!.steps).toBe(1);
+  });
+
+  // agent-do-tpp: reporting the sub's usage is not the same as enforcing the
+  // parent's limits on it. The dispatch must reach checkLimits().
+  it('consults the parent’s spending guard for what the dispatch spent', async () => {
+    const pricing = { 'mock-model': { input: 1, output: 2 } };
+    const onLimitExceeded = vi.fn().mockResolvedValue(false);
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'research-result' }] }),
+      usage: { pricing },
+    });
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+      // One sub-agent call costs $0.00005 — 5 × the parent's perRun.
+      usage: { pricing, limits: { perRun: 0.00001 }, onLimitExceeded },
+    };
+
+    const result = await runAgentLoop(parent, '/research topic');
+
+    expect(onLimitExceeded).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'perRun' }),
+    );
+    // The guard refused, so the dispatch is reported as aborted rather than
+    // as a clean, unguarded run.
+    expect(result.aborted).toBe(true);
+    expect(result.text).toBe('research-result');
+  });
+
+  it('records the dispatch into an injected parent tracker, without double counting', async () => {
+    const pricing = { 'mock-model': { input: 1, output: 2 } };
+    const ledger = new UsageTracker({ pricing });
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'research-result' }] }),
+      usage: { pricing, tracker: ledger },
+    });
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+      usage: { pricing, tracker: ledger },
+    };
+
+    await runAgentLoop(parent, '/research topic');
+
+    // The sub already recorded into this tracker; the dispatch must not
+    // record the same step a second time.
+    expect(ledger.getSummary().steps).toBe(1);
+    expect(ledger.getSummary().totalCost).toBeCloseTo(0.00005, 10);
   });
 });
 

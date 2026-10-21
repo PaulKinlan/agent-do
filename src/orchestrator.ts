@@ -19,9 +19,19 @@ const s = (schema: z.ZodType): any => schema;
 /**
  * Format a sub-agent's spend for the master's userSummary line. Deterministic
  * (fixed decimals) so tests and operator logs are stable.
+ *
+ * Sub-agent spends are often sub-cent, and `toFixed(4)` rounded them up —
+ * $0.00005 printed as "$0.0001", i.e. double the real cost (agent-do-2kn).
+ * Six decimals keeps small values honest and still renders exactly for
+ * values with four or fewer.
  */
 export function formatSubAgentUsage(usage: SubAgentUsage): string {
-  return `${usage.inputTokens} in / ${usage.outputTokens} out tokens, ~$${usage.estimatedCost.toFixed(4)}, ${usage.steps} steps`;
+  return `${usage.inputTokens} in / ${usage.outputTokens} out tokens, ~$${formatCost(usage.estimatedCost)}, ${usage.steps} steps`;
+}
+
+/** Render a cost without inflating sub-cent values (see formatSubAgentUsage). */
+function formatCost(cost: number): string {
+  return String(Number(cost.toFixed(6)));
 }
 
 /**
@@ -34,7 +44,9 @@ export function formatSubAgentUsage(usage: SubAgentUsage): string {
  * agent-do-4ya; the same class as agent-do-hvz and agent-do-dte.
  *
  * When the caller passes the worker's usage (agent-do-5oz), it travels in `data.workerUsage` and in the
- * `userSummary` so an operator — and the master itself — can see what the delegation cost.
+ * `userSummary` so an operator — and the master itself — can see what the delegation cost. It is that
+ * worker's own spend: with a shared budget the tracker's ledger also holds the master's and earlier workers'
+ * steps, so the orchestrator reports the worker's delta, not the ledger total (agent-do-2kn).
  *
  * The counts travel in `data` so an operator (or a later tool) can see what was cut or redacted without
  * parsing the framed string.
@@ -188,7 +200,9 @@ export function createOrchestrator(config: OrchestratorConfig): Orchestrator {
             // runWithResult (not run) so the worker's spend is visible:
             // it goes into the tool result's data below, and — when the
             // master configured usage limits — into the shared tracker
-            // the master's own guards check (agent-do-5oz).
+            // the master's own guards check (agent-do-5oz). The worker's
+            // RunResult.usage is the worker's own spend, not the shared
+            // ledger's running total (agent-do-2kn).
             const { text: result, usage } = await worker.runWithResult(task);
             // Internal plumbing, not model-facing: the unframed copy stays as it is.
             await messaging.send(agentId, config.master.id, result);

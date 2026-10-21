@@ -172,9 +172,10 @@ export function unknownSlashCommandMessage(
  *
  * Usage accounting (agent-do-5oz): the sub-agent runs via
  * `runWithResult`, so its REAL usage — tokens, cost, records — is the
- * usage returned here. A parent's spending guards and anything
- * reading the parent's `RunResult.usage` therefore see what the
- * dispatch actually spent, not zeros. Only a duck-typed sub without
+ * usage returned here, not zeros. Enforcement is the caller's job:
+ * `runAgentLoop` records the dispatch's spend into the parent's tracker
+ * and runs the parent's own `checkLimits()` on it (agent-do-tpp), so a
+ * parent's `usage.limits` bounds routing too. Only a duck-typed sub without
  * `runWithResult` (possible when `runAgentLoop` is called directly
  * with a hand-built config that skipped `createAgent` validation)
  * falls back to the legacy zeroed shape.

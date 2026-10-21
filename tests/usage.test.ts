@@ -224,6 +224,79 @@ describe('UsageTracker', () => {
   });
 });
 
+// agent-do-2kn / agent-do-da1: a shared tracker outlives one run, so callers
+// need a cursor (what did THIS unit spend) and a run window (perRun bounds one
+// run, not the ledger's lifetime).
+describe('UsageTracker windows (agent-do-2kn, agent-do-da1)', () => {
+  it('mark()/getSummarySince() report only the records after the cursor', () => {
+    const tracker = new UsageTracker();
+    tracker.record(0, 'claude-sonnet-4-6', 1000, 500);
+    const mark = tracker.mark();
+    tracker.record(1, 'claude-sonnet-4-6', 10, 20);
+
+    const delta = tracker.getSummarySince(mark);
+    expect(delta.totalInputTokens).toBe(10);
+    expect(delta.totalOutputTokens).toBe(20);
+    expect(delta.steps).toBe(1);
+    expect(delta.records).toHaveLength(1);
+    // The ledger is unchanged by reading a window.
+    expect(tracker.getSummary().steps).toBe(2);
+  });
+
+  it('perRun measures the run window, so a later run is not billed for the first', async () => {
+    const tracker = new UsageTracker({ perRunLimit: 0.001 });
+
+    tracker.beginRun();
+    tracker.record(0, 'claude-sonnet-4-6', 10000, 5000); // $0.105 — over
+    expect(await tracker.checkLimits()).toBe(false);
+    tracker.endRun();
+
+    tracker.beginRun();
+    tracker.record(0, 'claude-sonnet-4-6', 10, 5); // $0.000105 — under
+    // Before the window existed this read the cumulative $0.105 and the run
+    // was dead on arrival (agent-do-da1).
+    expect(await tracker.checkLimits()).toBe(true);
+    expect(tracker.getRunSummary().totalCost).toBeCloseTo(0.000105, 10);
+    tracker.endRun();
+  });
+
+  it('perDay still reads the whole ledger', async () => {
+    const tracker = new UsageTracker({ perDayLimit: 0.001 });
+    tracker.beginRun();
+    tracker.record(0, 'claude-sonnet-4-6', 10000, 5000); // $0.105
+    tracker.endRun();
+
+    tracker.beginRun();
+    tracker.record(0, 'claude-sonnet-4-6', 10, 5);
+    // The new run is cheap, but the day is not.
+    expect(await tracker.checkLimits()).toBe(false);
+    tracker.endRun();
+  });
+
+  it('a nested run joins the outer window (a worker cannot refresh the budget)', async () => {
+    const tracker = new UsageTracker({ perRunLimit: 0.000105 });
+    tracker.beginRun();
+    tracker.record(0, 'claude-sonnet-4-6', 10, 5); // $0.000105 — at the limit
+
+    // A worker run driven from inside: depth-only, no second window.
+    tracker.beginRun();
+    expect(tracker.getRunSummary().totalCost).toBeCloseTo(0.000105, 10);
+    expect(await tracker.checkLimits()).toBe(false);
+    tracker.endRun();
+    tracker.endRun();
+  });
+
+  it('outside a run the whole ledger is the window (standalone checkLimits)', async () => {
+    const tracker = new UsageTracker({ perRunLimit: 0.001 });
+    tracker.record(0, 'claude-sonnet-4-6', 10000, 5000);
+
+    // No beginRun() — a caller driving the tracker itself keeps the old
+    // meaning: checkLimits() sees what it recorded.
+    expect(tracker.getRunSummary().totalCost).toBeCloseTo(0.105, 6);
+    expect(await tracker.checkLimits()).toBe(false);
+  });
+});
+
 describe('DEFAULT_PRICING', () => {
   it('has entries for major providers', () => {
     expect(DEFAULT_PRICING).toHaveProperty('claude-sonnet-4-6');

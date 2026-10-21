@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createOrchestrator, frameWorkerResult } from '../src/orchestrator.js';
+import {
+  createOrchestrator,
+  formatSubAgentUsage,
+  frameWorkerResult,
+} from '../src/orchestrator.js';
 import { createMockModel } from '../src/testing/index.js';
 import type { AgentConfig } from '../src/types.js';
 
@@ -486,6 +490,93 @@ describe('delegate_task usage accounting (agent-do-5oz)', () => {
     expect(result.usage.totalOutputTokens).toBe(60);
     expect(result.usage.totalCost).toBeCloseTo(0.00015, 10);
     expect(result.usage.records).toHaveLength(3);
+  });
+
+  it('reports each worker’s OWN spend under a shared budget (agent-do-2kn)', async () => {
+    // Two delegations in one run. With a shared tracker the second worker's
+    // RunResult.usage was the ledger total (master + w1 + w2), so its
+    // workerUsage claimed 30 in / $0.00015 for a single-call worker.
+    const postHook = vi.fn();
+    const orchestrator = createOrchestrator({
+      master: {
+        id: 'master',
+        name: 'Master',
+        model: mockModel({
+          responses: [
+            { toolCalls: [{ toolName: 'delegate_task', args: { agentId: 'w1', task: 'a' } }] },
+            { toolCalls: [{ toolName: 'delegate_task', args: { agentId: 'w2', task: 'b' } }] },
+            { text: 'final' },
+          ],
+        }),
+        maxIterations: 6,
+        usage: { pricing: PRICING, limits: { perRun: 1000 } },
+        hooks: { onPostToolUse: postHook },
+      },
+      workers: [
+        workerConfig('w1', 'W1', 'w1 out'),
+        workerConfig('w2', 'W2', 'w2 out'),
+      ],
+    });
+
+    const result = await orchestrator.runWithResult('go');
+
+    const usages = postHook.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.toolName === 'delegate_task')
+      .map((e) => (e.result as { data?: { workerUsage?: unknown } }).data?.workerUsage);
+    expect(usages).toHaveLength(2);
+    // Each worker made exactly one model call: 10 in / 20 out / $0.00005.
+    for (const usage of usages) {
+      expect(usage).toMatchObject({
+        inputTokens: 10,
+        outputTokens: 20,
+        steps: 1,
+      });
+      expect((usage as { estimatedCost: number }).estimatedCost).toBeCloseTo(0.00005, 10);
+    }
+    // The master's own RunResult still carries the combined run spend:
+    // this mock burns 4 master calls + the 2 worker calls = 6 calls
+    // (60 in / 120 out), which is bigger than any single worker's delta.
+    expect(result.usage.totalInputTokens).toBe(60);
+    expect(result.usage.records).toHaveLength(6);
+  });
+
+  it('perRun bounds one orchestrator run, not the orchestrator’s lifetime (agent-do-da1)', async () => {
+    // $0.00005 per call, limit $0.00008: each run is under the limit, but two
+    // runs' cumulative spend is not. Reading the ledger for perRun made every
+    // run after the first abort during its first model call and return ''.
+    const orchestrator = createOrchestrator({
+      master: {
+        id: 'master',
+        name: 'Master',
+        model: mockModel({
+          responses: [{ text: 'answer 1' }, { text: 'answer 2' }, { text: 'answer 3' }],
+        }),
+        usage: { pricing: PRICING, limits: { perRun: 0.00008 } },
+      },
+      workers: [],
+    });
+
+    for (const n of [1, 2, 3]) {
+      const result = await orchestrator.runWithResult(`q${n}`);
+      expect(result.text).toBe(`answer ${n}`);
+      expect(result.aborted).toBe(false);
+      // …and each run reports its own spend, not the running total.
+      expect(result.usage.totalCost).toBeCloseTo(0.00005, 10);
+      expect(result.usage.records).toHaveLength(1);
+    }
+  });
+
+  it('formatSubAgentUsage does not round a sub-cent spend up (agent-do-2kn)', () => {
+    const line = formatSubAgentUsage({
+      inputTokens: 10,
+      outputTokens: 20,
+      estimatedCost: 0.00005,
+      steps: 1,
+    });
+    expect(line).toContain('~$0.00005');
+    // toFixed(4) printed "$0.0001" — double the real cost.
+    expect(line).not.toContain('$0.0001,');
   });
 });
 

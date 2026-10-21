@@ -1,4 +1,4 @@
-import type { PricingTable, RunUsage, UsageRecord } from './types.js';
+import type { AgentConfig, PricingTable, RunUsage, UsageRecord } from './types.js';
 
 // Built-in pricing table — prices per 1M tokens in USD.
 //
@@ -233,9 +233,19 @@ export function estimateCost(
 
 /**
  * Tracks usage across steps within a single agent run.
+ *
+ * A tracker can be shared by several agents (see `AgentConfig.usage.tracker`),
+ * which makes it a *ledger* that outlives one run. Two read APIs follow from
+ * that: {@link UsageTracker.getSummary} reads the whole ledger, while
+ * {@link UsageTracker.getRunSummary} / {@link UsageTracker.getSummarySince}
+ * read a window of it (agent-do-2kn / agent-do-da1).
  */
 export class UsageTracker {
   private records: UsageRecord[] = [];
+  /** Index of the first record in the current run window (see beginRun). */
+  private runStart = 0;
+  /** Nesting depth of open run windows; only the outermost opens one. */
+  private runDepth = 0;
   private pricing: PricingTable;
   private perRunLimit?: number;
   private perDayLimit?: number;
@@ -284,14 +294,69 @@ export class UsageTracker {
   }
 
   /**
-   * Get the current usage summary.
+   * Get the usage summary for everything this tracker has recorded.
+   *
+   * For a tracker shared between agents this is the whole ledger, i.e.
+   * cumulative across every run and every agent that recorded into it.
    */
   getSummary(): RunUsage {
+    return this.summarize(0);
+  }
+
+  /**
+   * A cursor into the ledger: the number of records recorded so far.
+   *
+   * `getSummarySince(tracker.mark())` taken before a unit of work reports
+   * exactly what that unit spent, even when other agents recorded into the
+   * same tracker before it (agent-do-2kn).
+   */
+  mark(): number {
+    return this.records.length;
+  }
+
+  /**
+   * Usage summary for the records recorded since `mark`.
+   */
+  getSummarySince(mark: number): RunUsage {
+    return this.summarize(Math.max(0, Math.min(mark, this.records.length)));
+  }
+
+  /**
+   * Open the budget window for one run.
+   *
+   * Nested calls join the window already open instead of opening a second
+   * one: a worker run driven from inside the master's run spends against the
+   * master's `perRun` budget, so delegation cannot refresh the guard
+   * (agent-do-da1 / agent-do-5oz).
+   */
+  beginRun(): void {
+    if (this.runDepth === 0) this.runStart = this.records.length;
+    this.runDepth++;
+  }
+
+  /** Close the run window opened by {@link UsageTracker.beginRun}. */
+  endRun(): void {
+    if (this.runDepth > 0) this.runDepth--;
+  }
+
+  /**
+   * Usage attributable to the current run — the window opened by
+   * {@link UsageTracker.beginRun}.
+   *
+   * Outside a run the whole ledger is the window, so a caller that builds a
+   * tracker and calls `checkLimits()` itself keeps the previous meaning.
+   */
+  getRunSummary(): RunUsage {
+    return this.runDepth > 0 ? this.getSummarySince(this.runStart) : this.getSummary();
+  }
+
+  private summarize(from: number): RunUsage {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let totalCost = 0;
 
-    for (const r of this.records) {
+    for (let i = from; i < this.records.length; i++) {
+      const r = this.records[i];
       totalInputTokens += r.inputTokens;
       totalOutputTokens += r.outputTokens;
       totalCost += r.estimatedCost;
@@ -301,8 +366,8 @@ export class UsageTracker {
       totalInputTokens,
       totalOutputTokens,
       totalCost,
-      steps: this.records.length,
-      records: [...this.records],
+      steps: this.records.length - from,
+      records: this.records.slice(from),
     };
   }
 
@@ -311,27 +376,30 @@ export class UsageTracker {
    * Returns true if OK to continue, false if limit exceeded and not overridden.
    */
   async checkLimits(): Promise<boolean> {
-    const summary = this.getSummary();
-
-    // Check per-run limit
-    if (this.perRunLimit !== undefined && summary.totalCost >= this.perRunLimit) {
+    // `perRun` bounds ONE run, so it reads the run window rather than the
+    // ledger: with a shared tracker the ledger spans every run, which turned
+    // perRun into a silent lifetime budget (agent-do-da1).
+    const run = this.getRunSummary();
+    if (this.perRunLimit !== undefined && run.totalCost >= this.perRunLimit) {
       if (this.onLimitExceeded) {
         return this.onLimitExceeded({
           type: 'perRun',
-          spent: summary.totalCost,
+          spent: run.totalCost,
           limit: this.perRunLimit,
         });
       }
       return false;
     }
 
-    // Check per-day limit (note: in a standalone library we only have
-    // the current run's data. The consumer should track across runs.)
-    if (this.perDayLimit !== undefined && summary.totalCost >= this.perDayLimit) {
+    // `perDay` is span-of-ledger: with an injected tracker the ledger is
+    // whatever the caller has recorded into it. A standalone tracker only
+    // has the current run's data, in which case this is the same window.
+    const ledger = this.getSummary();
+    if (this.perDayLimit !== undefined && ledger.totalCost >= this.perDayLimit) {
       if (this.onLimitExceeded) {
         return this.onLimitExceeded({
           type: 'perDay',
-          spent: summary.totalCost,
+          spent: ledger.totalCost,
           limit: this.perDayLimit,
         });
       }
@@ -340,4 +408,23 @@ export class UsageTracker {
 
     return true;
   }
+}
+
+/**
+ * Resolve the {@link UsageTracker} a run should record into.
+ *
+ * A caller-injected tracker (`AgentConfig.usage.tracker`) wins, so several
+ * agents can share one ledger/budget; otherwise each run gets a fresh tracker
+ * built from the config's limits (agent-do-5oz). Both the model loop and
+ * slash-command dispatch go through here so a dispatch is accounted against
+ * the same tracker the parent's own steps record into (agent-do-tpp).
+ */
+export function resolveUsageTracker(config: AgentConfig): UsageTracker {
+  if (config.usage?.tracker) return config.usage.tracker;
+  return new UsageTracker({
+    pricing: config.usage?.pricing,
+    perRunLimit: config.usage?.limits?.perRun,
+    perDayLimit: config.usage?.limits?.perDay,
+    onLimitExceeded: config.usage?.onLimitExceeded,
+  });
 }

@@ -594,7 +594,9 @@ await parent.run('what is the weather?');
 
 Usage crosses the dispatch boundary: the parent's `RunResult` (via
 `runWithResult()`) carries the **sub-agent's real token/cost usage**, so
-spending guards and reporting see what the dispatch actually spent.
+reporting sees what the dispatch actually spent — and the parent's
+`usage.limits` are checked against it, so `onLimitExceeded` fires and the
+result is marked `aborted` when the dispatch blows the budget.
 
 Keys must match `/^[a-zA-Z0-9_-]+$/`; values must be `Agent` instances.
 Sub-agents are full agents, so each carries its own model, tools, skills,
@@ -1422,7 +1424,11 @@ hole (agent-do-5oz):
 1. **Inject one tracker into several agents** — pass it as
    `usage.tracker`. Every agent records into it and every agent's
    `checkLimits()` sees the *combined* spend, so the shared perRun /
-   perDay limits trip no matter which agent burned the budget:
+   perDay limits trip no matter which agent burned the budget. The
+   tracker is a ledger that outlives a run: `perRun` is measured over
+   the run in progress (a sub-agent run joins its caller's window, so
+   delegation cannot refresh the budget), while `perDay` and
+   `RunResult.usage` reporting are per run:
 
 ```ts
 import { createAgent, UsageTracker } from 'agent-do';
@@ -1442,13 +1448,16 @@ const parent = createAgent({
    tracker (the master's pricing + limits) and injects it into the
    master and every worker. Worker spend then counts against the
    master's guards mid-run, and the master's `runWithResult().usage`
-   reports the combined orchestration spend. Without master limits,
-   nothing changes (each agent still tracks itself). The tracker lives
-   for the orchestrator's lifetime, so the budget spans every run it
-   drives; a worker's own `usage.limits`, if set, still arms its local
-   hard-cap circuit breaker. `delegate_task` also reports each worker's
-   spend in the tool result (`data.workerUsage`) so the master — and
-   your logs — can see what each delegation cost.
+   reports what that run spent, orchestration included. Without master
+   limits, nothing changes (each agent still tracks itself). The
+   tracker lives for the orchestrator's lifetime — so `perDay` and
+   reporting span every run it drives — but `perRun` still bounds one
+   `orchestrator.run()`; otherwise the second run onwards would start
+   already over budget and return empty text. A worker's own
+   `usage.limits`, if set, still arms its local hard-cap circuit
+   breaker. `delegate_task` also reports each worker's **own** spend in
+   the tool result (`data.workerUsage`) so the master — and your logs —
+   can see what each delegation cost, not the running total.
 
 ### How model IDs resolve to prices
 

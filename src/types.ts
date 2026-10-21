@@ -547,8 +547,15 @@ export interface AgentConfig {
      * its own (agent-do-5oz). The loop records into it and reads limits
      * from it, so several agents sharing one tracker share one budget:
      * every agent's `checkLimits()` sees the *combined* spend, and each
-     * `RunResult.usage` reports the shared total. The orchestrator uses
-     * this to make sub-agent spend count against the master's limits.
+     * `RunResult.usage` reports that run's own share of it
+     * (agent-do-2kn).
+     *
+     * The tracker is a ledger that outlives a run: `perRun` is measured
+     * over the open run window — a nested run (a worker triggered by a
+     * master) joins the window already open, so delegation cannot
+     * refresh the budget (agent-do-da1) — while `perDay` reads the whole
+     * ledger. The orchestrator uses this to make sub-agent spend count
+     * against the master's limits.
      * The tracker owns the limits — `limits` below is ignored for the
      * tracker's own checks when a tracker is injected (a config-level
      * `limits` still arms that agent's local hard-cap hook).
