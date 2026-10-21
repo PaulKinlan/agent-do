@@ -120,6 +120,7 @@ export type {
   AgentConfig,
   Agent,
   RunResult,
+  SubAgentUsage,
   ConversationMessage,
 } from './types.js';
 

@@ -104,7 +104,8 @@ export function validateSlashCommands(
       !agent ||
       typeof agent !== 'object' ||
       typeof (agent as Agent).run !== 'function' ||
-      typeof (agent as Agent).stream !== 'function'
+      typeof (agent as Agent).stream !== 'function' ||
+      typeof (agent as Agent).runWithResult !== 'function'
     ) {
       return `slashCommands["${key}"] must be an Agent instance (create one via createAgent()).`;
     }
@@ -169,11 +170,14 @@ export function unknownSlashCommandMessage(
  * command (whether the command exists or not), or `null` to let the
  * normal loop take over.
  *
- * Usage accounting across the dispatch boundary is intentionally not
- * surfaced: the sub-agent tracks its own usage internally and the
- * parent's {@link UsageTracker} never ran, so the returned usage is
- * zeroed. Steps is `1` on a successful dispatch (one sub-agent turn)
- * and `0` on an unknown command (no model ran at all).
+ * Usage accounting (agent-do-5oz): the sub-agent runs via
+ * `runWithResult`, so its REAL usage — tokens, cost, records — is the
+ * usage returned here. A parent's spending guards and anything
+ * reading the parent's `RunResult.usage` therefore see what the
+ * dispatch actually spent, not zeros. Only a duck-typed sub without
+ * `runWithResult` (possible when `runAgentLoop` is called directly
+ * with a hand-built config that skipped `createAgent` validation)
+ * falls back to the legacy zeroed shape.
  */
 export async function tryRouteSlashCommandRun(
   config: AgentConfig,
@@ -188,6 +192,19 @@ export async function tryRouteSlashCommandRun(
   if (sub) {
     // History is deliberately not forwarded (see AgentConfig.slashCommands
     // docs) — the sub-agent starts a fresh turn with the remainder.
+    if (typeof sub.runWithResult === 'function') {
+      const result = await sub.runWithResult(parsed.rest, context);
+      // One parent-level dispatch hop; the sub's own steps live in
+      // result.usage.steps. Propagate `aborted` so a sub aborted by
+      // its own spending cap doesn't report a clean run.
+      return {
+        text: result.text,
+        usage: result.usage,
+        steps: 1,
+        aborted: result.aborted,
+      };
+    }
+    // Legacy fallback: no usage telemetry available from this sub.
     const text = await sub.run(parsed.rest, context);
     return {
       text,

@@ -189,13 +189,19 @@ async function runAgentLoopDirect(
   // Shared counters for per-run and per-iteration tool-call limits (#27).
   const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
-  // Usage tracking
-  const tracker = new UsageTracker({
-    pricing: config.usage?.pricing,
-    perRunLimit: config.usage?.limits?.perRun,
-    perDayLimit: config.usage?.limits?.perDay,
-    onLimitExceeded: config.usage?.onLimitExceeded,
-  });
+  // Usage tracking. A caller-injected tracker (AgentConfig.usage.tracker)
+  // is reused as-is so several agents can share one budget: every
+  // checkLimits() then sees the combined spend and every RunResult.usage
+  // reports the shared total (agent-do-5oz). Otherwise each run builds
+  // its own tracker from the config's limits.
+  const tracker =
+    config.usage?.tracker ??
+    new UsageTracker({
+      pricing: config.usage?.pricing,
+      perRunLimit: config.usage?.limits?.perRun,
+      perDayLimit: config.usage?.limits?.perDay,
+      onLimitExceeded: config.usage?.onLimitExceeded,
+    });
 
   // Debug surface (#72). No-op when config.debug is undefined.
   // runAgentLoopDirect doesn't have a progress-event stream, so
@@ -574,12 +580,16 @@ async function* streamAgentLoopDirect(
   const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
   // Usage tracking
-  const tracker = new UsageTracker({
-    pricing: config.usage?.pricing,
-    perRunLimit: config.usage?.limits?.perRun,
-    perDayLimit: config.usage?.limits?.perDay,
-    onLimitExceeded: config.usage?.onLimitExceeded,
-  });
+  // Usage tracking — same injected-tracker contract as the
+  // non-streaming loop (agent-do-5oz).
+  const tracker =
+    config.usage?.tracker ??
+    new UsageTracker({
+      pricing: config.usage?.pricing,
+      perRunLimit: config.usage?.limits?.perRun,
+      perDayLimit: config.usage?.limits?.perDay,
+      onLimitExceeded: config.usage?.onLimitExceeded,
+    });
 
   // Debug surface (#72). Generator can't yield from inside a middleware
   // callback, so we buffer debug events into `debugQueue` and drain
