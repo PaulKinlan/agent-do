@@ -119,7 +119,7 @@ function providerLimitTrip(
   return null;
 }
 
-import { UsageTracker } from './usage.js';
+import { UsageTracker, resolveUsageTracker } from './usage.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
 import {
   parseSlashCommand,
@@ -157,13 +157,56 @@ export async function runAgentLoop(
   // Deterministic slash-command dispatch — before any model call,
   // before MCP mount. Zero LLM cost; routing is structural (#76).
   const routed = await tryRouteSlashCommandRun(config, task, context);
-  if (routed) return routed;
+  if (routed) {
+    // Accounting crosses the dispatch boundary (agent-do-tpp): the sub's
+    // spend lands in the parent's tracker and the parent's guards are
+    // consulted on it, so `usage.limits` is not bypassed by routing.
+    await accountSlashDispatch(config, routed);
+    return routed;
+  }
 
   const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
+  // One run = one budget window (agent-do-da1). Opened here, around the
+  // whole run, so a nested worker run joins it instead of refreshing it.
+  const tracker = resolveUsageTracker(resolvedConfig);
+  tracker.beginRun();
   try {
-    return await runAgentLoopDirect(resolvedConfig, task, context, history);
+    return await runAgentLoopDirect(resolvedConfig, task, context, history, tracker);
   } finally {
+    tracker.endRun();
     if (mcp) await mcp.close();
+  }
+}
+
+/**
+ * Account for a deterministic slash-command dispatch (#76) against the
+ * parent's own tracker (agent-do-tpp).
+ *
+ * `tryRouteSlashCommandRun` reports the sub-agent's real usage, but the
+ * parent's loop never runs, so nothing recorded it and no guard ever saw it.
+ * Here the dispatch gets its own budget window: the sub's records go into the
+ * parent's tracker (identity-deduped, because a sub sharing the parent's
+ * tracker has already recorded them) and the parent's `checkLimits()` — hence
+ * its `onLimitExceeded` callback — runs on that spend. A trip marks the result
+ * `aborted`, so the caller can tell enforcement fired after the fact.
+ */
+async function accountSlashDispatch(
+  config: AgentConfig,
+  result: RunResult,
+): Promise<void> {
+  if (config.usage?.enabled === false) return;
+  const tracker = resolveUsageTracker(config);
+  tracker.beginRun();
+  try {
+    const known = new Set(tracker.getSummary().records);
+    for (const rec of result.usage.records) {
+      if (known.has(rec)) continue;
+      tracker.record(rec.step, rec.model, rec.inputTokens, rec.outputTokens);
+    }
+    const withinLimits = await tracker.checkLimits();
+    if (!withinLimits) result.aborted = true;
+  } finally {
+    tracker.endRun();
   }
 }
 
@@ -175,6 +218,7 @@ async function runAgentLoopDirect(
   task: string,
   context?: string,
   history?: ConversationMessage[],
+  injectedTracker?: UsageTracker,
 ): Promise<RunResult> {
   const maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const innerStepLimit = config.innerStepLimit ?? DEFAULT_INNER_STEP_LIMIT;
@@ -189,13 +233,14 @@ async function runAgentLoopDirect(
   // Shared counters for per-run and per-iteration tool-call limits (#27).
   const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
-  // Usage tracking
-  const tracker = new UsageTracker({
-    pricing: config.usage?.pricing,
-    perRunLimit: config.usage?.limits?.perRun,
-    perDayLimit: config.usage?.limits?.perDay,
-    onLimitExceeded: config.usage?.onLimitExceeded,
-  });
+  // Usage tracking. A caller-injected tracker (AgentConfig.usage.tracker)
+  // is reused as-is so several agents can share one budget; otherwise each
+  // run gets its own (agent-do-5oz).
+  const tracker = injectedTracker ?? resolveUsageTracker(config);
+  // Everything from here on is this run's own spend: with a shared tracker
+  // the ledger also holds earlier runs and sibling agents, so a cursor is
+  // what makes `RunResult.usage` mean "what this run cost" (agent-do-2kn).
+  const usageMark = tracker.mark();
 
   // Debug surface (#72). No-op when config.debug is undefined.
   // runAgentLoopDirect doesn't have a progress-event stream, so
@@ -244,7 +289,9 @@ async function runAgentLoopDirect(
 
     // Step start hook
     if (config.hooks?.onStepStart) {
-      const summary = tracker.getSummary();
+      // "so far" is the run's own window, not a shared ledger's lifetime
+      // total, so a hook sees this run's progress (agent-do-da1).
+      const summary = tracker.getRunSummary();
       const decision = await config.hooks.onStepStart({
         step: i,
         totalSteps: maxIterations,
@@ -320,7 +367,7 @@ async function runAgentLoopDirect(
     // Consume the stream
     let iterationText = '';
     let hasToolCalls = false;
-    const recordsBefore = tracker.getSummary().records.length;
+    const recordsBefore = tracker.mark();
 
     try {
       for await (const part of result.stream) {
@@ -416,7 +463,7 @@ async function runAgentLoopDirect(
     // with the pre-#65 contract: one onUsage per step the SDK
     // completed, including the step that triggered an abort.
     if (config.hooks?.onUsage) {
-      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      const freshRecords = tracker.getSummarySince(recordsBefore).records;
       for (const rec of freshRecords) await config.hooks.onUsage(rec);
     }
 
@@ -474,7 +521,7 @@ async function runAgentLoopDirect(
     });
   }
 
-  const finalUsage = tracker.getSummary();
+  const finalUsage = tracker.getSummarySince(usageMark);
 
   // Complete hook
   if (config.hooks?.onComplete) {
@@ -544,9 +591,14 @@ export async function* streamAgentLoop(
   }
 
   const { config: resolvedConfig, mcp } = await mountConfigMcp(config);
+  // One run = one budget window, same as the non-streaming loop
+  // (agent-do-da1); a nested worker run joins it rather than resetting it.
+  const tracker = resolveUsageTracker(resolvedConfig);
+  tracker.beginRun();
   try {
-    yield* streamAgentLoopDirect(resolvedConfig, task, context, history);
+    yield* streamAgentLoopDirect(resolvedConfig, task, context, history, tracker);
   } finally {
+    tracker.endRun();
     if (mcp) await mcp.close();
   }
 }
@@ -562,6 +614,7 @@ async function* streamAgentLoopDirect(
   task: string,
   context?: string,
   history?: ConversationMessage[],
+  injectedTracker?: UsageTracker,
 ): AsyncGenerator<ProgressEvent> {
   const maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const innerStepLimit = config.innerStepLimit ?? DEFAULT_INNER_STEP_LIMIT;
@@ -573,13 +626,12 @@ async function* streamAgentLoopDirect(
     config.historyKeepWindow ?? DEFAULT_HISTORY_KEEP_WINDOW;
   const toolCounters: ToolCallCounters = { total: 0, perIteration: 0 };
 
-  // Usage tracking
-  const tracker = new UsageTracker({
-    pricing: config.usage?.pricing,
-    perRunLimit: config.usage?.limits?.perRun,
-    perDayLimit: config.usage?.limits?.perDay,
-    onLimitExceeded: config.usage?.onLimitExceeded,
-  });
+  // Usage tracking — same injected-tracker contract as the
+  // non-streaming loop (agent-do-5oz).
+  const tracker = injectedTracker ?? resolveUsageTracker(config);
+  // This generator reports the run's own spend, not a shared ledger's
+  // lifetime total (agent-do-2kn).
+  const usageMark = tracker.mark();
 
   // Debug surface (#72). Generator can't yield from inside a middleware
   // callback, so we buffer debug events into `debugQueue` and drain
@@ -638,7 +690,9 @@ async function* streamAgentLoopDirect(
 
     // Step start hook
     if (config.hooks?.onStepStart) {
-      const summary = tracker.getSummary();
+      // "so far" is the run's own window, not a shared ledger's lifetime
+      // total, so a hook sees this run's progress (agent-do-da1).
+      const summary = tracker.getRunSummary();
       const decision = await config.hooks.onStepStart({
         step: i,
         totalSteps: maxIterations,
@@ -721,7 +775,7 @@ async function* streamAgentLoopDirect(
     let iterationText = '';
     let hasToolCalls = false;
     let hardCapTripped = false;
-    const recordsBefore = tracker.getSummary().records.length;
+    const recordsBefore = tracker.mark();
 
     try {
       for await (const part of result.stream) {
@@ -913,7 +967,7 @@ async function* streamAgentLoopDirect(
     // step-record fix from PR #65 review — before this the abort path
     // never made it into RunResult.usage.
     if (config.hooks?.onUsage) {
-      const freshRecords = tracker.getSummary().records.slice(recordsBefore);
+      const freshRecords = tracker.getSummarySince(recordsBefore).records;
       for (const rec of freshRecords) await config.hooks.onUsage(rec);
     }
 
@@ -1004,7 +1058,7 @@ async function* streamAgentLoopDirect(
 
       // Complete hook
       if (config.hooks?.onComplete) {
-        const finalUsage = tracker.getSummary();
+        const finalUsage = tracker.getSummarySince(usageMark);
         await config.hooks.onComplete({
           result: lastText,
           totalSteps: finalUsage.steps,
@@ -1025,7 +1079,7 @@ async function* streamAgentLoopDirect(
   }
 
   // Hit max iterations or aborted
-  const finalUsage = tracker.getSummary();
+  const finalUsage = tracker.getSummarySince(usageMark);
 
   if (!aborted) {
     yield {

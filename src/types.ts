@@ -15,6 +15,7 @@ export type ProviderOptions = Record<
 >;
 import type { McpServerConfig } from './mcp.js';
 import type { ScheduledTask } from './scheduled-tasks.js';
+import type { UsageTracker } from './usage.js';
 
 // Progress events emitted during agent execution
 export interface ProgressEvent {
@@ -541,6 +542,25 @@ export interface AgentConfig {
   usage?: {
     enabled?: boolean;
     pricing?: PricingTable;
+    /**
+     * Inject a caller-owned tracker instead of letting each run build
+     * its own (agent-do-5oz). The loop records into it and reads limits
+     * from it, so several agents sharing one tracker share one budget:
+     * every agent's `checkLimits()` sees the *combined* spend, and each
+     * `RunResult.usage` reports that run's own share of it
+     * (agent-do-2kn).
+     *
+     * The tracker is a ledger that outlives a run: `perRun` is measured
+     * over the open run window — a nested run (a worker triggered by a
+     * master) joins the window already open, so delegation cannot
+     * refresh the budget (agent-do-da1) — while `perDay` reads the whole
+     * ledger. The orchestrator uses this to make sub-agent spend count
+     * against the master's limits.
+     * The tracker owns the limits — `limits` below is ignored for the
+     * tracker's own checks when a tracker is injected (a config-level
+     * `limits` still arms that agent's local hard-cap hook).
+     */
+    tracker?: UsageTracker;
     limits?: {
       perRun?: number;
       perDay?: number;
@@ -796,6 +816,13 @@ export interface Agent {
   readonly id: string;
   readonly name: string;
   run(task: string, context?: string, history?: ConversationMessage[]): Promise<string>;
+  /**
+   * Like {@link Agent.run}, but returns the full {@link RunResult} —
+   * text plus the run's usage ledger. Orchestrators and slash-command
+   * dispatchers call this so sub-agent spend can be accounted against
+   * the parent's usage guards instead of being dropped (agent-do-5oz).
+   */
+  runWithResult(task: string, context?: string, history?: ConversationMessage[]): Promise<RunResult>;
   stream(task: string, context?: string, history?: ConversationMessage[]): AsyncIterable<ProgressEvent>;
   abort(): void;
 }
@@ -806,4 +833,12 @@ export interface RunResult {
   usage: RunUsage;
   steps: number;
   aborted: boolean;
+}
+
+/** Sub-agent spend surfaced on a delegated tool result (agent-do-5oz). */
+export interface SubAgentUsage {
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCost: number;
+  steps: number;
 }

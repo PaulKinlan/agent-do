@@ -1,4 +1,10 @@
-import type { Agent, AgentConfig, ConversationMessage, ProgressEvent } from './types.js';
+import type {
+  Agent,
+  AgentConfig,
+  ConversationMessage,
+  ProgressEvent,
+  RunResult,
+} from './types.js';
 import { runAgentLoop, streamAgentLoop } from './loop.js';
 import { validateSlashCommands, markHasSlashCommands } from './slash-commands.js';
 import { validateScheduledTasks } from './scheduled-tasks.js';
@@ -41,15 +47,26 @@ export function createAgent(config: AgentConfig): Agent {
       return config.name;
     },
 
-    async run(task: string, context?: string, history?: ConversationMessage[]): Promise<string> {
+    async runWithResult(
+      task: string,
+      context?: string,
+      history?: ConversationMessage[],
+    ): Promise<RunResult> {
       abortController = new AbortController();
       const mergedConfig: AgentConfig = {
         ...config,
         signal: config.signal ?? abortController.signal,
       };
 
-      const result = await runAgentLoop(mergedConfig, task, context, history);
-      abortController = null;
+      try {
+        return await runAgentLoop(mergedConfig, task, context, history);
+      } finally {
+        abortController = null;
+      }
+    },
+
+    async run(task: string, context?: string, history?: ConversationMessage[]): Promise<string> {
+      const result = await agent.runWithResult(task, context, history);
       return result.text;
     },
 

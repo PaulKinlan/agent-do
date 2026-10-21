@@ -313,3 +313,88 @@ describe('M-07: buildOnStepEnd', () => {
     expect(tracker.getSummary().totalCost).toBeCloseTo(0.03, 5);
   });
 });
+
+// ─── injected usage tracker (agent-do-5oz) ─────────────────────────────
+// A caller-owned tracker in AgentConfig.usage.tracker is the mechanism
+// behind shared budgets: several agents pointing at one tracker share one
+// ledger, so sub-agent spend counts against the same guards.
+
+describe('injected usage tracker (AgentConfig.usage.tracker)', () => {
+  const pricing: PricingTable = {
+    'priced-model': { input: 1, output: 2 },
+  };
+
+  it('runAgentLoop records into a provided tracker and reports its summary', async () => {
+    const tracker = new UsageTracker({ pricing });
+    const config = baseConfig({
+      model: mockModel({
+        modelId: 'priced-model',
+        responses: [{ text: 'ok' }],
+      }),
+      usage: { tracker },
+    });
+
+    const result = await runAgentLoop(config, 'run');
+
+    // The run's spend landed in the CALLER's tracker.
+    const summary = tracker.getSummary();
+    expect(summary.records).toHaveLength(1);
+    expect(summary.totalInputTokens).toBe(10);
+    expect(summary.totalOutputTokens).toBe(20);
+    expect(summary.totalCost).toBeCloseTo(0.00005, 10);
+    // RunResult.usage IS the shared ledger's view.
+    expect(result.usage.totalCost).toBeCloseTo(summary.totalCost, 12);
+    expect(result.usage.records).toEqual(summary.records);
+  });
+
+  it('streamAgentLoop records into a provided tracker', async () => {
+    const tracker = new UsageTracker({ pricing });
+    const config = baseConfig({
+      model: mockModel({
+        modelId: 'priced-model',
+        responses: [{ text: 'ok' }],
+      }),
+      usage: { tracker },
+    });
+
+    for await (const _event of streamAgentLoop(config, 'run')) {
+      // drain
+    }
+
+    expect(tracker.getSummary().records).toHaveLength(1);
+    expect(tracker.getSummary().totalInputTokens).toBe(10);
+  });
+
+  it('a pre-loaded shared tracker trips checkLimits mid-run (shared-budget semantics)', async () => {
+    // Simulate other agents having already spent against this tracker:
+    // the run must stop at the next soft check, not sail on. The single
+    // toolCall response replays forever, so an unimpeded run would rack
+    // up ~2 records per iteration up to maxIterations.
+    const tracker = new UsageTracker({ pricing, perRunLimit: 0.00005 });
+    tracker.record(0, 'priced-model', 10, 20); // pre-existing spend ≥ limit
+    const config = baseConfig({
+      model: mockModel({
+        modelId: 'priced-model',
+        responses: [{ toolCalls: [{ toolName: 'ping', args: {} }] }],
+      }),
+      tools: {
+        ping: tool({
+          description: 'ping',
+          inputSchema: s(z.object({})),
+          execute: async () => 'pong',
+        }),
+      },
+      maxIterations: 5,
+      usage: { tracker },
+    });
+
+    await runAgentLoop(config, 'run');
+
+    // Iteration 0 records one entry per inner step — the forever-replayed
+    // tool call burns the default innerStepLimit (5) — and then the i=1
+    // soft check sees the shared total (preloaded + 5 = $0.0003) over the
+    // limit and breaks the loop. 6 records total, vs ~26 unimpeded
+    // (5 inner steps × 5 iterations + the preloaded one).
+    expect(tracker.getSummary().records).toHaveLength(6);
+  });
+});

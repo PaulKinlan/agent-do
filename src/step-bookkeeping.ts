@@ -89,7 +89,9 @@ export function buildOnStepEnd(
       usage.outputTokens ?? 0,
     );
     if (hardLimit === undefined || softLimit === undefined) return;
-    const spent = tracker.getSummary().totalCost;
+    // The cap bounds THIS run: with a shared tracker getSummary() is the
+    // ledger, and using it made the cap a lifetime budget (agent-do-da1).
+    const spent = tracker.getRunSummary().totalCost;
     if (spent >= hardLimit && !abortController.signal.aborted) {
       abortController.abort(
         new Error(

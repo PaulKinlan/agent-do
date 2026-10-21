@@ -4,10 +4,13 @@ import { runAgentLoop, streamAgentLoop } from '../src/loop.js';
 import { createMockModel } from '../src/testing/index.js';
 import {
   parseSlashCommand,
+  tryRouteSlashCommandRun,
   unknownSlashCommandMessage,
+  validateSlashCommands,
 } from '../src/slash-commands.js';
 import { parseArgs } from '../src/cli/args.js';
-import type { AgentConfig, ProgressEvent } from '../src/types.js';
+import { UsageTracker } from '../src/usage.js';
+import type { Agent, AgentConfig, ProgressEvent } from '../src/types.js';
 
 // Helper to cast a mock model into the AgentConfig['model'] slot. The AI
 // SDK's LanguageModel type is structural; the mock satisfies it at runtime
@@ -159,6 +162,21 @@ describe('createAgent — slashCommands validation', () => {
       }),
     ).not.toThrow();
   });
+
+  it('rejects a duck-typed value without runWithResult (agent-do-5oz)', () => {
+    // A slash sub-agent without usage telemetry would silently report
+    // zeroed spend, defeating the parent's usage accounting. Failing at
+    // construction is louder and cheaper than a wrong number.
+    const fake = {
+      id: 'fake',
+      name: 'Fake',
+      run: async () => 'x',
+      stream: async function* () {},
+      abort: () => {},
+      // no runWithResult
+    } as unknown as Agent;
+    expect(validateSlashCommands({ fake })).toMatch(/runWithResult|must be an Agent instance/);
+  });
 });
 
 // ── runAgentLoop dispatch ────────────────────────────────────────────
@@ -170,7 +188,7 @@ describe('runAgentLoop — slash-command dispatch', () => {
       name: 'Research',
       model: mockModel({ responses: [{ text: 'research-result' }] }),
     });
-    const runSpy = vi.spyOn(research, 'run');
+    const runSpy = vi.spyOn(research, 'runWithResult');
 
     const parent: AgentConfig = {
       id: 'parent',
@@ -198,7 +216,7 @@ describe('runAgentLoop — slash-command dispatch', () => {
       name: 'Research',
       model: mockModel({ responses: [{ text: 'ok' }] }),
     });
-    const runSpy = vi.spyOn(research, 'run');
+    const runSpy = vi.spyOn(research, 'runWithResult');
 
     const parent: AgentConfig = {
       id: 'parent',
@@ -252,7 +270,7 @@ describe('runAgentLoop — slash-command dispatch', () => {
       name: 'Research',
       model: mockModel({ responses: [{ text: 'empty-arg-result' }] }),
     });
-    const runSpy = vi.spyOn(research, 'run');
+    const runSpy = vi.spyOn(research, 'runWithResult');
 
     const parent: AgentConfig = {
       id: 'parent',
@@ -274,7 +292,7 @@ describe('runAgentLoop — slash-command dispatch', () => {
       name: 'Research',
       model: mockModel({ responses: [{ text: 'SUB-RAN' }] }),
     });
-    const runSpy = vi.spyOn(research, 'run');
+    const runSpy = vi.spyOn(research, 'runWithResult');
 
     const parent: AgentConfig = {
       id: 'parent',
@@ -308,6 +326,143 @@ describe('runAgentLoop — slash-command dispatch', () => {
 
     const result = await runAgentLoop(parent, '/etc/hosts');
     expect(result.text).toBe('parent-result');
+  });
+});
+
+// ── usage accounting across the dispatch boundary (agent-do-5oz) ────
+
+describe('slash-command dispatch — usage accounting', () => {
+  it("returns the sub-agent's real usage, not zeros", async () => {
+    // $1 input / $2 output per 1M tokens; the mock spends 10 in / 20 out
+    // per model call, so one sub-agent call costs 0.00005.
+    const pricing = { 'mock-model': { input: 1, output: 2 } }; // cents-free USD rates
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'research-result' }] }),
+      usage: { pricing },
+    });
+
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+    };
+
+    const result = await runAgentLoop(parent, '/research topic');
+
+    expect(result.text).toBe('research-result');
+    expect(result.usage.totalInputTokens).toBe(10);
+    expect(result.usage.totalOutputTokens).toBe(20);
+    expect(result.usage.totalCost).toBeCloseTo(0.00005, 10);
+    expect(result.usage.records).toHaveLength(1);
+    // Still one parent-level dispatch hop.
+    expect(result.steps).toBe(1);
+    expect(result.aborted).toBe(false);
+  });
+
+  it('propagates the sub-agent\'s aborted flag', async () => {
+    // A pre-aborted signal on the sub's config makes its own loop end
+    // with aborted: true deterministically (the run never starts an
+    // iteration).
+    const controller = new AbortController();
+    controller.abort();
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'partial' }] }),
+      signal: controller.signal,
+    });
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+    };
+
+    const aborted = await runAgentLoop(parent, '/research topic');
+    expect(aborted.aborted).toBe(true);
+  });
+
+  it('falls back to zeroed usage for a duck-typed sub without runWithResult', async () => {    // Direct tryRouteSlashCommandRun call with a hand-built config that
+    // never went through createAgent validation: the router must not
+    // crash, and must say (via zeroed usage) that it could not see the
+    // sub's spend.
+    const sub = {
+      id: 'legacy',
+      name: 'Legacy',
+      run: async () => 'legacy-result',
+      stream: async function* () {},
+      abort: () => {},
+    } as unknown as Agent;
+
+    const result = await tryRouteSlashCommandRun(
+      { id: 'p', name: 'P', model: mockModel({ responses: [{ text: 'x' }] }), slashCommands: { legacy: sub } },
+      '/legacy hi',
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe('legacy-result');
+    expect(result!.usage.totalInputTokens).toBe(0);
+    expect(result!.usage.totalCost).toBe(0);
+    expect(result!.steps).toBe(1);
+  });
+
+  // agent-do-tpp: reporting the sub's usage is not the same as enforcing the
+  // parent's limits on it. The dispatch must reach checkLimits().
+  it('consults the parent’s spending guard for what the dispatch spent', async () => {
+    const pricing = { 'mock-model': { input: 1, output: 2 } };
+    const onLimitExceeded = vi.fn().mockResolvedValue(false);
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'research-result' }] }),
+      usage: { pricing },
+    });
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+      // One sub-agent call costs $0.00005 — 5 × the parent's perRun.
+      usage: { pricing, limits: { perRun: 0.00001 }, onLimitExceeded },
+    };
+
+    const result = await runAgentLoop(parent, '/research topic');
+
+    expect(onLimitExceeded).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'perRun' }),
+    );
+    // The guard refused, so the dispatch is reported as aborted rather than
+    // as a clean, unguarded run.
+    expect(result.aborted).toBe(true);
+    expect(result.text).toBe('research-result');
+  });
+
+  it('records the dispatch into an injected parent tracker, without double counting', async () => {
+    const pricing = { 'mock-model': { input: 1, output: 2 } };
+    const ledger = new UsageTracker({ pricing });
+    const research = createAgent({
+      id: 'research',
+      name: 'Research',
+      model: mockModel({ responses: [{ text: 'research-result' }] }),
+      usage: { pricing, tracker: ledger },
+    });
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { research },
+      usage: { pricing, tracker: ledger },
+    };
+
+    await runAgentLoop(parent, '/research topic');
+
+    // The sub already recorded into this tracker; the dispatch must not
+    // record the same step a second time.
+    expect(ledger.getSummary().steps).toBe(1);
+    expect(ledger.getSummary().totalCost).toBeCloseTo(0.00005, 10);
   });
 });
 
