@@ -147,9 +147,11 @@ const query_db = tool({
 Don't hand-roll shell execution with `child_process` in a custom tool —
 use the built-in `createShellTool(sandbox)` factory (see the Shell tool
 section above). It requires an explicit sandbox connector and applies
-the guards a raw custom tool misses: `<tool_output>` framing with
-prompt-injection redaction, per-stream byte caps, and per-call timeout
-enforcement.
+guards a hand-rolled tool usually misses: `<tool_output>` framing with
+prompt-injection redaction, per-stream byte caps, and per-call timeouts
+(a request above `maxTimeoutMs`, default 60s, is refused; below the cap
+the value is forwarded to the connector, which is expected to enforce
+it — the tool deliberately does not race a wall-clock timer).
 
 ```typescript
 import { createAgent, createShellTool, createJustBashSandbox } from 'agent-do';
@@ -195,10 +197,11 @@ lines, command output, file contents — you own three guards:
    a bounded `modelContent` for the model and a short `userSummary`
    for the operator, and delimit quoted content (e.g. fenced in
    markers) rather than interpolating it into instruction-like text.
-2. **Bounding.** Cap what you return and mark truncation (the
-   built-ins cap reads at 256 KiB and append `…[truncated]`). An
-   unbounded return is a context-window and cost problem, not just a
-   correctness one.
+2. **Bounding.** Cap what you return and mark truncation: the
+   built-ins cap reads at 256 KiB and append
+   `... [truncated at N bytes of M]` (the shell tool's stdout/stderr
+   use the shorter `…[truncated]`). An unbounded return is a
+   context-window and cost problem, not just a correctness one.
 3. **Environment.** Never spawn host processes with the parent's whole
    `process.env` — that exposes provider keys (`ANTHROPIC_API_KEY`,
    `OPENAI_API_KEY`, …) to anything the model can run. Route execution
