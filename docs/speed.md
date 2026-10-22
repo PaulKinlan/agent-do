@@ -13,10 +13,10 @@ every landing paid for it.
 
 ## 1. The two gates
 
-| gate | command | what it runs | measured (2026-10-12) | budget |
+| gate | command | what it runs | measured (2026-10-22, see §4) | budget |
 |---|---|---|---|---|
-| **full** | `bash tools/full-gate.sh` | STATIC_CMD, then every suite + the mock-tier evals | **41.5 s** | ≤ 300 s (R1) |
-| **fast** | `bash tools/fast-gate.sh` | STATIC_CMD, then the suites that reach the changed files | **13.6 – 55.0 s** (see §4) | ≤ 60 s (R2) |
+| **full** | `bash tools/full-gate.sh` | STATIC_CMD, then every suite + the mock-tier evals | **313 s at 4 workers, 356 s at one** | ≤ 300 s (R1) |
+| **fast** | `bash tools/fast-gate.sh` | STATIC_CMD, then the suites that reach the changed files | **247 s** worst row at the default 2 workers (see §4) | ≤ 60 s (R2) |
 
 `fleet-check --fast` runs the fast gate; `fleet-check` runs the full gate. **Only the merger runs the full
 gate** (R13) — `bin/fleet-check` refuses it from any other lane unless the lane passes `--full`, because
@@ -126,30 +126,53 @@ An exemption means "no suite can **ever** cover this", not "this is safe".
 
 ## 4. The budget, honestly
 
-Measured 2026-10-12 on a 2-vCPU VM, `bash tools/fast-gate.sh --changed <file>`:
+Measured 2026-10-22 on a 2-vCPU VM, `bash tools/fast-gate.sh --changed src/tools/content-guards.ts` (the
+widest row in the map, now **43 suites**), after `agent-do-664` made the worker count actually reach the
+runner:
 
-| change | suites selected | fast gate |
-|---|---|---|
-| `tools/fast-gate.sh` (its own suite) | 1 | 13.6 s |
-| `src/tools/deny-list.ts` | 4 | 17.2 s |
-| `src/skills.ts` | 14 | 32.2 s |
-| `src/mcp.ts` | 32 | 47.2 s |
-| `src/tools/content-guards.ts` (the widest row in the map today) | 36 | **55.0 s** |
+| workers | vitest | of which import | fast gate (incl. static) | suites |
+|---|---|---|---|---|
+| 1 (what the gate did before `agent-do-664`: `FAST_GATE_JOBS` was declared and never used) | 419 s | 127 s | **450.8 s** | 43/43 |
+| **2 (the new default: one worker per vCPU)** | 216 s | — | **247.4 s** | **43/43** |
+| 4 | 137 s | 279 s | **168 s** | 42/43 (a 5 s default timeout) |
+| 4, measured straight after another gate (contended) | — | — | **327 s** | 42/43 |
+| 4 + `--no-isolate` (experiment, not shipped — see below) | 58 s | 98 s | **115 s** | 41/43 |
 
-Read it as: **median ≈ 17 s, worst case 55 s of a 60 s budget.** The tail is thin, and it is thin for a
-structural reason worth naming: `src/tools/content-guards.ts` and `src/agent.ts` sit under almost every
-suite, so a change there is *genuinely* a wide change — the closure is correct, and the honest reading is
-that the widest changes are not far off the full gate (41.5 s) in cost. That is a property of the module
-graph, not of the selector. The levers, in the standard's order: the concurrent static step (§2, ~42 s), and
-R6/R7 (smaller central surfaces) if the widest rows keep growing.
+2 workers is the default because it is the row that is both fast and green: four workers on two cores is
+oversubscription, and the 5 s default timeout becomes a lottery — `tests/loop.test.ts` and
+`tests/build-script.test.ts` failed at 4 workers and pass serially. The same reasoning retired the idea of
+putting `maxWorkers` in `vitest.config.ts`: that would parallelise the full gate too, where it measured 313 s
+against 356 s serial (~12%) and failed three tests that pass serially. The full gate therefore stays serial
+and stable; the parallelism is applied where it pays, to the wide-but-not-full selections the fast gate runs.
 
-The full gate's own split (41.5 s): static 13.8 s, vitest 21.0 s (46 files / 870 tests), evals 1.4 s. The
-bounds in `tools/check.conf` (600 s / 180 s) are kill windows ~11× and ~3× the measurements: a bound that
-fires means the gate wedged, not that it was slow. The fast gate's *batch* bound (`SUITE_BOUND`, 120 s; it bounds the single runner invocation, so a wedge is reported against every suite it selected rather than one)
-is deliberately below the outer 180 s window: it has to be the one that fires, so a hung suite is reported as
+Read it as: **the fast tier is 4–8× over its 60 s budget (R2) on this VM, and the previous table in this
+section (13.6 – 55.0 s, 36 suites, measured 2026-10-12) was stale on both axes** — the widest row has grown
+to 43 suites, and the number was never re-measured after vitest 4 arrived. That is the honest reason two
+implementer lanes could not clear a fast gate at all on 2026-10-22, not an unlucky VM.
+
+The cost is **per-file module import**, not test work: 279 s of import against 109 s of tests for 43 files at
+4 workers. `isolate` (vitest's default) gives every file a fresh module registry, so each one pays the AI
+SDK graph again. The measured lever is `--no-isolate`: 58 s of vitest for the same 43 suites — but it is
+**not shipped here**, because it leaked state between files on the first try (`tests/mcp.test.ts` and
+`tests/cost-runaway.test.ts` failed in ways they do not fail isolated). Untangling that per suite is an
+architect-sized job (which suites mutate module or process state), not a gate-bound change; §6 P1 is the
+same pathology seen from the other side.
+
+The full gate's own split (59 files / 1 247 tests): 356 s at one worker (static ~35 s, vitest 314 s, evals ~1 s) and 313 s at 4 workers (vitest 268 s) — so on the whole suite set the parallelism buys ~12%, because two cores are the constraint; where it pays is a wide selection that is not the whole set, which is what the fast gate runs. The
+bounds in `tools/check.conf` (600 s / 480 s) are kill windows ~1.7× and ~1.5× (against the worst fast
+observation of 327 s) rather than the ~11×/~3× they were: a bound must exceed the real run
+(`roles/lessons.md`), and a 180 s window against a 168–327 s run reports healthy runs as
+all-suites-failed. The fast gate's *batch* bound (`SUITE_BOUND`, 400 s; it bounds the single runner
+invocation, so a wedge is reported against every suite it selected rather than one) stays deliberately below
+the outer 480 s window: it has to be the one that fires, so a hung suite is reported as
 `fast-gate: failed: <suite>` with its log tail, instead of the outer kill recording the whole gate as
 `unknown` and losing which suite wedged. `tests/gates.test.ts` asserts the relationship against
 `tools/check.conf`, so raising one bound alone goes red.
+
+Loosening a bound is not a budget fix. The ordering that would get this repo back inside R2 is: (1) a shared
+module graph for suites that are shown not to leak state (`--no-isolate`, measured 115 s), or (2) fewer
+suites reaching the central surfaces (R6/R7), or (3) a smaller static step. Until one of those lands, the
+numbers above are the truth and the bounds say so.
 
 ## 5. Changes the fast tier refuses (and why that is deliberate)
 

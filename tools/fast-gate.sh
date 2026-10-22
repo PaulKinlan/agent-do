@@ -91,15 +91,41 @@ _ENV_STATIC=${STATIC_CMD-}
 [ -n "$_ENV_STATIC" ] && STATIC_CMD=$_ENV_STATIC
 FAST_GATE_RUNNER=${FAST_GATE_RUNNER:-npx vitest run}
 STATIC_CMD=${STATIC_CMD:-true}
-JOBS=${FAST_GATE_JOBS:-4}
+JOBS=${FAST_GATE_JOBS-2}
+# Parallelism, passed to the runner and actually used (agent-do-664). Before this, JOBS was declared and
+# documented here and never reached the runner, so vitest fell back to its own default — ONE fork on this
+# 2-vCPU VM, which made the widest suite row (43 suites) cost 450.8 s.
+#
+# The default is ONE WORKER PER vCPU, not vitest's 4-ish habit: measured 2026-10-22 on the widest row, 2
+# workers took 247.4 s and passed 43/43, while 4 workers oversubscribed the two cores and turned
+# vitest's 5 s default timeout into a lottery (tests/loop.test.ts and tests/build-script.test.ts failed
+# at 4 workers and pass serially). Raising FAST_GATE_JOBS is a per-run decision for a bigger VM.
+# docs/speed.md §4 carries the full table.
+#
+# `-` rather than `:-` on purpose: an explicitly EMPTY FAST_GATE_JOBS means "pass no flag and let the
+# runner decide" (the escape hatch for a non-vitest FAST_GATE_RUNNER), which is a different intent from
+# an unset variable. A non-numeric value is a typo, and says so instead of silently running serially.
+WORKERS_ARG=""
+case "$JOBS" in
+  '') ;;
+  *[!0-9]*) echo "fast-gate: FAST_GATE_JOBS='$JOBS' is not a worker count; leaving the runner at its own default" >&2 ;;
+  *) WORKERS_ARG="--maxWorkers=$JOBS" ;;
+esac
 # Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
-# 180 s): the batch bound exists so that a wedged run is reported as `fast-gate: failed: <suite>` - for every
+# 480 s): the batch bound exists so that a wedged run is reported as `fast-gate: failed: <suite>` - for every
 # selected suite, since a batch that never produced a report proves nothing about any of them - together with
 # its log tail. If the outer window fires first it is reported as `unknown` in the cached record instead —
-# the same value in both places made that a race, not a decision. 120 s + the 15 s SIGKILL grace the runner
-# is given below + the static step (~14 s on a 2-vCPU VM) fits inside 180 s with room to spare.
+# the same value in both places made that a race, not a decision.
+#
+# Re-derived 2026-10-22 (agent-do-664). The old 120 s (+ 15 s SIGKILL grace + ~14 s static inside a 180 s
+# outer window) was sized for the 55 s widest-row measurement of 2026-10-12. That measurement is stale: the
+# widest row is now 43 suites and, with the worker count actually reaching the runner, it measured 247.4 s
+# at the default 2 workers (168 s at 4, 450.8 s at one — which is what the gate was really doing), and
+# 327 s for the 4-worker run made straight after another gate on this VM. 400 s covers the contended worst
+# case, because the variance here is CPU contention, not suite behaviour. docs/speed.md §4 carries the full
+# table and the budget deviation.
 # tests/gates.test.ts pins the relationship against tools/check.conf rather than trusting this comment.
-SUITE_BOUND=${SUITE_BOUND:-120}
+SUITE_BOUND=${SUITE_BOUND:-400}
 
 LIST=0; BASE="${FAST_GATE_BASE:-}"; EXPLICIT=()
 while [ $# -gt 0 ]; do
@@ -414,18 +440,20 @@ if [ "$HAVE_SETSID" = 1 ]; then
   # Own session for the batch (see reap): `setsid` execs in place, so `$!` and the pid the inner shell records
   # are the session id. RUNNER goes through the environment because it may carry arguments (`npx vitest run`),
   # which must keep splitting. Suites are passed last so the fixed paths above can be named positionally.
-  RUNNER=$FAST_GATE_RUNNER setsid bash -c '
+  # WORKERS_ARG travels the same way for the same reason.
+  RUNNER=$FAST_GATE_RUNNER WORKERS_ARG=$WORKERS_ARG setsid bash -c '
     cd "$1" || exit 1
     echo $$ >"$2"
     # shellcheck disable=SC2086
-    timeout -k 15 "$3" $RUNNER "${@:7}" --reporter=json --outputFile="$5" --reporter=default >"$4" 2>&1
+    timeout -k 15 "$3" $RUNNER $WORKERS_ARG "${@:7}" --reporter=json --outputFile="$5" --reporter=default >"$4" 2>&1
     echo $? >"$6"
   ' fast-gate-batch "$ROOT" "$TMP/batch.sid" "$SUITE_BOUND" "$RUN_LOG_FILE" "$REPORT" "$BATCH_RC_FILE" "${SELECTED[@]}" &
 else
   # No setsid: the tree walk in reap() is all that protects this run, so say so rather than pretend.
   echo "fast-gate: note: no setsid on this platform; the runner is killed by tree, which can miss a" >&2
   echo "fast-gate: note: reparented orphan after the batch has reported." >&2
-  ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER "${SELECTED[@]}" \
+  # shellcheck disable=SC2086
+  ( cd "$ROOT" && timeout -k 15 "$SUITE_BOUND" $FAST_GATE_RUNNER $WORKERS_ARG "${SELECTED[@]}" \
       --reporter=json --outputFile="$REPORT" --reporter=default >"$RUN_LOG_FILE" 2>&1; echo $? >"$BATCH_RC_FILE" ) &
 fi
 CHILD_PIDS+=("$!")
