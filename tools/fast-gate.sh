@@ -38,7 +38,9 @@
 #   bash tools/fast-gate.sh --changed src/a.ts  # repeatable; bypasses git entirely
 #   bash tools/fast-gate.sh --list              # print the suites it WOULD run, run nothing
 #   bash tools/fast-gate.sh --base <ref>        # compare against another base
-#   FAST_GATE_JOBS=2 bash tools/fast-gate.sh    # cap parallel suites (default: 4)
+#   FAST_GATE_JOBS=2 bash tools/fast-gate.sh    # parallel suites (default: one per vCPU — 2 on the 2-vCPU VM;
+#                                               # 4 oversubscribes the cores and turns vitest's 5 s default into a
+#                                               # lottery. Empty = pass no flag, for a non-vitest runner)
 #
 # Exit codes: 0 = every selected suite passed (or nothing was affected); 1 = a suite failed, a step failed,
 # a mapped suite is missing, or a changed file is unmapped. ANY non-zero is "unknown", never "green".
