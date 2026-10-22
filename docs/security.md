@@ -69,7 +69,8 @@ provider-native, `delegate_task`) was framed and capped. That was a hole in the 
 The loop now normalises every tool's return value into a `ToolResult` and, when a tool returns anything that is not
 already a `ToolResult`, puts it through the same guards: framed in `<tool_output tool="…" source="tool-return">`,
 injection markers replaced with `[redacted prompt-injection marker]`, forged `</tool_output>` tags escaped so content
-cannot close its own frame, and capped at 256 KB (`normaliseToolResult` in `tools/types.ts`).
+cannot close its own frame, and capped at 256 KB (`guardToolReturn` in `tools-build.ts`, applied by the per-call
+execute wrapper).
 
 What that does and does not buy you:
 

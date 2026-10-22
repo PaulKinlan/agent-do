@@ -766,7 +766,6 @@
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts",
-    "tests/tool-result.test.ts",
     "tests/tools-build.test.ts",
     "tests/trust-boundary.test.ts",
     "tests/usage.test.ts",

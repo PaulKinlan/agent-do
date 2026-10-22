@@ -1770,7 +1770,7 @@ const result = await runEvals(suite, { output: 'silent' });
 | `InMemoryMemoryStore` | class | In-memory store (testing/prototyping) |
 | `FilesystemMemoryStore` | class | Node.js filesystem store (persistent) |
 | `createOrchestrator` | `(config) => Orchestrator` | Create a multi-agent orchestrator |
-| `normaliseToolResult` | `(value, opts?) => ToolResult` | Coerce any tool return into the structured shape; `opts.tool` content-guards a bare return |
+| `normaliseToolResult` | `(value) => ToolResult` | Coerce any tool return into the structured shape |
 | `wrapForModel` | `(body, opts) => WrappedContent` | Frame text in `<tool_output>`, redact injection markers, cap bytes — the guard the built-in tools use |
 | `sanitiseUntrustedText` | `(body) => SanitisedUntrustedText` | The same two transforms as `wrapForModel` without the frame, for structured payloads |
 | `parseSlashCommand` | `(input) => { name, rest } \| null` | Parse a `/<name>` slash command from a task string |
