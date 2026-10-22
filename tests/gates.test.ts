@@ -473,7 +473,9 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     expect(status).toBe(0);
   });
 
-  it('refuses to guess when the map is missing, and when a mapped suite does not exist', () => {
+  // Spawns two real gate runs, each of which forks bash and node: the cost is the machine's, not the
+  // assertion's, so it must not be measured against vitest's 5 s default (agent-do-c26).
+  it('refuses to guess when the map is missing, and when a mapped suite does not exist', { timeout: 60_000 }, () => {
     const noMap = fixture({ map: '' });
     rmSync(join(noMap.repo, 'tools', 'suite-map.tsv'));
     const missingMap = runGate(noMap, ['--changed', 'src/a.ts']);
@@ -516,7 +518,9 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
       });
   }
 
-  it('is in sync with the test import graph (node tools/gen-suite-map.mjs --check)', () => {
+  // Scans the whole test tree; ~3.5 s on an idle 2-vCPU VM and over the 5 s default once the VM is busy
+  // (agent-do-c26).
+  it('is in sync with the test import graph (node tools/gen-suite-map.mjs --check)', { timeout: 60_000 }, () => {
     const r = spawnSync('node', [join(REPO, 'tools', 'gen-suite-map.mjs'), '--check'], {
       cwd: REPO,
       encoding: 'utf8',
