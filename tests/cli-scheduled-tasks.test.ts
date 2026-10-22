@@ -254,6 +254,22 @@ describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
     expect(text).toContain('ok');
     expect(text).toContain('2026-06-19');  // last-run date
   });
+
+  it('status survives a hostile scheduler-status.json end to end (agent-do-24k)', async () => {
+    // The pre-0nf failure was a crash in the CLI layer: readStatus handed the
+    // raw parsed object to printStatus, whose new Date(lastRunAt).toISOString()
+    // threw RangeError on a hand-edited value. This test exercises the actual
+    // command path, not just readStatus.
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },
+    ]));
+    await writeFile(join(dir, 'scheduler-status.json'),
+      '{"sweep":{"runCount":"garbage","lastRunAt":"not-a-date"},"also-bad":true'); // malformed JSON too
+    const args = parseArgs(['scheduled-tasks', 'status', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    expect(text).toContain('sweep');
+    expect(text).toContain('never');  // no valid last-run to show
+  });
 });
 
 // ── helpers ─────────────────────────────────────────────────────────────
