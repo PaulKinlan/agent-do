@@ -144,23 +144,69 @@ const query_db = tool({
 
 ### Shell Command Tool
 
-```typescript
-import { execSync } from 'child_process';
+Don't hand-roll shell execution with `child_process` in a custom tool —
+use the built-in `createShellTool(sandbox)` factory (see the Shell tool
+section above). It requires an explicit sandbox connector and applies
+guards a hand-rolled tool usually misses: `<tool_output>` framing with
+prompt-injection redaction, per-stream byte caps, and per-call timeouts
+(a request above `maxTimeoutMs`, default 60s, is refused; below the cap
+the value is forwarded to the connector, which is expected to enforce
+it — the tool deliberately does not race a wall-clock timer).
 
-const run_command = tool({
-  description: 'Run a shell command and return its output.',
-  inputSchema: z.object({
-    command: z.string().describe('Shell command to run'),
-  }),
-  execute: async ({ command }) => {
-    try {
-      return execSync(command, { encoding: 'utf-8', timeout: 10000 });
-    } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  },
+```typescript
+import { createAgent, createShellTool, createJustBashSandbox } from 'agent-do';
+
+// Isolating in-process bash interpreter: no host shell, virtual
+// filesystem, network off unless you pass { allowNet: ... }.
+const sandbox = await createJustBashSandbox();
+
+const agent = createAgent({
+  id: 'runner',
+  name: 'Runner',
+  model: anthropic('claude-sonnet-4-5'),
+  tools: createShellTool(sandbox), // exposes one tool named `bash`
 });
 ```
+
+If you genuinely want commands on the host — e.g. the agent already
+runs inside Docker or a microVM that provides isolation — opt in
+explicitly with `createHostSandbox()`. It is **not** a security
+boundary, and commands get an allowlisted environment, not the parent's
+whole `process.env`:
+
+```typescript
+import { createShellTool, createHostSandbox } from 'agent-do';
+
+const tools = createShellTool(createHostSandbox());
+```
+
+There is no implicit fallback: `createShellTool()` with no sandbox
+throws rather than silently handing the model the host shell. See
+[`docs/sandbox.md`](../sandbox.md) for connectors, network policy, and
+the environment allowlist.
+
+### Custom tools that touch the outside world
+
+The built-in factories frame everything they return to the model. A
+custom `tool()` whose `execute` returns a plain string bypasses that
+framing, so if your tool handles untrusted text — fetched pages, log
+lines, command output, file contents — you own three guards:
+
+1. **Framing.** Keep untrusted content distinguishable from
+   instructions: return a `ToolResult` (exported from `agent-do`) with
+   a bounded `modelContent` for the model and a short `userSummary`
+   for the operator, and delimit quoted content (e.g. fenced in
+   markers) rather than interpolating it into instruction-like text.
+2. **Bounding.** Cap what you return and mark truncation: the
+   built-ins cap reads at 256 KiB and append
+   `... [truncated at N bytes of M]` (the shell tool's stdout/stderr
+   use the shorter `…[truncated]`). An unbounded return is a
+   context-window and cost problem, not just a correctness one.
+3. **Environment.** Never spawn host processes with the parent's whole
+   `process.env` — that exposes provider keys (`ANTHROPIC_API_KEY`,
+   `OPENAI_API_KEY`, …) to anything the model can run. Route execution
+   through `createShellTool` with a sandbox connector; the host
+   connector forwards only an allowlisted environment.
 
 ## Tool Permissions
 

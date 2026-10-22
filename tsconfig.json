@@ -9,6 +9,7 @@
     "declaration": true,
     "outDir": "dist",
     "rootDir": ".",
+    "incremental": true,
     "skipLibCheck": true,
     "types": ["node"]
   },

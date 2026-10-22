@@ -97,6 +97,7 @@ tests/sandbox/contract.ts	tests/sandbox/host.test.ts
 
 # --- the gate is code, and tests/gates.test.ts is its suite -------------------------------------------
 tools/*	tests/gates.test.ts
+scripts/*	tests/build-script.test.ts
 tests/gates.test.ts	tests/gates.test.ts
 tests/coverage-contract.json	tests/gates.test.ts
 

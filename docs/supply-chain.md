@@ -136,12 +136,16 @@ with the numbers, because they rot:
 | command | result | what it means |
 |---|---|---|
 | `npm audit --omit=dev` | **0 vulnerabilities** | the published package resolves nothing with a known advisory. **This is the release gate.** |
-| `npm audit` | **19 advisories, all dev-only** (15 high, 4 moderate, 0 critical) | release tooling only: they arrive through `@changesets/cli` (the only direct one) and its tree — `braces`, `micromatch`, `fast-glob`, `globby`, `js-yaml`, `argparse`, `sprintf-js`, `@manypkg/get-packages`, `read-yaml-file` |
+| `npm audit` | **22 advisories, all dev-only** (16 high, 6 moderate, 0 critical) | dev tooling only: they arrive through three trees — `@changesets/cli` (the only direct release-tool one) and its dependants `braces`, `micromatch`, `fast-glob`, `globby`, `js-yaml`, `argparse`, `sprintf-js`, `@manypkg/get-packages`, `read-yaml-file`; the docs generator `typedoc` via `markdown-it` (GHSA-vfgh-jcmw-g37q, GHSA-gfr2-rv44-r23c); and the test runner `vitest` / `@vitest/mocker` (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp) |
 
-Both figures are measured on 2026-10-18. The dev-tree advisories are triaged as
-**not shipped**: they live in the `@changesets/cli` release toolchain, which no
-consumer of agent-do installs, and the available fixes are semver-major bumps of a
-release tool. An unqualified "`npm audit` is clean" was what made this paragraph
+Both figures are measured on 2026-10-22. The dev-tree advisories are triaged as
+**not shipped**: they live in the `@changesets/cli` release toolchain, the
+`typedoc` docs generator, and the `vitest` test runner — none of which a
+consumer of agent-do installs. The `markdown-it` and `vitest` roots have
+in-range patch fixes available (`npm audit fix` plans markdown-it 14.3.3,
+vitest/@vitest/mocker 4.1.12); only the `@changesets/cli` tree still requires
+a semver-major bump (3.0.3), which is why these stay recorded here rather
+than applied. An unqualified "`npm audit` is clean" was what made this paragraph
 unverifiable — it read as the release gate and failed the moment a dev dependency
 gained an advisory.
 
@@ -186,6 +190,8 @@ npm run typecheck && npm run build && npm test
 ```
 
 If `npm ls @vercel/oidc` shows a new ancestry path or the package
-disappears, update the table above accordingly. `npm audit` is expected
-to come back **clean** — investigate anything it reports rather than
-accepting it as known noise.
+disappears, update the table above accordingly. `npm audit --omit=dev`
+(the release gate) is expected to come back **clean** — investigate
+anything it reports rather than accepting it as known noise. The full
+`npm audit` returns the known dev-only advisories recorded above;
+compare the counts against that table instead of expecting zero.
