@@ -10,19 +10,74 @@
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { z } from 'zod';
 import { acquireFileLock } from '../stores/file-lock.js';
 import type { FileLockOptions } from '../types.js';
 import type { StatusRecord, TaskStatus } from '../scheduled-tasks.js';
 
+/**
+ * One task's status entry, validated on read. scheduler-status.json lives
+ * in memoryDir, which an agent with file or memory write tools can modify,
+ * so the shape is enforced here rather than trusted: a hand-edited
+ * non-date `lastRunAt` used to reach `new Date(...).toISOString()` in the
+ * CLI's status printer and crash it with a RangeError, and a non-numeric
+ * `runCount` turned `runCount + 1` into a NaN that was persisted back
+ * (agent-do-0nf). zod's number type rejects NaN, the date refine rejects
+ * unparseable strings, and the parsed entry is rebuilt from these fields
+ * only, so unknown keys inside an entry are dropped rather than merged.
+ */
+const TaskStatusSchema = z.object({
+  lastRunAt: z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), 'lastRunAt must parse as a date')
+    .optional(),
+  lastDurationMs: z.number().optional(),
+  lastOutcome: z.enum(['ok', 'error']).optional(),
+  lastError: z.string().optional(),
+  runCount: z.number(),
+});
+
 export async function readStatus(statusFile: string): Promise<StatusRecord> {
+  let raw: string;
   try {
-    const raw = await readFile(statusFile, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as StatusRecord) : {};
+    raw = await readFile(statusFile, 'utf-8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw err;
   }
+  return parseStatusRecord(raw);
+}
+
+/**
+ * Validate a raw status file body. Invalid shape falls back to `{}`
+ * exactly like the ENOENT path: the file is a cache of observational
+ * counters, not truth, and `recordRun` re-persists a fresh record on the
+ * next run. Entries that fail {@link TaskStatusSchema} are dropped
+ * individually so one corrupted task can't discard the others' history.
+ */
+function parseStatusRecord(raw: string): StatusRecord {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {};
+  }
+  // Null-prototype result so hostile keys can't shadow Object.prototype
+  // members, and the explicit key skip mirrors routines/filesystem.ts
+  // (JSON.parse creates `__proto__` as an own property; the guard keeps
+  // it out of the result regardless).
+  const out: StatusRecord = Object.create(null);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      continue;
+    }
+    const entry = TaskStatusSchema.safeParse(value);
+    if (entry.success) out[key] = entry.data;
+  }
+  return out;
 }
 
 export async function writeStatus(statusFile: string, record: StatusRecord): Promise<void> {

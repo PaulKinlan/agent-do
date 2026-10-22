@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { matchesCron, validateScheduledTasks } from '../src/scheduled-tasks.js';
 import { readStatus, writeStatus, recordRun, runScheduledTask } from '../src/scheduled-tasks/fs.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -184,6 +184,60 @@ describe('status tracking', () => {
     expect(r2.runCount).toBe(2);
     expect(r2.lastOutcome).toBe('error');
     expect(r2.lastError).toBe('boom');
+  });
+
+  // readStatus validates shape: the status file lives in memoryDir, which
+  // an agent with write tools can modify (agent-do-0nf).
+  it('returns {} for malformed JSON instead of throwing', async () => {
+    const sf = join(dir, 'status.json');
+    await writeFile(sf, '{ not json', 'utf-8');
+    expect(await readStatus(sf)).toEqual({});
+  });
+
+  it('returns {} when the body is not a JSON object', async () => {
+    const bodies = ['42', '"a string"', 'null', '[1,2]'];
+    for (let i = 0; i < bodies.length; i++) {
+      const sf = join(dir, `status-${i}.json`);
+      await writeFile(sf, bodies[i], 'utf-8');
+      expect(await readStatus(sf)).toEqual({});
+    }
+  });
+
+  it('drops invalid entries but keeps valid siblings', async () => {
+    const sf = join(dir, 'status.json');
+    await writeFile(
+      sf,
+      JSON.stringify({
+        good: { runCount: 2, lastRunAt: '2026-10-22T00:00:00.000Z' },
+        badDate: { runCount: 1, lastRunAt: 'not-a-date' },
+        badType: { runCount: 'many' },
+        nullCount: { runCount: null },
+      }),
+      'utf-8',
+    );
+    const rec = await readStatus(sf);
+    expect(Object.keys(rec)).toEqual(['good']);
+    expect(rec.good?.runCount).toBe(2);
+  });
+
+  it('recordRun starts from 0 after a corrupt entry is dropped (no NaN)', async () => {
+    const sf = join(dir, 'status.json');
+    await writeFile(sf, JSON.stringify({ t: { runCount: 'garbage' } }), 'utf-8');
+    const r = await recordRun(sf, 't', { ok: true, durationMs: 5 });
+    expect(r.runCount).toBe(1);
+    expect((await readStatus(sf)).t?.runCount).toBe(1);
+  });
+
+  it('ignores prototype-pollution keys from a hostile file', async () => {
+    const sf = join(dir, 'status.json');
+    await writeFile(
+      sf,
+      '{"__proto__": {"runCount": 9}, "constructor": {"runCount": 9}}',
+      'utf-8',
+    );
+    const rec = await readStatus(sf);
+    expect(Object.keys(rec)).toEqual([]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
 
