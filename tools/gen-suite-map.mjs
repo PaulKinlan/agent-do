@@ -206,6 +206,7 @@ lines.push(
   '',
   '# --- the gate is code, and tests/gates.test.ts is its suite -------------------------------------------',
   'tools/*\ttests/gates.test.ts',
+  'scripts/*\ttests/build-script.test.ts',
   'tests/gates.test.ts\ttests/gates.test.ts',
   'tests/coverage-contract.json\ttests/gates.test.ts',
   '',

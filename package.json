@@ -53,7 +53,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/build.mjs",
     "docs": "typedoc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
