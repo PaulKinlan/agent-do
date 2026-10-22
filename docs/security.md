@@ -58,6 +58,30 @@ a defect to be fixed; it is what shell execution in a directory means, and the h
 - A connector that can *see* a symlink but cannot read it is refused rather than permitted, so a substrate with
   partial symlink support fails closed; the resolution rules are in `docs/sandbox.md`.
 
+## Caller-registered tools: guarded by the loop, not by the tool
+
+A tool you register yourself is a tool whose output **you** fetched: a web scraper, an HTTP call, a database query
+returning third-party rows. Those results used to reach the model as a bare string — no boundary marker, no
+injection-marker redaction, no size cap — while every built-in path (file, memory, workspace, shell, MCP,
+provider-native, `delegate_task`) was framed and capped. That was a hole in the boundary, not a difference in trust
+(`agent-do-3qb`).
+
+The loop now normalises every tool's return value into a `ToolResult` and, when a tool returns anything that is not
+already a `ToolResult`, puts it through the same guards: framed in `<tool_output tool="…" source="tool-return">`,
+injection markers replaced with `[redacted prompt-injection marker]`, forged `</tool_output>` tags escaped so content
+cannot close its own frame, and capped at 256 KB (`normaliseToolResult` in `tools/types.ts`).
+
+What that does and does not buy you:
+
+- **It is the same cost-raiser the built-in tools get, not a solution.** Redaction catches the obvious openers; a
+  hostile page phrased as ordinary results still reads as ordinary results.
+- **A tool that returns a `ToolResult` is trusted to have done its own guarding** and is passed through untouched.
+  That is deliberate: it is how the built-in tools avoid being framed twice, and it is the escape hatch for a tool
+  whose output is structured and cannot carry a text frame. If such a tool renders third-party text into
+  `modelContent` without calling `wrapForModel` / `sanitiseUntrustedText`, it has opted out of the boundary.
+- **`userSummary` is not framed.** The operator view keeps the tool's raw text on purpose — logs need the
+  diagnostics, and an operator reading an injection attempt is how it gets reported.
+
 ## Provider-native tools: guarded as far as the provider protocol allows
 
 Provider packages ship **provider-executed** tools — Google `googleSearch` / `urlContext`, Anthropic `webSearch_*` /

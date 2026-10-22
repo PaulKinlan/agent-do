@@ -47,6 +47,9 @@ const agent = createAgent({
           condition: ['Sunny', 'Cloudy', 'Rainy', 'Windy'][Math.floor(Math.random() * 4)],
         };
         console.log(`         → Tool returned: ${JSON.stringify(data)}`);
+        // A bare return is content-guarded for the model before it arrives: framed in
+        // <tool_output tool="get_weather" source="tool-return">, injection markers redacted, capped at 256 KB.
+        // Return a ToolResult instead if you want to control that yourself (see examples/02 notes in the README).
         return JSON.stringify(data);
       },
     }),

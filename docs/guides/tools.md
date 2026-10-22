@@ -107,6 +107,13 @@ The workspace tools provide six tools:
 
 ## Custom Tool Examples
 
+Whatever a custom tool returns, the loop guards it before the model sees it. A bare string (or any JSON-able
+value) is framed in `<tool_output tool="…" source="tool-return">`, injection markers are redacted, forged
+boundary tags are escaped and the result is capped at 256 KB — the same treatment `read_file` and friends get
+(`agent-do-3qb`, [security.md](../security.md#caller-registered-tools-guarded-by-the-loop-not-by-the-tool)).
+Your tool's raw text stays in `userSummary` for operator logs. Return a `ToolResult` instead when your tool has
+already sanitised its own output: it is passed through untouched.
+
 ### Web Scraper Tool
 
 ```typescript

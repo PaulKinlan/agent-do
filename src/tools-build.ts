@@ -39,7 +39,10 @@ export type ToolResultCache = Map<string, ToolResult>;
  *   2. Calls the tool's `execute`.
  *   3. Normalises the return value into a {@link ToolResult} so every tool
  *      has both a model-facing view (`modelContent`) and an operator-facing
- *      view (`userSummary`) without having to know the split.
+ *      view (`userSummary`) without having to know the split. A return value
+ *      that is not already a `ToolResult` is also content-guarded — framed in
+ *      `<tool_output>` boundary tags, injection-redacted and capped — because a
+ *      caller-registered tool's output is third-party text (agent-do-3qb).
  *   4. Stashes the full ToolResult in `resultCache`, keyed by the AI SDK's
  *      `toolCallId`, so the stream layer can enrich the `tool-result`
  *      progress event with `summary`, `data`, and `blocked`.
@@ -217,7 +220,11 @@ function wrapToolWithPermissions(
       const raw = await (exec as Function)(effectiveArgs, options);
       const durationMs = Date.now() - startTime;
 
-      const normalised = normaliseToolResult(raw);
+      // `tool: name` is what makes a caller-registered tool's bare return value
+      // safe: it is framed, injection-redacted and capped rather than handed to
+      // the model as-is (agent-do-3qb). Built-in tools return a ToolResult and
+      // pass through untouched.
+      const normalised = normaliseToolResult(raw, { tool: name });
 
       // Post-tool-use hook — receives the normalised ToolResult so consumers
       // have a consistent shape. (Raw returns still flow through via

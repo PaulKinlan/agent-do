@@ -14,6 +14,15 @@
  * `ToolResult` for full control.
  */
 
+import { wrapForModel } from './content-guards.js';
+
+/**
+ * `source` attribute stamped on the `<tool_output>` frame when the guards wrap
+ * a tool's own return value (agent-do-3qb) — the counterpart of
+ * `PROVIDER_OUTPUT_SOURCE` in `provider-output-guard.ts`.
+ */
+export const TOOL_RETURN_SOURCE = 'tool-return';
+
 export interface ToolResult {
   /**
    * What the model sees. Safe to include literal content from files, but the
@@ -38,6 +47,10 @@ export interface ToolResult {
    *   *blocked*  -> { blocked: true, reason, rule }
    *   *error*    -> { error: true, redactedMarkerCount, neutralisedDelimiterCount,
    *                   truncated, totalBytes }  (every MCP error path)
+   *   *custom*   -> { guarded: true, truncated, redactedMarkerCount,
+   *                   neutralisedDelimiterCount, totalBytes }  (a caller-registered
+   *                   tool that returned a bare value instead of a ToolResult — see
+   *                   normaliseToolResult)
    *
    * The two redaction counts are not synonyms and both are canonical:
    * `redactedMarkerCount` counts injection phrases redacted,
@@ -64,22 +77,79 @@ export function isToolResult(value: unknown): value is ToolResult {
 }
 
 /**
+ * Options for {@link normaliseToolResult}.
+ *
+ * `tool` is the name of the tool whose return value is being normalised. The
+ * loop always supplies it, so every caller-registered tool's output is
+ * content-guarded; direct callers may omit it to get the raw two-view
+ * normalisation without a frame (that path never reaches a model by itself).
+ */
+export interface NormaliseOptions {
+  /** Tool name, stamped on the `<tool_output>` frame and used in `data`. */
+  tool?: string;
+  /** Cap override for the guard; defaults to `DEFAULT_MAX_READ_BYTES` (256 KB). */
+  maxBytes?: number;
+}
+
+/**
  * Normalise a tool's raw return value into a ToolResult.
  *
- * - `ToolResult` passes through unchanged.
- * - A plain string becomes `{ modelContent: s, userSummary: s }`.
- * - Anything else is JSON-stringified for both views.
+ * - `ToolResult` passes through unchanged: the tool has taken responsibility
+ *   for its own guards (every built-in tool does).
+ * - Anything else is stringified (a plain string as-is, everything else via
+ *   `JSON.stringify`), and then — when `opts.tool` is supplied — put through
+ *   the same content guards the built-in tools use: framed in
+ *   `<tool_output tool="…" source="tool-return">` boundary tags, injection
+ *   markers redacted, forged boundary tags escaped, and capped at 256 KB.
  *
- * This keeps every existing tool (library consumers, user-authored tools)
- * working without changes. Tools that want the rich behaviour opt in by
- * returning a `ToolResult` explicitly.
+ * The guard exists because a caller-registered tool (a web scraper, an HTTP
+ * fetch, a third-party API wrapper) returns third-party text: before
+ * agent-do-3qb that text reached the model with no boundary and no redaction,
+ * unlike every built-in output path. A tool that has *already* sanitised its
+ * output can return a `ToolResult` and is passed through untouched — that is
+ * the escape hatch, not a config flag.
+ *
+ * `userSummary` deliberately keeps the tool's own text so operator logs keep
+ * the diagnostics (the frame and redaction are for the model's context).
  */
-export function normaliseToolResult(raw: unknown): ToolResult {
+export function normaliseToolResult(
+  raw: unknown,
+  opts?: NormaliseOptions,
+): ToolResult {
   if (isToolResult(raw)) return raw;
-  if (typeof raw === 'string') return { modelContent: raw, userSummary: raw };
-  // JSON.stringify returns `undefined` for undefined / functions / symbols,
-  // and throws on circular structures. Fall through to String() in either
-  // case so the `ToolResult` contract (both fields are strings) is upheld.
+
+  const text = stringifyToolReturn(raw);
+  const tool = opts?.tool;
+  if (!tool) return { modelContent: text, userSummary: text };
+
+  const wrapped = wrapForModel(text, {
+    tool,
+    source: TOOL_RETURN_SOURCE,
+    ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+  });
+
+  return {
+    modelContent: wrapped.content,
+    userSummary: text,
+    data: {
+      guarded: true,
+      truncated: wrapped.truncated,
+      totalBytes: wrapped.totalBytes,
+      redactedMarkerCount: wrapped.redactedMarkerCount,
+      neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+    },
+  };
+}
+
+/**
+ * Render a non-`ToolResult` return value as text.
+ *
+ * JSON.stringify returns `undefined` for undefined / functions / symbols, and
+ * throws on circular structures. Fall through to String() in either case so
+ * the `ToolResult` contract (both fields are strings) is upheld.
+ */
+function stringifyToolReturn(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
   let text: string | undefined;
   try {
     const json = JSON.stringify(raw);
@@ -87,6 +157,5 @@ export function normaliseToolResult(raw: unknown): ToolResult {
   } catch {
     /* fall through to String() */
   }
-  if (text === undefined) text = String(raw);
-  return { modelContent: text, userSummary: text };
+  return text === undefined ? String(raw) : text;
 }
