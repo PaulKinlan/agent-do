@@ -212,6 +212,8 @@ describe('status tracking', () => {
         badDate: { runCount: 1, lastRunAt: 'not-a-date' },
         badType: { runCount: 'many' },
         nullCount: { runCount: null },
+        fractionalCount: { runCount: 2.5 },
+        negativeCount: { runCount: -3 },
       }),
       'utf-8',
     );

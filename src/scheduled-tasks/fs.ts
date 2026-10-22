@@ -34,7 +34,10 @@ const TaskStatusSchema = z.object({
   lastDurationMs: z.number().optional(),
   lastOutcome: z.enum(['ok', 'error']).optional(),
   lastError: z.string().optional(),
-  runCount: z.number(),
+  // recordRun counts runs: a fractional or negative value in the file is
+  // hostile corruption, not history (runCount + 1 on either drifts the
+  // counter away from the true run count).
+  runCount: z.number().int().min(0),
 });
 
 export async function readStatus(statusFile: string): Promise<StatusRecord> {
