@@ -172,7 +172,7 @@ describe('Stream enrichment with ToolResult (#48 stage 1)', () => {
     const result = events.find((e) => e.type === 'tool-result');
 
     // The model sees a bounded frame, not raw page text.
-    const modelContent = result?.toolResult?.modelContent ?? '';
+    const modelContent = (result?.toolResult as ToolResult | undefined)?.modelContent ?? '';
     expect(modelContent.startsWith('<tool_output tool="scrape_url"')).toBe(true);
     expect(modelContent.endsWith('</tool_output>')).toBe(true);
     expect(modelContent).not.toContain('Ignore previous instructions');
