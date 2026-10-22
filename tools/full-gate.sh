@@ -6,9 +6,13 @@
 #   * never an implementer lane while iterating — that is tools/fast-gate.sh / `fleet-check --fast` (R2).
 #     `bin/fleet-check` enforces this: a non-merger lane asking for the full gate is refused unless it
 #     passes --full.
-# Budget: <= 300 s median on 8 vCPU (R1). Measured on this project 2026-10-12 on a 2-vCPU VM (nproc 2,
-# i.e. half the standard's assumed shape, so these are upper bounds): 41.5 s (build 13.8 s, vitest 21.0 s,
-# evals 1.4 s). Record the new number here when a change moves it materially (R4).
+# Budget: <= 300 s median on 8 vCPU (R1). Measured on this project 2026-10-22 on a 2-vCPU VM (nproc 2,
+# i.e. half the standard's assumed shape, so these are upper bounds): 313 s of gate wall at 4 workers
+# (vitest 268 s, import 429 s summed across workers, evals ~1 s), against 356 s of gate wall at one worker
+# (vitest 314 s) — the 4-worker gain on the WHOLE suite set is small, because this gate is CPU-bound on two
+# cores; the gain is large on the wide-but-not-full selections the fast gate runs, which is where
+# agent-do-664 mattered. The 2026-10-12 number here (41.5 s) is no longer true and is kept only in
+# docs/speed.md §4 as history. Record the new number here when a change moves it materially (R4).
 #
 # It is also the independent oracle the fast gate cannot be: the fast gate proves that every changed file
 # HAD a suite (fleet-1n0z mode (a)). It cannot prove that the suites it selected were ALL of them (mode

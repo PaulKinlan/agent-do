@@ -514,6 +514,28 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
   });
 });
 
+describe('tools/fast-gate.sh — the runner gets a worker count (agent-do-664)', () => {
+  // The bug this pins is the shape, not a value: `FAST_GATE_JOBS` was declared, defaulted and documented
+  // in the script for months while nothing passed it to the runner, so every suite ran on one fork on a
+  // 2-vCPU VM and the fast tier could not finish inside its own kill window. A text assertion is weak on
+  // purpose here — the alternative is spawning a gate to observe vitest's argv, which costs a gate run to
+  // prove a string is wired up.
+  const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
+
+  it('builds --maxWorkers from FAST_GATE_JOBS', () => {
+    expect(gate).toMatch(/WORKERS_ARG="--maxWorkers=\$JOBS"/);
+  });
+
+  it('passes it to the runner on BOTH paths, the setsid one and the fallback', () => {
+    expect(gate).toMatch(/\$RUNNER \$WORKERS_ARG/);
+    expect(gate).toMatch(/\$FAST_GATE_RUNNER \$WORKERS_ARG/);
+  });
+
+  it('stays silent for an explicitly empty FAST_GATE_JOBS, so a non-vitest runner is possible', () => {
+    expect(gate).toMatch(/^\s*''\) ;;$/m);
+  });
+});
+
 describe('tools/suite-map.tsv — the committed map is a true claim', () => {
   function mapRows(): { pattern: string; suites: string[] }[] {
     const text = readFileSync(join(REPO, 'tools', 'suite-map.tsv'), 'utf8');
