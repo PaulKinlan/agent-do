@@ -22,11 +22,19 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ROOTS: string[] = [];
 
 /**
+ * Every test in this file that spawns a gate runs bash, node and a stub runner: the cost belongs to the
+ * machine, not to the assertion. Vitest's 5 s default turned three of them red in a full gate on this
+ * 2-vCPU VM while they pass in under a second alone (agent-do-c26), so each describe that spawns declares
+ * its own window. This is the file-level policy, not a per-test exception: a test whose failure mode is
+ * "the VM was busy" cannot be a gate.
+ */
+
+/**
  * Fixture teardown has to stop processes as well as delete directories, and it has to do it before the
  * directory goes away: the path IS the handle. The probe below is bounded on purpose - a fix for leaks
  * must not become the next leak, so the test never depends on the code under test to end it.
  */
-describe('fixture teardown', () => {
+describe('fixture teardown', { timeout: 120_000 }, () => {
   it('kills a process still running out of the fixture root', async () => {
     const root = mkdtempSync(join(tmpdir(), 'agent-do-gates-'));
     ROOTS.push(root);
@@ -323,7 +331,7 @@ function unmappedLines(out: string): string[] {
     .map((l) => l.slice('fast-gate: unmapped: '.length));
 }
 
-describe('tools/fast-gate.sh — affected-only selection', () => {
+describe('tools/fast-gate.sh — affected-only selection', { timeout: 120_000 }, () => {
   it('runs EVERY suite the map names for a changed source file, and reports each positively', () => {
     const fx = fixture();
     const { status, out } = runGate(fx, ['--changed', 'src/a.ts']);
@@ -473,7 +481,9 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
     expect(status).toBe(0);
   });
 
-  it('refuses to guess when the map is missing, and when a mapped suite does not exist', () => {
+  // Spawns two real gate runs, each of which forks bash and node: the cost is the machine's, not the
+  // assertion's, so it must not be measured against vitest's 5 s default (agent-do-c26).
+  it('refuses to guess when the map is missing, and when a mapped suite does not exist', { timeout: 60_000 }, () => {
     const noMap = fixture({ map: '' });
     rmSync(join(noMap.repo, 'tools', 'suite-map.tsv'));
     const missingMap = runGate(noMap, ['--changed', 'src/a.ts']);
@@ -487,7 +497,7 @@ describe('tools/fast-gate.sh — affected-only selection', () => {
   });
 });
 
-describe('tools/fast-gate.sh — kill windows', () => {
+describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
   it('bounds one suite well inside the outer fast-tier kill window', () => {
     // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
     // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
@@ -516,7 +526,9 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
       });
   }
 
-  it('is in sync with the test import graph (node tools/gen-suite-map.mjs --check)', () => {
+  // Scans the whole test tree; ~3.5 s on an idle 2-vCPU VM and over the 5 s default once the VM is busy
+  // (agent-do-c26).
+  it('is in sync with the test import graph (node tools/gen-suite-map.mjs --check)', { timeout: 60_000 }, () => {
     const r = spawnSync('node', [join(REPO, 'tools', 'gen-suite-map.mjs'), '--check'], {
       cwd: REPO,
       encoding: 'utf8',
@@ -584,7 +596,7 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
  * until fleet-heavy reaped them. These cases pin the cleanup: the scratch directory goes away only after
  * the suite processes do, and a descendant of a runner cannot outlive the run.
  */
-describe('tools/fast-gate.sh — cleanup when the run is killed', () => {
+describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120_000 }, () => {
   /** How long the run gets before the outer window fires; the stub below never finishes on its own. */
   const OUTER_WINDOW_MS = 3_000;
 
@@ -665,7 +677,7 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', () => {
   }, 30_000);
 });
 
-describe('tools/fast-gate.sh — a suite that leaves a process behind', () => {
+describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeout: 120_000 }, () => {
   it('reaps a descendant of a runner that exited successfully, and still reports the verdict', async () => {
     // This is the shape fleet-heavy caught on a PASSING run (agent-do-qmx): three vitest processes held the
     // heavy slot after the job finished. The runner here exits 0 and leaves a descendant, which is the part the
@@ -719,7 +731,7 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', () => {
   }, 30_000);
 });
 
-describe('tools/fast-gate.sh — reaping must not depend on helper processes', () => {
+describe('tools/fast-gate.sh — reaping must not depend on helper processes', { timeout: 120_000 }, () => {
   it('reaps the suite tree even when pgrep and pkill fail', async () => {
     // The measured failure this guards (agent-do-qmx round 3): the reaper shelled out to `pgrep`/`pkill` with every
     // failure swallowed, so under contention — a run sharing the VM with the merger's full gate — those forks
@@ -778,7 +790,7 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', (
   }, 30_000);
 });
 
-describe('tools/fast-gate.sh — teardown before the caller checks the slot', () => {
+describe('tools/fast-gate.sh — teardown before the caller checks the slot', { timeout: 120_000 }, () => {
   it('does not return while a killed descendant is still exiting', async () => {
     // agent-do-qmx, P2 from the pre-landing review: fleet-heavy checks the slot holders the instant the job
     // ends, and a descendant caught mid-exit there is reported as a leaked process (measured: one pid on a run
@@ -822,7 +834,7 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', ()
   }, 30_000);
 });
 
-describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
+describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeout: 120_000 }, () => {
   it('prints a fast-gate: unknown marker when the outer bound kills it', async () => {
     // agent-do-wot (found by rev-45 reviewing agent-do-qmx): the TERM path reaped the tree but exited without
     // saying anything, so the coverage extractor saw no result at all — the exact failure this bead exists to
@@ -856,7 +868,7 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', () => {
   }, 45_000);
 });
 
-describe('tools/fast-gate.sh — a bound kill during the static step', () => {
+describe('tools/fast-gate.sh — a bound kill during the static step', { timeout: 120_000 }, () => {
   it('prints the unknown marker and reaps the static step', async () => {
     // rev-48, review round 3: the traps were installed AFTER STATIC_CMD, so a bound kill during the static step
     // emitted no marker at all (the same defect one stage earlier) and left the step's process holding the heavy
@@ -896,7 +908,7 @@ describe('tools/fast-gate.sh — a bound kill during the static step', () => {
   }, 45_000);
 });
 
-describe('the gate re-checks its own generated metadata (agent-do-s5u)', () => {
+describe('the gate re-checks its own generated metadata (agent-do-s5u)', { timeout: 120_000 }, () => {
   it('runs the suite-map sync check in the static step, before the build', () => {
     // A stale map is INVISIBLE to the fast tier: tests/gates.test.ts only runs when the map itself is among the
     // changed files, so a branch that adds an import edge selects a suite set which EXCLUDES the test that would
@@ -914,7 +926,7 @@ describe('the gate re-checks its own generated metadata (agent-do-s5u)', () => {
   });
 });
 
-describe('the suite map sees suites that read source as DATA (agent-do-9im)', () => {
+describe('the suite map sees suites that read source as DATA (agent-do-9im)', { timeout: 120_000 }, () => {
   // The import graph cannot see a `readFileSync`, so an invariant suite that asserts on the TEXT of source files
   // used to be invisible to affected-only selection: the fast gate passed while `cli-answer-stream.test.ts` failed on
   // `src/cli/eval-cmd.ts`, and the reviewer caught it rather than the gate. Suites now declare what they read with

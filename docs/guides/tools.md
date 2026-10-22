@@ -107,6 +107,13 @@ The workspace tools provide six tools:
 
 ## Custom Tool Examples
 
+Whatever a custom tool returns, the loop guards it before the model sees it: a bare string (or any JSON-able
+value) is framed in `<tool_output tool="…" source="tool-return">`, injection markers are redacted, forged
+boundary tags are escaped and the result is capped at 256 KB — the same treatment `read_file` and friends get
+(`agent-do-3qb`, [security.md](../security.md#caller-registered-tools-guarded-by-the-loop-not-by-the-tool)).
+Your tool's raw text stays in `userSummary` for operator logs. The guards you still own are the ones the loop
+cannot make for you — see [Custom tools that touch the outside world](#custom-tools-that-touch-the-outside-world).
+
 ### Web Scraper Tool
 
 ```typescript
@@ -187,21 +194,29 @@ the environment allowlist.
 
 ### Custom tools that touch the outside world
 
-The built-in factories frame everything they return to the model. A
-custom `tool()` whose `execute` returns a plain string bypasses that
-framing, so if your tool handles untrusted text — fetched pages, log
-lines, command output, file contents — you own three guards:
+A custom `tool()` whose `execute` returns a plain string is guarded by the
+loop, not by you: framing, injection-marker redaction, boundary-tag
+escaping and the 256 KiB cap are applied before the model sees the
+result, exactly as for the built-in factories
+([security.md](../security.md#caller-registered-tools-guarded-by-the-loop-not-by-the-tool)).
+So for untrusted text — fetched pages, log lines, command output, file
+contents — the guards you still own are the ones the loop cannot make
+for you:
 
-1. **Framing.** Keep untrusted content distinguishable from
-   instructions: return a `ToolResult` (exported from `agent-do`) with
-   a bounded `modelContent` for the model and a short `userSummary`
-   for the operator, and delimit quoted content (e.g. fenced in
-   markers) rather than interpolating it into instruction-like text.
-2. **Bounding.** Cap what you return and mark truncation: the
-   built-ins cap reads at 256 KiB and append
-   `... [truncated at N bytes of M]` (the shell tool's stdout/stderr
-   use the shorter `…[truncated]`). An unbounded return is a
-   context-window and cost problem, not just a correctness one.
+1. **Don't opt out of framing by accident.** A `ToolResult` (exported
+   from `agent-do`) is passed through untouched, deliberately: that is
+   how the built-ins avoid being framed twice. If you return one for
+   output you fetched, you have taken over both framing and bounding —
+   put third-party text through `wrapForModel` /
+   `sanitiseUntrustedText` (also exported from `agent-do`), keep
+   `modelContent` bounded and mark truncation the way the built-ins do
+   (`... [truncated at N bytes of M]`, or the shell tool's shorter
+   `…[truncated]`), and keep `userSummary` short. An unbounded return
+   is a context-window and cost problem, not just a correctness one.
+2. **Treat redaction as a cost-raiser, not a solution.** It catches the
+   obvious openers; a hostile page phrased as ordinary results still
+   reads as ordinary results. Content that drives a consequential
+   action still needs a check that does not come from the content.
 3. **Environment.** Never spawn host processes with the parent's whole
    `process.env` — that exposes provider keys (`ANTHROPIC_API_KEY`,
    `OPENAI_API_KEY`, …) to anything the model can run. Route execution

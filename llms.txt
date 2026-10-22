@@ -119,6 +119,10 @@
 - `ToolResult` — `{ summary, data?, ... }`; tools may return one instead of a bare string
 - `normaliseToolResult(value): ToolResult` — coerce any tool return into the structured shape
 - `isToolResult(value): boolean` — type guard
+- A tool's **bare return** (string or JSON-able value) is content-guarded before the model sees it: framed in `<tool_output tool="…" source="tool-return">`, injection markers redacted, forged boundary tags escaped, capped at 256 KB (`agent-do-3qb`). `userSummary` keeps the raw text; `data` gets `guarded`, `truncated`, `redactedMarkerCount`, `neutralisedDelimiterCount`
+- Returning a `ToolResult` passes through untouched — the escape hatch for a tool that sanitises its own output
+- `wrapForModel(body, { tool, path? | command? | source?, maxBytes? }): WrappedContent` — the frame/redact/cap guard, exported for custom tools
+- `sanitiseUntrustedText(body): SanitisedUntrustedText` — the redaction half, for payloads that cannot be framed
 - `tool-result` ProgressEvents carry `summary` and `data` when the tool returned a ToolResult
 
 ## File Locking (#15 Tier 1)

@@ -379,7 +379,7 @@ describe('realpathSafe agrees with fs.realpath on a host sandbox (resolution ora
  * message) and checks 1-6 as predicates rather than as cases someone thought to write down. A new finding in
  * this function should become an assertion or a generator row here - not another review round.
  */
-describe('realpathSafe on generated symlink graphs (agent-do-zuy)', () => {
+describe('realpathSafe on generated symlink graphs (agent-do-zuy)', { timeout: 120_000 }, () => {
   /** Deterministic PRNG, so a failing graph is reproducible from the seed printed in its assertion message. */
   const mulberry32 = (seed: number): (() => number) => {
     let a = seed >>> 0;

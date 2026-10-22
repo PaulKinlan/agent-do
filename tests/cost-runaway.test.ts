@@ -27,7 +27,12 @@ function baseConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 
 // ─── #27 M-03: tool-call limits (integration through the loop) ─────────
 
-describe('M-03: tool-call rate limiting', () => {
+// These tests drive the real loop against a mock model for up to ten iterations, so their cost is a
+// function of how many suites are competing for the VM's 2 vCPUs, not of the behaviour under test.
+// Vitest's 5 s default made the suite red in a parallel gate run while it passed solo in 6 s of test
+// time (agent-do-c26, docs/speed.md §6 — a gate that can fail for reasons outside the diff is a
+// defect); the timeout is raised so the assertion, not the machine, decides.
+describe('M-03: tool-call rate limiting', { timeout: 30_000 }, () => {
   it('enforces maxToolCalls across the whole run', async () => {
     const executeFn = vi.fn().mockResolvedValue('ok');
     const config = baseConfig({
@@ -319,7 +324,7 @@ describe('M-07: buildOnStepEnd', () => {
 // behind shared budgets: several agents pointing at one tracker share one
 // ledger, so sub-agent spend counts against the same guards.
 
-describe('injected usage tracker (AgentConfig.usage.tracker)', () => {
+describe('injected usage tracker (AgentConfig.usage.tracker)', { timeout: 30_000 }, () => {
   const pricing: PricingTable = {
     'priced-model': { input: 1, output: 2 },
   };

@@ -390,6 +390,31 @@ A single shell-exec tool wired to a `SandboxApi`. The sandbox is required: pass 
 
 **Returns one tool** named after `opts.name` (default `bash`).
 
+### Custom tool return values are content-guarded
+
+Every tool the loop executes is normalised into a `ToolResult`. A tool that returns anything other than a
+`ToolResult` — the common case for a caller-registered tool, e.g. a web scraper returning page text — has its
+value put through the same guards the built-in tools apply before it reaches the model: framed in
+`<tool_output tool="…" source="tool-return">` boundary tags, `ignore previous instructions`-style markers
+replaced with `[redacted prompt-injection marker]`, forged `</tool_output>` tags escaped so content cannot close
+its own frame, and capped at 256 KB. `userSummary` keeps the tool's raw text so operator logs stay diagnostic,
+and `data` carries `{ guarded: true, truncated, totalBytes, redactedMarkerCount, neutralisedDelimiterCount }`.
+
+A tool that has already sanitised its own output returns a `ToolResult` and is passed through untouched — that is
+the escape hatch. To apply the same guards inside your own tool, use the exported helpers:
+
+### `wrapForModel(body: string, opts: WrapOptions): WrappedContent`
+
+Frame `body` in `<tool_output>` boundary tags, redact injection markers, escape forged boundary tags and cap it.
+`opts` is `{ tool, path? | command? | source?, maxBytes? }`; at least one origin is required so a marker always
+names where the content came from. Returns `{ content, truncated, includedBytes, totalBytes, redactedMarkerCount,
+neutralisedDelimiterCount }` — `content` is what goes in `modelContent`, the rest in `data`.
+
+### `sanitiseUntrustedText(body: string): SanitisedUntrustedText`
+
+The same two transforms without the frame, for a payload you cannot wrap without breaking its schema (a
+provider-shaped or structured result). Returns `{ text, redactedMarkerCount, neutralisedDelimiterCount }`.
+
 ---
 
 ## Usage Tracking

@@ -433,7 +433,20 @@ const myTool = tool({
 });
 ```
 
-String returns still work and are normalised automatically.
+String returns still work. They are **content-guarded for the model**: the
+loop frames them in `<tool_output tool="…" source="tool-return">`
+boundary tags, replaces `ignore previous instructions`-style markers,
+escapes forged `</tool_output>` tags, and caps them at 256 KB — the same
+treatment the built-in tools' output gets. Your raw string is still what
+operators see in `userSummary`, and `data` carries the guard counters
+(`guarded`, `truncated`, `redactedMarkerCount`, `neutralisedDelimiterCount`).
+
+Returning a `ToolResult` yourself is the escape hatch: it is passed through
+untouched, so a tool that has already sanitised its own output does not get
+re-framed. The frame/redaction helpers are exported if you want them inside
+your own `ToolResult` — `wrapForModel(body, { tool, source })` for text and
+`sanitiseUntrustedText(body)` when you cannot add a frame without breaking a
+payload's shape ([docs/api-reference.md](docs/api-reference.md#custom-tool-return-values-are-content-guarded)).
 
 ### Piping
 
@@ -1757,6 +1770,9 @@ const result = await runEvals(suite, { output: 'silent' });
 | `InMemoryMemoryStore` | class | In-memory store (testing/prototyping) |
 | `FilesystemMemoryStore` | class | Node.js filesystem store (persistent) |
 | `createOrchestrator` | `(config) => Orchestrator` | Create a multi-agent orchestrator |
+| `normaliseToolResult` | `(value) => ToolResult` | Coerce any tool return into the structured shape |
+| `wrapForModel` | `(body, opts) => WrappedContent` | Frame text in `<tool_output>`, redact injection markers, cap bytes — the guard the built-in tools use |
+| `sanitiseUntrustedText` | `(body) => SanitisedUntrustedText` | The same two transforms as `wrapForModel` without the frame, for structured payloads |
 | `parseSlashCommand` | `(input) => { name, rest } \| null` | Parse a `/<name>` slash command from a task string |
 | `unknownSlashCommandMessage` | `(name, commands) => string` | Build the "unknown command" listing |
 | `validateSlashCommands` | `(commands) => string \| null` | Validate an `AgentConfig.slashCommands` map |

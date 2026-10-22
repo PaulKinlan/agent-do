@@ -77,6 +77,18 @@ export type { CreateShellToolOptions } from './tools/shell-tool.js';
 export type { ToolResult } from './tools/types.js';
 export { normaliseToolResult, isToolResult } from './tools/types.js';
 
+// Content guards (agent-do-3qb) — the frame + redaction + cap helpers every
+// built-in tool applies before content reaches the model. Exported so a custom
+// tool can apply the same guards to a payload it shapes itself and return the
+// result as a `ToolResult`.
+export { wrapForModel, sanitiseUntrustedText } from './tools/content-guards.js';
+export type {
+  WrapOptions,
+  WrapOrigin,
+  WrappedContent,
+  SanitisedUntrustedText,
+} from './tools/content-guards.js';
+
 // Usage
 export {
   UsageTracker,

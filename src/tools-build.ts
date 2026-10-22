@@ -11,12 +11,58 @@ import type { AgentConfig } from './types.js';
 import { evaluatePermission } from './permissions.js';
 import { createSkillTools } from './skills.js';
 import { createRoutineTools } from './routines.js';
-import { normaliseToolResult, type ToolResult } from './tools/types.js';
+import { normaliseToolResult, isToolResult, type ToolResult } from './tools/types.js';
+import { wrapForModel } from './tools/content-guards.js';
 import {
   sanitiseProviderToolOutput,
   sanitiseMappedProviderOutput,
   type ModelToolOutput,
 } from './tools/provider-output-guard.js';
+
+/**
+ * `source` attribute stamped on the `<tool_output>` frame when the loop guards a
+ * tool's own return value (agent-do-3qb) — the counterpart of
+ * `PROVIDER_OUTPUT_SOURCE` in `tools/provider-output-guard.ts`.
+ */
+export const TOOL_RETURN_SOURCE = 'tool-return';
+
+/**
+ * Put a tool return that is **not** already a `ToolResult` through the content
+ * guards (agent-do-3qb).
+ *
+ * A caller-registered tool — a web scraper, an HTTP fetch, a database query
+ * returning third-party rows — returns text nobody in this process wrote. Every
+ * built-in output path framed that text in `<tool_output>` boundary tags,
+ * redacted injection markers and capped the bytes; a plain string return did
+ * not, so it was the one tool surface entering model context unframed and
+ * unredacted.
+ *
+ * `userSummary` keeps the tool's own text: operator logs want the diagnostics,
+ * and an operator reading an injection attempt is how it gets reported. The
+ * guard counters land in `data` for the same reason.
+ *
+ * A tool that returns a `ToolResult` is trusted to have done its own guarding
+ * and never reaches this function — that is how the built-ins avoid being framed
+ * twice, and the escape hatch for a tool whose output cannot carry a text frame.
+ */
+export function guardToolReturn(normalised: ToolResult, tool: string): ToolResult {
+  const wrapped = wrapForModel(normalised.modelContent, {
+    tool,
+    source: TOOL_RETURN_SOURCE,
+  });
+
+  return {
+    modelContent: wrapped.content,
+    userSummary: normalised.userSummary,
+    data: {
+      guarded: true,
+      truncated: wrapped.truncated,
+      totalBytes: wrapped.totalBytes,
+      redactedMarkerCount: wrapped.redactedMarkerCount,
+      neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+    },
+  };
+}
 
 
 /**
@@ -39,7 +85,10 @@ export type ToolResultCache = Map<string, ToolResult>;
  *   2. Calls the tool's `execute`.
  *   3. Normalises the return value into a {@link ToolResult} so every tool
  *      has both a model-facing view (`modelContent`) and an operator-facing
- *      view (`userSummary`) without having to know the split.
+ *      view (`userSummary`) without having to know the split. A return value
+ *      that is not already a `ToolResult` is also content-guarded — framed in
+ *      `<tool_output>` boundary tags, injection-redacted and capped — because a
+ *      caller-registered tool's output is third-party text (agent-do-3qb).
  *   4. Stashes the full ToolResult in `resultCache`, keyed by the AI SDK's
  *      `toolCallId`, so the stream layer can enrich the `tool-result`
  *      progress event with `summary`, `data`, and `blocked`.
@@ -217,7 +266,12 @@ function wrapToolWithPermissions(
       const raw = await (exec as Function)(effectiveArgs, options);
       const durationMs = Date.now() - startTime;
 
-      const normalised = normaliseToolResult(raw);
+      // A return that is not already a ToolResult is a caller-registered tool's
+      // own value: frame it, redact it and cap it before the model sees it
+      // (agent-do-3qb). Built-in tools return a ToolResult and are untouched.
+      const normalised = isToolResult(raw)
+        ? raw
+        : guardToolReturn(normaliseToolResult(raw), name);
 
       // Post-tool-use hook — receives the normalised ToolResult so consumers
       // have a consistent shape. (Raw returns still flow through via
