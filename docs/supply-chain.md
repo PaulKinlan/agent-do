@@ -141,8 +141,11 @@ with the numbers, because they rot:
 Both figures are measured on 2026-10-22. The dev-tree advisories are triaged as
 **not shipped**: they live in the `@changesets/cli` release toolchain, the
 `typedoc` docs generator, and the `vitest` test runner — none of which a
-consumer of agent-do installs — and the available fixes are semver-major bumps
-of a release tool. An unqualified "`npm audit` is clean" was what made this paragraph
+consumer of agent-do installs. The `markdown-it` and `vitest` roots have
+in-range patch fixes available (`npm audit fix` plans markdown-it 14.3.3,
+vitest/@vitest/mocker 4.1.12); only the `@changesets/cli` tree still requires
+a semver-major bump (3.0.3), which is why these stay recorded here rather
+than applied. An unqualified "`npm audit` is clean" was what made this paragraph
 unverifiable — it read as the release gate and failed the moment a dev dependency
 gained an advisory.
 
