@@ -42,7 +42,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     const child = spawn('bash', ['-c', 'while :; do sleep 1; done', marker]);
     try {
       await once(child, 'spawn');
-      await new Promise((done) => setTimeout(done, 250));
+      await new Promise((done) => setTimeout(done, 1_500)); // agent-do-94t: 250ms starved under load
       const pids = () => spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim();
       expect(pids(), 'the probe must be visible to the same match teardown uses').not.toBe('');
 
@@ -50,7 +50,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
       expect(pids(), 'teardown must leave nothing matching the fixture root').toBe('');
       const exited = await Promise.race([
         once(child, 'exit').then(() => true),
-        new Promise((done) => setTimeout(() => done(false), 2000)),
+        new Promise((done) => setTimeout(() => done(false), 10_000)), // agent-do-94t: 2s starved under load
       ]);
       expect(exited, 'the probe itself must be gone, not merely detached').toBe(true);
     } finally {
@@ -69,7 +69,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     const child = spawn('bash', ['-c', 'sleep 5 & echo $! > "$1"; wait', join(root, 'probe'), childPidFile]);
     try {
       await once(child, 'spawn');
-      const deadline = Date.now() + 3000;
+      const deadline = Date.now() + 15_000; // agent-do-94t: 3s starved under load (run D, 705a26f)
       while (!existsSync(childPidFile) && Date.now() < deadline) sleepSync(50);
       const grandchild = readFileSync(childPidFile, 'utf8').trim();
       const alive = () => spawnSync('kill', ['-0', grandchild]).status === 0;
@@ -77,7 +77,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
       expect(alive(), 'the rootless child must be running before teardown').toBe(true);
 
       expect(reapFixtureProcesses(root), 'both the matched process and its descendant').toBeGreaterThan(1);
-      const gone = Date.now() + 2000;
+      const gone = Date.now() + 10_000; // agent-do-94t: 2s starved under load
       while (alive() && Date.now() < gone) sleepSync(25);
       expect(alive(), 'a cmdline match alone would leave this child behind').toBe(false);
     } finally {
@@ -104,18 +104,22 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     );
     try {
       await once(child, 'spawn');
-      await new Promise((done) => setTimeout(done, 300));
+      await new Promise((done) => setTimeout(done, 1_500)); // agent-do-94t: 300ms starved under load
       expect(
         spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim(),
         'the probe must be matched before teardown',
       ).not.toBe('');
 
       expect(reapFixtureProcesses(root)).toBeGreaterThan(1);
+      // agent-do-94t: under load the TERM handler's pid-file write raced this read; poll bounded
+      // (the intent is unchanged: the handler must have run and recorded its child).
+      const wroteBy = Date.now() + 10_000;
+      while (!existsSync(lateChildPidFile) && Date.now() < wroteBy) sleepSync(25);
       expect(existsSync(lateChildPidFile), 'the TERM handler must have run').toBe(true);
       const late = readFileSync(lateChildPidFile, 'utf8').trim();
       expect(late, 'the handler must record a pid').toMatch(/^\d+$/);
       const alive = () => spawnSync('kill', ['-0', late]).status === 0;
-      const gone = Date.now() + 2000;
+      const gone = Date.now() + 10_000; // agent-do-94t: 2s starved under load
       while (alive() && Date.now() < gone) sleepSync(25);
       expect(alive(), 'a snapshot taken before TERM cannot see this child').toBe(false);
     } finally {
@@ -313,7 +317,7 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
   const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), ...args], {
     cwd: fx.repo,
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: 180_000, // agent-do-94t: 60s flaked to status=null (spawnSync kill) under VM load (run B, 705a26f)
     env: { ...process.env, FAST_GATE_RUNNER: fx.stub, STATIC_CMD: 'true', RUN_LOG: fx.log, ...env },
   });
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
@@ -647,8 +651,9 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
  * the suite processes do, and a descendant of a runner cannot outlive the run.
  */
 describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120_000 }, () => {
-  /** How long the run gets before the outer window fires; the stub below never finishes on its own. */
-  const OUTER_WINDOW_MS = 3_000;
+  /** How long the run gets before the outer window fires; the stub below never finishes on its own.
+   * agent-do-94t: was 3s, which under VM load killed the run before the stub had written its pid file. */
+  const OUTER_WINDOW_MS = 10_000;
 
   it('kills the suite processes, takes their descendants with them, and does not race the scratch dir', async () => {
     const fx = fixture();
@@ -703,9 +708,9 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120
       .filter(Boolean)
       .map(Number);
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       // Do not leak the descendant out of a failing run: kill what the fix failed to kill.
@@ -724,7 +729,7 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120
       console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
     }
     expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load (run C, 705a26f)
 });
 
 describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeout: 120_000 }, () => {
@@ -748,7 +753,7 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
     });
 
@@ -757,9 +762,9 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
     expect(r.status).toBe(0);
 
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
@@ -778,7 +783,7 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
       console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
     }
     expect(stillAlive, 'a suite left a process behind after the gate reported its verdict').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — reaping must not depend on helper processes', { timeout: 120_000 }, () => {
@@ -806,7 +811,7 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: {
         ...process.env,
         PATH: `${shim}:${process.env.PATH ?? ''}`,
@@ -822,9 +827,9 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
     expect(r.status).toBe(0);
 
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
@@ -837,7 +842,7 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
       }
     }
     expect(stillAlive, 'the reaper needed its helpers: a descendant survived with pgrep/pkill failing').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — teardown before the caller checks the slot', { timeout: 120_000 }, () => {
@@ -862,7 +867,7 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', { 
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
     });
 
@@ -881,7 +886,7 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', { 
       }
     }
     expect(stillExiting, 'a descendant was still exiting when the gate returned').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeout: 120_000 }, () => {
@@ -900,6 +905,9 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     // exit, and under fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL
     // and the run read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it
     // makes the assertion deterministic without weakening anything it proves.
+    // (agent-do-94t hit the same 137-vs-124 race independently on 2026-10-26 — run C, 705a26f — and widened
+    // the window to `-k 15 10`; the 7ix mirroring of production's real 30 s grace supersedes that: same cure,
+    // better fidelity. The 124 assertion stays the point of the test either way.)
     const r = spawnSync(
       'timeout',
       ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
@@ -919,7 +927,7 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     // And it must not claim a suite result it never produced.
     expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
     expect(out).not.toMatch(/^fast-gate: passed: /m);
-  }, 65_000);
+  }, 90_000); // agent-do-94t: headroom above the 60s spawnSync cap under load (7ix sized 65s; 5s of bookkeeping margin was too thin on the loaded VM)
 });
 
 describe('tools/fast-gate.sh — a bound kill during the static step', { timeout: 120_000 }, () => {
@@ -935,7 +943,8 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
     // --foreground again: fleet-check's real bound does not signal the process group, so a static step left
     // running after the bound fires is exactly what this case must catch. -k mirrors production's 30 s grace
     // (agent-do-7ix): 5 s starved a correct trap-and-reap under load and escalated to SIGKILL, so the run
-    // read 137 instead of 124 — a false red on a working gate.
+    // read 137 instead of 124 — a false red on a working gate. (agent-do-94t widened this window
+    // independently the same day; the production-mirroring grace supersedes it.)
     const r = spawnSync(
       'timeout',
       ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
@@ -961,7 +970,7 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
       }
     }
     expect(leaked, 'the killed static step was left running').toBe('');
-  }, 65_000);
+  }, 90_000); // agent-do-94t: headroom above the 60s spawnSync cap under load
 });
 
 describe('the gate re-checks its own generated metadata (agent-do-s5u)', { timeout: 120_000 }, () => {
