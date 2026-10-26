@@ -35,6 +35,12 @@ Any dependency change must be followed by a **full** regeneration:
 rm -rf node_modules package-lock.json && npm install
 ```
 
+A production advisory is a dependency change in all but name. When the fix is
+in-range (the usual case) the regeneration *is* the remedy — no range edit, no
+`overrides` block, no upstream release (`agent-do-7qt`: three advisories closed
+by one regeneration). So triage an advisory by asking whether a newer version
+inside the declared range already fixes it, before reaching for a bump.
+
 Incremental commands (`npm install <pkg>`, `npm update`,
 `npm install --package-lock-only`) silently prune nested optional
 platform bindings — the class of entry `npm ci` still validates from
@@ -129,6 +135,17 @@ range upstream tested against on every consumer of agent-do.
 `undici@^7.28.0`, which is past the fix line — so the upgrade closed
 this without an override.
 
+**A caret range makes that a recurring chore, not a one-off.** A range that
+admits security patches also admits the *vulnerable* versions that patch,
+because a lockfile is only as new as the last time it was regenerated. The
+2026-10-26 audit found exactly that: the locked `undici@7.30.0` had picked up
+GHSA-4qv8-2p9j-2685, GHSA-f72v-6w45-q472 and GHSA-xjj6-f33q-929c, all fixed in
+`7.30.1` inside `^7.29.0`. Same shape for `body-parser@2.3.0` → `2.4.0`
+(GHSA-27r3-jxmh-p828) and `fast-uri@3.1.8` → `3.1.9` (four advisories). None of
+those needed a range change, an override or an upstream release — only a full
+regeneration (§ Lockfile regeneration). **Treat a production advisory as a
+dirty lockfile first and a dependency problem second.**
+
 That closes the **runtime** advisories, not every advisory in the repository. Two
 commands, two answers — re-run both on every `@ai-sdk/*` bump and record the date
 with the numbers, because they rot:
@@ -136,16 +153,19 @@ with the numbers, because they rot:
 | command | result | what it means |
 |---|---|---|
 | `npm audit --omit=dev` | **0 vulnerabilities** | the published package resolves nothing with a known advisory. **This is the release gate.** |
-| `npm audit` | **22 advisories, all dev-only** (16 high, 6 moderate, 0 critical) | dev tooling only: they arrive through three trees — `@changesets/cli` (the only direct release-tool one) and its dependants `braces`, `micromatch`, `fast-glob`, `globby`, `js-yaml`, `argparse`, `sprintf-js`, `@manypkg/get-packages`, `read-yaml-file`; the docs generator `typedoc` via `markdown-it` (GHSA-vfgh-jcmw-g37q, GHSA-gfr2-rv44-r23c); and the test runner `vitest` / `@vitest/mocker` (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp) |
+| `npm audit` | **0 vulnerabilities** (was 22 dev-only on 2026-10-22) | dev tooling only, and now clean: the in-range patch fixes previously recorded as "available but not applied" were taken by the 2026-10-26 regeneration (`markdown-it` 14.3.3, `vitest`/`@vitest/mocker` 4.1.12, plus newer `braces`/`micromatch`/`js-yaml`/`argparse` under `@changesets/cli`). They arrived through three trees — `@changesets/cli` (the only direct release-tool one) and its dependants `braces`, `micromatch`, `fast-glob`, `globby`, `js-yaml`, `argparse`, `sprintf-js`, `@manypkg/get-packages`, `read-yaml-file`; the docs generator `typedoc` via `markdown-it` (GHSA-vfgh-jcmw-g37q, GHSA-gfr2-rv44-r23c); and the test runner `vitest` / `@vitest/mocker` (GHSA-qxg6-89mg-rqv8, GHSA-xp26-3454-mjgp) |
 
-Both figures are measured on 2026-10-22. The dev-tree advisories are triaged as
-**not shipped**: they live in the `@changesets/cli` release toolchain, the
-`typedoc` docs generator, and the `vitest` test runner — none of which a
-consumer of agent-do installs. The `markdown-it` and `vitest` roots have
-in-range patch fixes available (`npm audit fix` plans markdown-it 14.3.3,
-vitest/@vitest/mocker 4.1.12); only the `@changesets/cli` tree still requires
-a semver-major bump (3.0.3), which is why these stay recorded here rather
-than applied. An unqualified "`npm audit` is clean" was what made this paragraph
+Both figures are measured on **2026-10-26** (previously 2026-10-22, when the
+second row read 22). The dev-tree advisories remain triaged as **not shipped**
+whenever they reappear: they live in the `@changesets/cli` release toolchain,
+the `typedoc` docs generator, and the `vitest` test runner — none of which a
+consumer of agent-do installs. They are gone from this lockfile rather than
+suppressed: `markdown-it` 14.3.3 and `vitest`/`@vitest/mocker` 4.1.12 were the
+in-range fixes `npm audit fix` had been planning (an incremental command cannot
+take them without also rewriting sibling spec ranges — `agent-do-fn3` — which is
+the second reason not to use one), and the
+rest of the `@changesets/cli` tree resolved forward under its existing ranges,
+so no semver-major bump was needed after all. An unqualified "`npm audit` is clean" was what made this paragraph
 unverifiable — it read as the release gate and failed the moment a dev dependency
 gained an advisory.
 
