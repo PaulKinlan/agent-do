@@ -16,7 +16,7 @@ every landing paid for it.
 | gate | command | what it runs | measured (2026-10-22, see §4) | budget |
 |---|---|---|---|---|
 | **full** | `bash tools/full-gate.sh` | STATIC_CMD, then every suite + the mock-tier evals | **313 s at 4 workers, 356 s at one** | ≤ 300 s (R1) |
-| **fast** | `bash tools/fast-gate.sh` | STATIC_CMD, then the suites that reach the changed files | **247 s** worst row at the default 2 workers (see §4) | ≤ 60 s (R2) |
+| **fast** | `SUITE_BOUND=880 bash tools/fast-gate.sh` (the `CHECK_FAST_CMD` env prefix, agent-do-cj6) | STATIC_CMD, then the suites that reach the changed files | **247 s** worst row at the default 2 workers (see §4) | ≤ 60 s (R2) |
 
 `fleet-check --fast` runs the fast gate; `fleet-check` runs the full gate. **Only the merger runs the full
 gate** (R13) — `bin/fleet-check` refuses it from any other lane unless the lane passes `--full`, because
@@ -159,19 +159,35 @@ architect-sized job (which suites mutate module or process state), not a gate-bo
 same pathology seen from the other side.
 
 The full gate's own split (59 files / 1 247 tests): 356 s at one worker (static ~35 s, vitest 314 s, evals ~1 s) and 313 s at 4 workers (vitest 268 s) — so on the whole suite set the parallelism buys ~12%, because two cores are the constraint; where it pays is a wide selection that is not the whole set, which is what the fast gate runs. The
-bounds in `tools/check.conf` (**1200 s** / 480 s) are kill windows ~2.1× (against the worst healthy full-gate
-run measured, 563 s) and ~1.5× (against the worst fast observation of 327 s) rather than the ~11×/~3× they
+bounds in `tools/check.conf` (**1200 s** / **960 s**) are kill windows ~2.1× (against the worst healthy full-gate
+run measured, 563 s) and ~2.9× (against the worst fast observation of 327 s) rather than the ~11×/~3× they
 were: a bound must exceed the real run
 (`roles/lessons.md`), and a 180 s window against a 168–327 s run reports healthy runs as
 all-suites-failed. The fast gate's *batch* bound (`SUITE_BOUND`, 400 s default; it bounds the
-single runner invocation) stays deliberately below the outer 480 s window: it has to be the one that fires, so
+single runner invocation) stays deliberately below the outer 960 s window: it has to be the one that fires, so
 a hung run keeps its log tail — the evidence for WHICH suite wedged — instead of the outer kill recording the
 whole gate as `unknown` and losing the tail. What the batch-bound kill SAYS changed on 2026-10-27 (agent-do-c45):
 a kill that left no report proves nothing about any suite, so it is reported
 `fast-gate: unknown: the <N>s batch bound killed the run before any suite reported` and exits with the kill code
 (124/137/143), which `fleet-check` records as KILLED — not a verdict, re-run. The earlier mapping (`failed:
-<suite>` for every selected suite) was a false red naming failures that never ran. `tests/gates.test.ts` asserts
-the relationship against `tools/check.conf`, so raising one bound alone goes red.
+<suite>` for every selected suite) was a false red naming failures that never ran. Since agent-do-cj6
+(2026-10-26) the EFFECTIVE bound is the `SUITE_BOUND=880` env prefix in `CHECK_FAST_CMD` — outer 960 minus an
+80 s reserve for the warm static step — because fleet-check does not export `CHECK_FAST_TIMEOUT` to the
+command's environment; the script's own `400` default is only the fallback. `tests/gates.test.ts` asserts the
+relationship against the effective bound in `tools/check.conf`, and in BOTH directions: a bound too close to
+the window races the outer kill, and a stale bound far below it silently caps the suite phase under the
+window it was sized for.
+
+The fast window was 480 s until 2026-10-26 (agent-do-94b), and its retirement numbers are the same class
+as the full gate's: **four consecutive healthy runs bound-killed at 482–497 s** — twice inside `npm run
+build` (a full tsc emit measured **774 s alone** under the day's load of 11–15, and `build.mjs` deletes
+the tsbuildinfo on SIGTERM by design, so every kill guaranteed a full rebuild next attempt: a doom loop),
+and twice in the suite phase on the widest row (39 suites, zero failures). Even a coord-ordered quiet
+window — every implementer lane idle — was killed at 482 s: the background beads-sync churn alone keeps
+this 2-vCPU VM more than 4× the quiet-VM row cost (247 s). 960 s is 2× the window that fired (the same
+precedent as the full gate's 600→1200), and via the `SUITE_BOUND=880` prefix the suite phase now actually
+receives it. The loaded-VM rows this paragraph records are the honest state until the levers below land:
+the window is sized against a contended VM, not a quiet one.
 
 The full gate's window was 600 s until 2026-10-26, and the numbers that retired it are worth recording
 because they are the failure mode the window exists to avoid: **600 s was 94% of the worst healthy
