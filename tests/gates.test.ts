@@ -230,7 +230,10 @@ afterAll(() => {
     reapFixtureProcesses(dir);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+  // agent-do-94t: the default 10s hookTimeout flaked the WHOLE FILE (35/35 tests passing) under VM load:
+  // reaping ~10 fixture roots (/proc walks + a 1s settle each) plus recursive rmSync does not fit in 10s
+  // on a contended 2-vCPU machine. The reaper's own 1s settle stays — it escalates to KILL and is bounded.
+}, 120_000);
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
 function fixture(opts: { map?: string; stub?: string } = {}) {
