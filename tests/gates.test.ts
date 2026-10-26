@@ -221,12 +221,14 @@ function reapFixtureProcesses(root: string): number {
   return targets.size;
 }
 
+// 30s: the reap walks every fixture root (pgrep + kill + rm -rf) and at vitest's default 10s hook timeout
+// it filed the whole suite as failed-with-all-assertions-green under fleet load (agent-do-c1y).
 afterAll(() => {
   for (const dir of ROOTS) {
     reapFixtureProcesses(dir);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
 function fixture(opts: { map?: string; stub?: string } = {}) {
@@ -865,12 +867,15 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     const hang = join(fx.root, 'hang');
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
-    // `timeout --foreground -k 5 3` mirrors the real path exactly: fleet-check invokes the gate as
-    // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
-    // process group, which would mask a leak this test is meant to catch.
+    // `timeout --foreground -k 15 3` mirrors the real path (fleet-check invokes the gate as
+    // `timeout --foreground -k 30 180 ...`) — --foreground matters, without it coreutils signals the whole
+    // process group, which would mask a leak this test is meant to catch. The KILL grace is load headroom,
+    // not part of the behaviour under test: the gate's TERM trap (process-group sweep + marker writes) must
+    // be allowed to finish so the run reports 124 (TERM path) rather than 137 (KILL) — at -k 5 this flaked
+    // 124-vs-137 under fleet load (agent-do-c1y).
     const r = spawnSync(
       'timeout',
-      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
+      ['--foreground', '-k', '15', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
       {
         cwd: fx.repo,
         encoding: 'utf8',
@@ -904,7 +909,7 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
     // running after the bound fires is exactly what this case must catch.
     const r = spawnSync(
       'timeout',
-      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
+      ['--foreground', '-k', '15', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
       {
         cwd: fx.repo,
         encoding: 'utf8',
