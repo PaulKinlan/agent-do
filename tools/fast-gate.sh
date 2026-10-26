@@ -117,7 +117,7 @@ case "$JOBS" in
   *) WORKERS_ARG="--maxWorkers=$JOBS" ;;
 esac
 # Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
-# 480 s): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
+# 960 s since agent-do-94b): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
 # WHICH suite wedged. If the outer window fires first the tail is lost and the record says only `unknown`.
 #
 # What a batch-bound kill REPORTS (agent-do-c45, split from cj6/rev-94b): a batch that died before writing its
@@ -136,6 +136,10 @@ esac
 # case, because the variance here is CPU contention, not suite behaviour. docs/speed.md §4 carries the full
 # table and the budget deviation.
 # tests/gates.test.ts pins the relationship against tools/check.conf rather than trusting this comment.
+# agent-do-cj6: the 400 below is only the FALLBACK. The effective value is set per VM in tools/check.conf's
+# CHECK_FAST_CMD as a `SUITE_BOUND=<n>` env prefix (fleet-check does not export CHECK_FAST_TIMEOUT to the
+# command), derived as CHECK_FAST_TIMEOUT minus an 80 s reserve for the warm static step; the invariant
+# test reads the env prefix when present, so a stale cap under a widened window goes red.
 SUITE_BOUND=${SUITE_BOUND:-400}
 
 LIST=0; BASE="${FAST_GATE_BASE:-}"; EXPLICIT=()

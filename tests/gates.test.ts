@@ -538,14 +538,31 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
     // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
     // rather than left to a comment, so raising one of them alone goes red.
+    //
+    // agent-do-cj6: the EFFECTIVE bound is what must satisfy the relationship. CHECK_FAST_CMD may carry a
+    // `SUITE_BOUND=<n>` env prefix (fleet-check does not export CHECK_FAST_TIMEOUT to the command, so the
+    // coupling lives in check.conf); reading only the script default once let a 960 s outer window sit on
+    // top of a 400 s batch cap — the suite phase was bound at static+415 s and a healthy loaded run read
+    // as `failed: <every suite>` (false red). Both drift directions are pinned: bound+15 < outer (the
+    // bound must fire first and name the suite), and the reserve outer-bound stays in [30, 95] — big
+    // enough for the warm static step + markers, small enough that the suite phase actually gets the
+    // window it was sized for.
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
-    const bound = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
-    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8'))?.[1]);
-    expect(Number.isFinite(bound), 'SUITE_BOUND default must be a literal number in tools/fast-gate.sh').toBe(true);
+    const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
+    const scriptDefault = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
+    const cmdOverride = Number(/\bSUITE_BOUND=(\d+)\s/.exec(/^CHECK_FAST_CMD='(.*)'$/m.exec(conf)?.[1] ?? '')?.[1] ?? NaN);
+    const bound = Number.isFinite(cmdOverride) ? cmdOverride : scriptDefault;
+    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
+    expect(Number.isFinite(bound), 'the effective SUITE_BOUND must be a literal number in tools/fast-gate.sh or a CHECK_FAST_CMD env prefix in tools/check.conf').toBe(true);
     expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
     // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): the bound must be able to fire,
     // escalate, and still leave the gate time to name the suite before the outer window ends.
     expect(bound + 15).toBeLessThan(outer);
+    // And the suite phase must actually receive the window: a stale SUITE_BOUND far below the outer
+    // window silently caps it (agent-do-cj6). Reserve = headroom for the warm static step + reporting.
+    const reserve = outer - bound;
+    expect(reserve, 'the reserve above SUITE_BOUND must leave room for the warm static step and markers').toBeGreaterThanOrEqual(30);
+    expect(reserve, 'SUITE_BOUND must scale with CHECK_FAST_TIMEOUT: a stale bound caps the suite phase below the window (agent-do-cj6)').toBeLessThanOrEqual(95);
   });
 });
 
