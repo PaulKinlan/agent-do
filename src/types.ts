@@ -709,6 +709,13 @@ export interface AgentConfig {
    *   - Input not starting with `/<valid-name>` → today's behaviour,
    *     unchanged (the parent agent handles the turn).
    *
+   * Name lookup is **own-property-only** (agent-do-0qa): dispatch
+   * consults `Object.prototype.hasOwnProperty`, so a map built through
+   * the prototype chain (e.g. `Object.create(sharedCommands)`) exposes
+   * none of its inherited commands — they neither dispatch nor appear
+   * in the unknown-command listing. Spread shared sets into a plain
+   * object (`{ ...sharedCommands, extra }`) instead.
+   *
    * Sub-agents are full {@link Agent} instances, so each can carry its
    * own model, tools, skills, routines, permissions, and hooks.
    *

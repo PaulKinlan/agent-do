@@ -612,7 +612,10 @@ reporting sees what the dispatch actually spent — and the parent's
 result is marked `aborted` when the dispatch blows the budget.
 
 Keys must match `/^[a-zA-Z0-9_-]+$/`; values must be `Agent` instances.
-Sub-agents are full agents, so each carries its own model, tools, skills,
+The map is read **own-property-only**: inherited keys (e.g. via
+`Object.create(sharedCommands)`) neither dispatch nor appear in the
+listing — spread shared command sets (`{ ...sharedCommands, extra }`)
+instead. Sub-agents are full agents, so each carries its own model, tools, skills,
 routines, permissions, and hooks. **Nested slash commands (`/a/b`) are
 not supported** — dispatch is a single deterministic hop, validated at
 `createAgent()` time.
