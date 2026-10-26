@@ -159,8 +159,9 @@ architect-sized job (which suites mutate module or process state), not a gate-bo
 same pathology seen from the other side.
 
 The full gate's own split (59 files / 1 247 tests): 356 s at one worker (static ~35 s, vitest 314 s, evals ~1 s) and 313 s at 4 workers (vitest 268 s) — so on the whole suite set the parallelism buys ~12%, because two cores are the constraint; where it pays is a wide selection that is not the whole set, which is what the fast gate runs. The
-bounds in `tools/check.conf` (600 s / 480 s) are kill windows ~1.7× and ~1.5× (against the worst fast
-observation of 327 s) rather than the ~11×/~3× they were: a bound must exceed the real run
+bounds in `tools/check.conf` (**1200 s** / 480 s) are kill windows ~2.1× (against the worst healthy full-gate
+run measured, 563 s) and ~1.5× (against the worst fast observation of 327 s) rather than the ~11×/~3× they
+were: a bound must exceed the real run
 (`roles/lessons.md`), and a 180 s window against a 168–327 s run reports healthy runs as
 all-suites-failed. The fast gate's *batch* bound (`SUITE_BOUND`, 400 s; it bounds the single runner
 invocation, so a wedge is reported against every suite it selected rather than one) stays deliberately below
@@ -168,6 +169,17 @@ the outer 480 s window: it has to be the one that fires, so a hung suite is repo
 `fast-gate: failed: <suite>` with its log tail, instead of the outer kill recording the whole gate as
 `unknown` and losing which suite wedged. `tests/gates.test.ts` asserts the relationship against
 `tools/check.conf`, so raising one bound alone goes red.
+
+The full gate's window was 600 s until 2026-10-26, and the numbers that retired it are worth recording
+because they are the failure mode the window exists to avoid: **600 s was 94% of the worst healthy
+observation (563 s), and under concurrent lane load it fired twice on the same tree** — killed at 601 s and
+616 s with vitest actively passing suites in the log tail, while another lane ran a 1587 s build on this
+2-vCPU VM. Both recorded UNKNOWN (INTERRUPTED). UNKNOWN is the one outcome that costs a landing without
+saying anything about the code, and for a `package-lock.json` change there is no second opinion to seek,
+because the fast tier refuses it by design (§5). The wider window costs only the wedged case: a hung full
+gate holds its heavy slot for up to 20 min instead of 10, still well inside the reaper's 120 min. It
+remains a kill window and not a budget — 600 s of wall is still the target, and the levers below are how to
+reach it.
 
 Loosening a bound is not a budget fix. The ordering that would get this repo back inside R2 is: (1) a shared
 module graph for suites that are shown not to leak state (`--no-isolate`, measured 115 s), or (2) fewer
