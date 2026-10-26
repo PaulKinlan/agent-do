@@ -160,6 +160,26 @@ export function unknownSlashCommandMessage(
 }
 
 
+/**
+ * Look up a parsed command name in a slashCommands map, consulting OWN
+ * properties only (agent-do-0qa). A plain `{}` map still has
+ * Object.prototype on its lookup chain, so a bare bracket read turns
+ * `/toString`, `/valueOf`, `/constructor`, `/hasOwnProperty`, … into
+ * inherited methods and the dispatcher then crashes calling `.run()` /
+ * `.stream()` on them. Own-property-only lookup makes those names take
+ * the unknown-command path — while a command deliberately configured
+ * under such a name (an own property) keeps dispatching.
+ */
+export function lookupSlashCommand(
+  commands: Record<string, Agent> | undefined,
+  name: string,
+): Agent | undefined {
+  if (!commands) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(commands, name)) return undefined;
+  return commands[name];
+}
+
+
 // Split out of src/loop.ts (agent-do-4os).
 /**
  * Deterministic slash-command dispatch for the non-streaming loop
@@ -189,7 +209,7 @@ export async function tryRouteSlashCommandRun(
   const parsed = parseSlashCommand(task);
   if (!parsed) return null;
 
-  const sub = config.slashCommands[parsed.name];
+  const sub = lookupSlashCommand(config.slashCommands, parsed.name);
   if (sub) {
     // History is deliberately not forwarded (see AgentConfig.slashCommands
     // docs) — the sub-agent starts a fresh turn with the remainder.

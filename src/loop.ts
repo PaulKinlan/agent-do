@@ -122,6 +122,7 @@ function providerLimitTrip(
 import { UsageTracker, resolveUsageTracker } from './usage.js';
 import { cutoffForKeepWindow, stripStaleToolOutputs } from './loop-history.js';
 import {
+  lookupSlashCommand,
   parseSlashCommand,
   unknownSlashCommandMessage,
 } from './slash-commands.js';
@@ -565,7 +566,10 @@ export async function* streamAgentLoop(
   if (config.slashCommands) {
     const parsed = parseSlashCommand(task);
     if (parsed) {
-      const sub = config.slashCommands[parsed.name];
+      // Own-property lookup only (agent-do-0qa): a plain map's prototype
+      // would otherwise serve /toString & friends as "configured" commands
+      // and crash the dispatch below.
+      const sub = lookupSlashCommand(config.slashCommands, parsed.name);
       if (sub) {
         // Announce the dispatch via an existing event type so the
         // ProgressEvent union stays unchanged (zero-surface-change).

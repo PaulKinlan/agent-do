@@ -552,6 +552,97 @@ describe('streamAgentLoop — slash-command dispatch', () => {
   });
 });
 
+// ── prototype-property names are not commands (agent-do-0qa) ────────
+
+// `config.slashCommands` is a plain object, so a lookup by user input
+// walks Object.prototype: `/toString`, `/valueOf`, `/constructor`, …
+// resolved to inherited methods and crashed the dispatcher with a
+// TypeError. Routing must consult OWN properties only.
+describe('slash-command dispatch — prototype-property names (agent-do-0qa)', () => {
+  const prototypeNames = [
+    'toString',
+    'valueOf',
+    'constructor',
+    'hasOwnProperty',
+    '__proto__',
+  ] as const;
+
+  it.each(prototypeNames.map((n) => [`/${n}`, n] as const))(
+    'tryRouteSlashCommandRun treats %s as unknown, not a crash',
+    async (task, name) => {
+      const parent: AgentConfig = {
+        id: 'parent',
+        name: 'Parent',
+        model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+        slashCommands: {},
+      };
+
+      const result = await tryRouteSlashCommandRun(parent, task);
+
+      // Not null (it IS slash-shaped) and not a TypeError — the
+      // unknown-command listing, with steps 0 (no model ran).
+      expect(result).not.toBeNull();
+      expect(result?.text).toBe(
+        `Unknown slash command "/${name}". Available commands: (none configured).`,
+      );
+      expect(result?.steps).toBe(0);
+    },
+  );
+
+  it('runAgentLoop returns the listing for /toString and never calls the parent model', async () => {
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: {},
+    };
+
+    const result = await runAgentLoop(parent, '/toString');
+
+    expect(result.text).toContain('Unknown slash command "/toString"');
+    expect(result.text).not.toBe('PARENT-RAN');
+    expect(result.steps).toBe(0);
+  });
+
+  it('streamAgentLoop yields the listing for /toString instead of throwing', async () => {
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: {},
+    };
+
+    const events: ProgressEvent[] = [];
+    for await (const ev of streamAgentLoop(parent, '/toString')) events.push(ev);
+
+    expect(events.map((e) => e.type)).toEqual(['text', 'done']);
+    const done = events.find((e) => e.type === 'done');
+    expect(done?.content).toContain('Unknown slash command "/toString"');
+  });
+
+  it('an OWN property named like a prototype member still dispatches', async () => {
+    // The fix must not over-block: a command literally configured under
+    // a prototype-member name is an own property and keeps working.
+    const sub = createAgent({
+      id: 'toString',
+      name: 'ToString',
+      model: mockModel({ responses: [{ text: 'SUB-RAN' }] }),
+    });
+    const runSpy = vi.spyOn(sub, 'runWithResult');
+    const parent: AgentConfig = {
+      id: 'parent',
+      name: 'Parent',
+      model: mockModel({ responses: [{ text: 'PARENT-RAN' }] }),
+      slashCommands: { toString: sub },
+    };
+
+    const result = await runAgentLoop(parent, '/toString hi');
+
+    expect(runSpy).toHaveBeenCalled();
+    expect(result.text).toBe('SUB-RAN');
+  });
+});
+
 // ── unknownSlashCommandMessage helper ────────────────────────────────
 
 // ── CLI input path (#76, criterion: CLI respects slash commands) ────
