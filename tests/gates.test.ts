@@ -901,7 +901,8 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
     // `timeout --foreground -k 30 3` mirrors the real path: fleet-check invokes the gate as
-    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>` (960 s installed; tools/check.conf), and --foreground
+    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>` (whatever tools/check.conf holds; the assertion
+    // below reads that file), and --foreground
     // matters — without it coreutils signals the whole process group, which would mask a leak this test is
     // meant to catch. The KILL grace is the number that must match production (agent-do-7ix): with -k 5 the
     // trap had 5 s to print the marker, reap the tree and exit, and under fleet load a correct reap
