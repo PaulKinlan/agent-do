@@ -226,7 +226,13 @@ afterAll(() => {
     reapFixtureProcesses(dir);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+  // agent-do-7ix class: this hook's legitimate worst case is ~1 s of TERM-grace per root that still has a
+  // live process (the loop above), plus a /proc walk per pass — against vitest's DEFAULT 10 s hook timeout
+  // that blew up under fleet load, when slow-dying kill-window processes made several roots take the full
+  // grace at once: every test green, the FILE red on cleanup. The bound must exceed the real work, so name
+  // it: 60 s covers a few dozen roots all taking the grace, ~4x the observed blowup, and a clean run still
+  // finishes in well under a second.
+}, 60_000);
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
 function fixture(opts: { map?: string; stub?: string } = {}) {
