@@ -527,10 +527,11 @@ describe('tools/fast-gate.sh — a batch-bound kill with no report is unknown, n
 
 describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
   it('bounds one suite well inside the outer fast-tier kill window', () => {
-    // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
-    // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
-    // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
-    // rather than left to a comment, so raising one of them alone goes red.
+    // A per-suite bound that is not below the outer window is a race: whichever fires first decides. Since
+    // agent-do-c45 both outcomes read `unknown` — but the outer kill prints its marker and stops, losing the
+    // run log, while the batch bound prints the log tail: the evidence for WHICH suite wedged. That tail is
+    // what this relationship protects. It is asserted here rather than left to a comment, so raising one of
+    // the bounds alone goes red.
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
     const bound = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
     const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8'))?.[1]);
@@ -894,12 +895,13 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
     // `timeout --foreground -k 30 3` mirrors the real path: fleet-check invokes the gate as
-    // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
-    // process group, which would mask a leak this test is meant to catch. The KILL grace is the number that
-    // must match production (agent-do-7ix): with -k 5 the trap had 5 s to print the marker, reap the tree and
-    // exit, and under fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL
-    // and the run read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it
-    // makes the assertion deterministic without weakening anything it proves.
+    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>` (960 s installed; tools/check.conf), and --foreground
+    // matters — without it coreutils signals the whole process group, which would mask a leak this test is
+    // meant to catch. The KILL grace is the number that must match production (agent-do-7ix): with -k 5 the
+    // trap had 5 s to print the marker, reap the tree and exit, and under fleet load a correct reap
+    // occasionally exceeded it — the wrapper escalated to SIGKILL and the run read 137 instead of 124, a
+    // false red on a working gate. The real grace is 30 s; mirroring it makes the assertion deterministic
+    // without weakening anything it proves.
     const r = spawnSync(
       'timeout',
       ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
