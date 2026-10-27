@@ -117,7 +117,7 @@ case "$JOBS" in
   *) WORKERS_ARG="--maxWorkers=$JOBS" ;;
 esac
 # Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
-# 960 s): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
+# 480 s): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
 # WHICH suite wedged. If the outer window fires first the tail is lost and the record says only `unknown`.
 #
 # What a batch-bound kill REPORTS (agent-do-c45, split from cj6/rev-94b): a batch that died before writing its
