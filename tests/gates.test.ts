@@ -893,16 +893,20 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     const hang = join(fx.root, 'hang');
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
-    // `timeout --foreground -k 5 3` mirrors the real path exactly: fleet-check invokes the gate as
+    // `timeout --foreground -k 30 3` mirrors the real path: fleet-check invokes the gate as
     // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
-    // process group, which would mask a leak this test is meant to catch.
+    // process group, which would mask a leak this test is meant to catch. The KILL grace is the number that
+    // must match production (agent-do-7ix): with -k 5 the trap had 5 s to print the marker, reap the tree and
+    // exit, and under fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL
+    // and the run read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it
+    // makes the assertion deterministic without weakening anything it proves.
     const r = spawnSync(
       'timeout',
-      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
+      ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
       {
         cwd: fx.repo,
         encoding: 'utf8',
-        timeout: 40_000,
+        timeout: 60_000,
         env: { ...process.env, FAST_GATE_RUNNER: hang, STATIC_CMD: 'true' },
       },
     );
@@ -915,7 +919,7 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     // And it must not claim a suite result it never produced.
     expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
     expect(out).not.toMatch(/^fast-gate: passed: /m);
-  }, 45_000);
+  }, 65_000);
 });
 
 describe('tools/fast-gate.sh — a bound kill during the static step', { timeout: 120_000 }, () => {
@@ -929,14 +933,16 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
     writeFileSync(stub, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
     // --foreground again: fleet-check's real bound does not signal the process group, so a static step left
-    // running after the bound fires is exactly what this case must catch.
+    // running after the bound fires is exactly what this case must catch. -k mirrors production's 30 s grace
+    // (agent-do-7ix): 5 s starved a correct trap-and-reap under load and escalated to SIGKILL, so the run
+    // read 137 instead of 124 — a false red on a working gate.
     const r = spawnSync(
       'timeout',
-      ['--foreground', '-k', '5', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
+      ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
       {
         cwd: fx.repo,
         encoding: 'utf8',
-        timeout: 40_000,
+        timeout: 60_000,
         env: { ...process.env, FAST_GATE_RUNNER: 'true', STATIC_CMD: stub },
       },
     );
@@ -955,7 +961,7 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
       }
     }
     expect(leaked, 'the killed static step was left running').toBe('');
-  }, 45_000);
+  }, 65_000);
 });
 
 describe('the gate re-checks its own generated metadata (agent-do-s5u)', { timeout: 120_000 }, () => {
