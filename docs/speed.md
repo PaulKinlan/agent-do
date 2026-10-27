@@ -213,8 +213,10 @@ Three named pathologies from the fleet standard, and what each means here:
   the gate config. Here: `tests/gates.test.ts` builds a throwaway repo under `mkdtemp` per case and never
   touches the real `tools/`; 14 files under `tests/` use `mkdtemp`. Check with
   `grep -rnE 'os\.homedir|process\.env\.HOME|/tmp/[a-z]+' tests/`.
-- **P2 — order dependence.** No suite may depend on another's side effects. Run one suite per process (which
-  the fast gate does) and the tier in isolation, and both must be green.
+- **P2 — order dependence.** No suite may depend on another's side effects. The fast gate runs the whole
+  selection in one batched runner invocation (`npx vitest run --maxWorkers=N`) and the full tier in isolation
+  at the merger; both must be green. Inside the batch it is vitest's per-file isolation — a fresh module
+  registry per file (§4) — that keeps suites apart, not a process per suite.
 - **P3 — asserting on the machine.** No wall-clock latency bounds, no fixed ports, no assertions about other
   lanes' files. `tests/file-lock.test.ts` is the suite to watch here: it has two `setTimeout`s, and both are
   inside waits for a real resource (a lock), not latency bounds — keep it that way. A gate bound that fires
