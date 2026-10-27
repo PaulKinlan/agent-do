@@ -159,16 +159,19 @@ architect-sized job (which suites mutate module or process state), not a gate-bo
 same pathology seen from the other side.
 
 The full gate's own split (59 files / 1 247 tests): 356 s at one worker (static ~35 s, vitest 314 s, evals ~1 s) and 313 s at 4 workers (vitest 268 s) — so on the whole suite set the parallelism buys ~12%, because two cores are the constraint; where it pays is a wide selection that is not the whole set, which is what the fast gate runs. The
-bounds in `tools/check.conf` (**1200 s** / 480 s) are kill windows ~2.1× (against the worst healthy full-gate
-run measured, 563 s) and ~1.5× (against the worst fast observation of 327 s) rather than the ~11×/~3× they
+bounds in `tools/check.conf` (**1200 s** / 960 s) are kill windows ~2.1× (against the worst healthy full-gate
+run measured, 563 s) and ~2.9× (against the worst fast observation of 327 s) rather than the ~11×/~3× they
 were: a bound must exceed the real run
 (`roles/lessons.md`), and a 180 s window against a 168–327 s run reports healthy runs as
-all-suites-failed. The fast gate's *batch* bound (`SUITE_BOUND`, 400 s; it bounds the single runner
-invocation, so a wedge is reported against every suite it selected rather than one) stays deliberately below
-the outer 480 s window: it has to be the one that fires, so a hung suite is reported as
-`fast-gate: failed: <suite>` with its log tail, instead of the outer kill recording the whole gate as
-`unknown` and losing which suite wedged. `tests/gates.test.ts` asserts the relationship against
-`tools/check.conf`, so raising one bound alone goes red.
+all-suites-failed. The fast gate's *batch* bound (`SUITE_BOUND`, 400 s default, 880 s installed; it bounds the
+single runner invocation) stays deliberately below the outer 960 s window: it has to be the one that fires, so
+a hung run keeps its log tail — the evidence for WHICH suite wedged — instead of the outer kill recording the
+whole gate as `unknown` and losing the tail. What the batch-bound kill SAYS changed on 2026-10-27 (agent-do-c45):
+a kill that left no report proves nothing about any suite, so it is reported
+`fast-gate: unknown: the <N>s batch bound killed the run before any suite reported` and exits with the kill code
+(124/137/143), which `fleet-check` records as KILLED — not a verdict, re-run. The earlier mapping (`failed:
+<suite>` for every selected suite) was a false red naming failures that never ran. `tests/gates.test.ts` asserts
+the relationship against `tools/check.conf`, so raising one bound alone goes red.
 
 The full gate's window was 600 s until 2026-10-26, and the numbers that retired it are worth recording
 because they are the failure mode the window exists to avoid: **600 s was 94% of the worst healthy

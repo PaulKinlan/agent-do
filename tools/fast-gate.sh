@@ -24,12 +24,13 @@
 #   fast-gate: running: <suite>
 #   fast-gate: passed: <suite>            (positive marker: this suite really executed - the runner's report
 #                                          named this file and its status was passed)
-#   fast-gate: failed: <suite>            (the suite failed, was ABSENT from the runner's report, or the batch
-#                                          produced no report at all. A suite the report does not mention was
-#                                          not demonstrated to run, so it is not reported passed.)
+#   fast-gate: failed: <suite>            (the suite failed or was ABSENT from the runner's report. A suite
+#                                          the report does not mention was not demonstrated to run, so it
+#                                          is not reported passed.)
 #   fast-gate: unmapped: <path>           (the fail-loud case, and the process exits 1)
-#   fast-gate: unknown: <reason>          (a step before the suites failed, or the outer bound killed this
-#                                          script before a verdict: nothing was measured either way)
+#   fast-gate: unknown: <reason>          (a step before the suites failed, the outer bound killed this script,
+#                                          or the SUITE_BOUND batch bound killed the run before any suite
+#                                          reported: nothing was measured either way — agent-do-c45)
 # Do not reformat those lines. They are anchored at line start with the `fast-gate:` prefix by design
 # (docs/speed.md R15): an unanchored token is harvested out of ordinary test output as if it were a marker.
 #
@@ -43,7 +44,9 @@
 #                                               # lottery. Empty = pass no flag, for a non-vitest runner)
 #
 # Exit codes: 0 = every selected suite passed (or nothing was affected); 1 = a suite failed, a step failed,
-# a mapped suite is missing, or a changed file is unmapped. ANY non-zero is "unknown", never "green".
+# a mapped suite is missing, or a changed file is unmapped; 124/137/143 = the SUITE_BOUND batch bound killed
+# a run that produced no report — NOT a verdict (fleet-check records KILLED; a re-run measures the tree).
+# ANY non-zero is "unknown", never "green".
 set -uo pipefail
 
 # --- verdict bookkeeping, installed before any work: the outer window can TERM this script at any stage,
@@ -114,10 +117,16 @@ case "$JOBS" in
   *) WORKERS_ARG="--maxWorkers=$JOBS" ;;
 esac
 # Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
-# 480 s): the batch bound exists so that a wedged run is reported as `fast-gate: failed: <suite>` - for every
-# selected suite, since a batch that never produced a report proves nothing about any of them - together with
-# its log tail. If the outer window fires first it is reported as `unknown` in the cached record instead —
-# the same value in both places made that a race, not a decision.
+# 960 s): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
+# WHICH suite wedged. If the outer window fires first the tail is lost and the record says only `unknown`.
+#
+# What a batch-bound kill REPORTS (agent-do-c45, split from cj6/rev-94b): a batch that died before writing its
+# report proves nothing about any suite — zero assertions may have run — so it is reported
+# `fast-gate: unknown: the <N>s batch bound killed the run before any suite reported` and the script exits with
+# the kill code (124/137/143), which fleet-check records as KILLED: NOT a verdict, re-run. The old mapping
+# (`failed: <suite>` for every selected suite) was a false red that sent reviewers after test failures that
+# never happened and blocked a landing a re-run would pass. When a report DOES exist — vitest finished writing
+# it before the kill — the per-suite statuses in it are real evidence and still print.
 #
 # Re-derived 2026-10-22 (agent-do-664). The old 120 s (+ 15 s SIGKILL grace + ~14 s static inside a 180 s
 # outer window) was sized for the 55 s widest-row measurement of 2026-10-12. That measurement is stale: the
@@ -466,9 +475,10 @@ BATCH_RC=$(cat "$BATCH_RC_FILE" 2>/dev/null)
 
 # Map the per-file report back onto the suites we asked for, printing "<status> <suite>" per suite. node is used
 # rather than jq because this is a node repo and jq is not guaranteed to exist; if this produces nothing - no
-# node, no report, a report that will not parse, a batch killed before it wrote one - then NOTHING is mapped and
-# every selected suite is reported failed below. That direction is the whole point (fleet-1n0z): a suite that did
-# not demonstrably run must never be reported as passed, whatever went wrong.
+# node, no report, a report that will not parse - then NOTHING is mapped. A batch-bound kill with nothing
+# mapped is reported `unknown` below (it proves nothing, so it is not a verdict — agent-do-c45); every other
+# empty-mapping cause reports every selected suite failed. That direction is the whole point (fleet-1n0z): a
+# suite that did not demonstrably run must never be reported as passed, whatever went wrong.
 GATE_ROOT="$ROOT" node -e '
   const fs = require("fs");
   const [reportPath, ...suites] = process.argv.slice(1);
@@ -479,15 +489,21 @@ GATE_ROOT="$ROOT" node -e '
     report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     for (const t of report.testResults ?? []) byName.set(String(t.name ?? "").replace(/\\/g, "/"), t.status);
   } catch {
-    // Deliberately empty: an unreadable report maps nothing, so nothing below can pass.
+    report = null; // Deliberately empty: an unreadable report maps nothing, so nothing below can pass.
   }
-  for (const s of suites) {
-    // vitest reports absolute paths; match exactly first, then by suffix, because the runner root may be a
-    // resolved symlink of ours and a path that merely ENDS in the suite name is still that suite in this repo.
-    const status =
-      byName.get(root + "/" + s) ?? byName.get(s) ??
-      [...byName.entries()].find(([n]) => n.endsWith("/" + s))?.[1] ?? "";
-    console.log((status === "passed" ? "passed" : "failed") + " " + s);
+  // Per-suite lines exist ONLY when a report was parsed to evidence them (agent-do-c45): a run that died
+  // before writing one — a batch-bound kill — proves nothing about any suite, so it must not be able to
+  // print `failed <suite>` per suite, which reads as a verdict. The shell below speaks for that case, and it
+  // alone knows whether the cause was the kill (unknown, not a verdict) or something else (failed).
+  if (report !== null) {
+    for (const s of suites) {
+      // vitest reports absolute paths; match exactly first, then by suffix, because the runner root may be a
+      // resolved symlink of ours and a path that merely ENDS in the suite name is still that suite in this repo.
+      const status =
+        byName.get(root + "/" + s) ?? byName.get(s) ??
+        [...byName.entries()].find(([n]) => n.endsWith("/" + s))?.[1] ?? "";
+      console.log((status === "passed" ? "passed" : "failed") + " " + s);
+    }
   }
   // The per-suite lines above are the file-level verdict; this exit code carries the RUN-level one. vitest sets
   // success:false for a failure that belongs to no single file - a global setup or teardown, an unhandled error -
@@ -500,17 +516,34 @@ PARSE_RC=$?
 
 rc=0
 GLOBAL_FAIL=""
+# agent-do-c45: a batch-bound kill that left NO report proves nothing about any suite — no assertion is known
+# to have run — so it is neither a FAIL nor a pass: reported unknown, exited with the kill code, and
+# fleet-check records KILLED (not a verdict; a re-run measures the tree). Every other cause keeps the
+# fail-loud mapping. A kill that left a real report is NOT this arm: per-suite statuses are evidence.
+KILLED_BATCH=0
+case "$BATCH_RC" in 124|137|143) KILLED_BATCH=1 ;; esac
+KILL_UNKNOWN=0
+if [ "$KILLED_BATCH" = 1 ] && [ ! -s "$TMP/mapped" ]; then KILL_UNKNOWN=1; fi
+
 # Two run-level channels, combined with the file-level statuses below (agent-do-kbi: reading the report alone
 # turned a failing global setup into `fast-gate: PASS`, which is the false green this gate exists to prevent).
-if [ "$BATCH_RC" -ne 0 ]; then
-  rc=1
-  GLOBAL_FAIL="the runner exited $BATCH_RC"
+if [ "$KILL_UNKNOWN" = 1 ]; then
+  rc=$BATCH_RC
+else
+  if [ "$BATCH_RC" -ne 0 ]; then
+    rc=1
+    GLOBAL_FAIL="the runner exited $BATCH_RC"
+  fi
+  if [ "$PARSE_RC" -ne 0 ]; then
+    rc=1
+    GLOBAL_FAIL="${GLOBAL_FAIL:+$GLOBAL_FAIL; }the run report was missing, unreadable, or reported success:false"
+  fi
 fi
-if [ "$PARSE_RC" -ne 0 ]; then
-  rc=1
-  GLOBAL_FAIL="${GLOBAL_FAIL:+$GLOBAL_FAIL; }the run report was missing, unreadable, or reported success:false"
-fi
-if [ -s "$TMP/mapped" ]; then
+if [ "$KILL_UNKNOWN" = 1 ]; then
+  # Line-anchored marker: ~/fleet/remote/check-coverage.py reads this as coverage UNKNOWN, so the record says
+  # "nothing demonstrated" instead of listing never-run suites as executed-and-failed.
+  printf 'fast-gate: unknown: the %ss batch bound killed the run before any suite reported\n' "$SUITE_BOUND"
+elif [ -s "$TMP/mapped" ]; then
   while IFS= read -r line; do
     status=${line%% *}; suite=${line#* }
     [ -n "$suite" ] || continue
@@ -522,7 +555,9 @@ if [ -s "$TMP/mapped" ]; then
     fi
   done <"$TMP/mapped"
 else
-  # No mapping was produced at all: every selected suite is unproven, so every one is reported failed.
+  # No mapping was produced at all, and the batch was NOT the kill (that arm is above): the reader itself is
+  # broken - no node, or a node that cannot run. Nothing is proven, so every selected suite is reported failed
+  # and the gate fails loudly rather than guessing green (fleet-1n0z).
   printf 'fast-gate: failed: %s\n' "${SELECTED[@]}"
   rc=1
 fi
@@ -534,7 +569,11 @@ if [ "$rc" -ne 0 ]; then
   fi
   echo "fast-gate: runner exit $BATCH_RC (0 = a suite reported failed; 124/137/143 = the ${SUITE_BOUND}s batch bound killed it)" >&2
   sed 's/^/    /' "$RUN_LOG_FILE" 2>/dev/null | tail -40
-  echo "fast-gate: FAIL (see the run log above)" >&2
+  if [ "$KILL_UNKNOWN" = 1 ]; then
+    echo "fast-gate: UNKNOWN - NOT a verdict (the run log above is the evidence; a re-run measures the tree)" >&2
+  else
+    echo "fast-gate: FAIL (see the run log above)" >&2
+  fi
 else
   echo "fast-gate: PASS (${#SELECTED[@]} suite(s), ${#CHANGED[@]} changed file(s))"
 fi
