@@ -19,6 +19,39 @@ DST="${1:-${FLEET_CHECK_CONF:-$HOME/.fleet/check.conf}}"
 
 [ -f "$SRC" ] || { echo "install-gate: no $SRC" >&2; exit 1; }
 
+# REFUSE TO INSTALL A check.conf THAT IS NOT ON MAIN (agent-do-llc, a recurrence of agent-do-ewz).
+# The installed file is MACHINE-GLOBAL and outlives the branch it came from: on 2026-10-26 a lane installed
+# this repo's config from an UNLANDED branch, the branch stalled pre-merge, and the VM ran a gate config
+# (960 s / SUITE_BOUND=880) that main (480 s / 400 s) and main's tests did not describe — the config the
+# gate obeyed was untested and the config the tests pinned was not in force. One source of truth: install
+# from main, or say loudly that you are deliberately installing unlanded work and reconcile after landing.
+#
+# The escape hatch exists because of a chicken-and-egg: fleet-check reads the INSTALLED config, so a branch
+# that changes check.conf cannot be gate-tested until its config is installed. That is a deliberate,
+# temporary divergence — set INSTALL_GATE_ALLOW_UNLANDED=1, and reconcile (re-install from main) the moment
+# the branch lands or dies. A provenance sidecar records what was installed; the conf itself is never
+# touched, so `diff tools/check.conf ~/.fleet/check.conf` stays the reconciliation check.
+REPO_ROOT=$(cd "$HERE/.." && pwd)
+MAIN_CONF=$(git -C "$REPO_ROOT" show "origin/main:${SRC#"$REPO_ROOT"/}" 2>/dev/null) || MAIN_CONF=""
+if [ -z "$MAIN_CONF" ]; then
+  echo "install-gate: WARNING: cannot read this file from origin/main here (not a git checkout, or the remote ref is missing);" >&2
+  echo "install-gate: WARNING: installing UNVERIFIED config — confirm it matches main before trusting the gate." >&2
+elif ! printf '%s\n' "$MAIN_CONF" | cmp -s - "$SRC"; then
+  if [ "${INSTALL_GATE_ALLOW_UNLANDED:-0}" != 1 ]; then
+    echo "install-gate: REFUSING: $SRC differs from origin/main's copy — this checkout carries an UNLANDED gate config." >&2
+    echo "install-gate: the installed file is machine-global; installing unlanded work makes the live gate config" >&2
+    echo "install-gate: untested and untracked by main (agent-do-llc, recurrence of agent-do-ewz). Land it first," >&2
+    echo "install-gate: or install deliberately with INSTALL_GATE_ALLOW_UNLANDED=1 and reconcile after landing." >&2
+    printf '%s\n' "--- origin/main" "+++ $SRC" >&2
+    diff -u <(printf '%s\n' "$MAIN_CONF") "$SRC" | sed 's/^/  /' >&2 || true
+    exit 1
+  fi
+  echo "install-gate: INSTALL_GATE_ALLOW_UNLANDED=1 — installing a config that DIFFERS FROM origin/main:" >&2
+  diff -u <(printf '%s\n' "$MAIN_CONF") "$SRC" | sed 's/^/  /' >&2 || true
+  echo "install-gate: this VM now runs gate bounds main does not describe; reconcile (re-install from main)" >&2
+  echo "install-gate: the moment this branch lands or dies (agent-do-llc)." >&2
+fi
+
 if [ -f "$DST" ] && ! cmp -s "$SRC" "$DST"; then
   echo "install-gate: replacing an existing, DIFFERENT $DST:" >&2
   diff -u "$DST" "$SRC" | sed 's/^/  /' >&2 || true
@@ -27,6 +60,18 @@ fi
 mkdir -p "$(dirname "$DST")"
 cp "$SRC" "$DST"
 chmod 644 "$DST"
+# Provenance sidecar (agent-do-llc): what was installed, from where, and whether it matched main at the time.
+{
+  echo "installed: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "source: $SRC"
+  echo "repo_head: $(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "repo_branch: $(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  if [ -n "$MAIN_CONF" ]; then
+    printf '%s\n' "$MAIN_CONF" | cmp -s - "$SRC" && echo "matches_origin_main: yes" || echo "matches_origin_main: NO (INSTALL_GATE_ALLOW_UNLANDED=${INSTALL_GATE_ALLOW_UNLANDED:-0})"
+  else
+    echo "matches_origin_main: unknown (origin/main not readable here)"
+  fi
+} > "$DST.provenance" 2>/dev/null || true
 printf 'install-gate: installed %s -> %s\n' "$SRC" "$DST"
 printf 'install-gate: CHECK_CMD=%s\n' "$(grep -c '^CHECK_CMD=' "$DST")"
 printf 'install-gate: CHECK_FAST_CMD=%s\n' "$(grep -c '^CHECK_FAST_CMD=' "$DST")"
