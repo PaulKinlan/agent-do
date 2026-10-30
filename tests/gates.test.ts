@@ -534,10 +534,11 @@ describe('tools/fast-gate.sh — a batch-bound kill with no report is unknown, n
 
 describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
   it('derives the batch bound from the outer window, and the config files agree', () => {
-    // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
-    // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
-    // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
-    // rather than left to a comment, so raising one of them alone goes red.
+    // A per-suite bound that is not below the outer window is a race: whichever fires first decides. Since
+    // agent-do-c45 both outcomes read `unknown` — but the outer kill prints its marker and stops, losing the
+    // run log, while the batch bound prints the log tail: the evidence for WHICH suite wedged. That tail is
+    // what this relationship protects. It is asserted here rather than left to a comment, so raising one of
+    // the bounds alone goes red.
     //
     // agent-do-cj6/gmr: the EFFECTIVE bound is what must relate to the outer window. A constant reserve
     // (cj6's `SUITE_BOUND=880` env prefix in CHECK_FAST_CMD = outer minus a guessed 80 s) was wrong by
@@ -942,12 +943,12 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
     // `timeout --foreground -k 30 3` mirrors the real path: fleet-check invokes the gate as
-    // `timeout --foreground -k 30 180 ...`, and --foreground matters — without it coreutils signals the whole
-    // process group, which would mask a leak this test is meant to catch. The KILL grace is the number that
-    // must match production (agent-do-7ix): with -k 5 the trap had 5 s to print the marker, reap the tree and
-    // exit, and under fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL
-    // and the run read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it
-    // makes the assertion deterministic without weakening anything it proves.
+    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>`, and --foreground matters — without it coreutils
+    // signals the whole process group, which would mask a leak this test is meant to catch. The KILL grace
+    // is the number that must match production (agent-do-7ix): with -k 5 the trap had 5 s to print the
+    // marker, reap the tree and exit, and under fleet load a correct reap occasionally exceeded it — the
+    // wrapper escalated to SIGKILL and the run read 137 instead of 124, a false red on a working gate. The
+    // real grace is 30 s; mirroring it makes the assertion deterministic without weakening anything it proves.
     // (agent-do-94t hit the same 137-vs-124 race independently on 2026-10-26 — run C, 705a26f — and widened
     // the window to `-k 15 10`; the 7ix mirroring of production's real 30 s grace supersedes that: same cure,
     // better fidelity. The 124 assertion stays the point of the test either way.)
