@@ -16,6 +16,15 @@
  * The stub tsc is a fixture script driven by a mode argument; each test gets its own tmp
  * directory and sets BUILD_SCRIPT_TSC / BUILD_SCRIPT_VERIFY, so nothing here touches the
  * repo's real dist/ or runs the real tsc (which would cost ~70s per case).
+ *
+ * TIMEOUT POLICY (agent-do-7ja, the agent-do-c26 file-level policy from tests/gates.test.ts):
+ * every test in the subprocess describe spawns node — a wrapper run and, in the SIGTERM case,
+ * two bounded 10 s waits on top. That cost belongs to the machine, not to the assertion: a
+ * test whose failure mode is "the VM was busy" cannot be a gate, and this file IS gate-selected
+ * (tools/suite-map.tsv maps scripts/* to it). The subprocess describe therefore declares a
+ * 60 s window — above its own internal budget (10 s start + 10 s exit + two wrapper spawns) —
+ * instead of inheriting vitest's 5 s default, and the synchronous wrapper runs carry their own
+ * spawnSync timeout because a synchronous child call cannot be preempted by a vitest timeout.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
@@ -85,7 +94,7 @@ describe('verifyTargets', () => {
 
 // ── subprocess behaviour (stub tsc, per-test fixture dir) ───────────────
 
-describe('build wrapper subprocess', () => {
+describe('build wrapper subprocess', { timeout: 60_000 }, () => { // agent-do-7ja: the 5 s default is below this file's own waits (see the header policy)
   let dir: string;
   let infoPath: string;
 
@@ -117,6 +126,7 @@ if (mode === 'sleep') {
     spawnSync(process.execPath, [join(import.meta.dirname, '..', 'scripts', 'build.mjs')], {
       cwd: dir,
       encoding: 'utf8',
+      timeout: 45_000, // agent-do-7ja: a synchronous child cannot be preempted by a vitest timeout; bound it so a wedged wrapper fails the test instead of hanging the worker
       env: {
         ...process.env,
         BUILD_SCRIPT_TSC: `${process.execPath} ${join(dir, 'tsc-stub.mjs')}`,
