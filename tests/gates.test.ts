@@ -533,37 +533,60 @@ describe('tools/fast-gate.sh — a batch-bound kill with no report is unknown, n
 });
 
 describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
-  it('bounds one suite well inside the outer fast-tier kill window', () => {
+  it('derives the batch bound from the outer window, and the config files agree', () => {
     // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
     // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
     // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
     // rather than left to a comment, so raising one of them alone goes red.
     //
-    // agent-do-cj6: the EFFECTIVE bound is what must satisfy the relationship. CHECK_FAST_CMD may carry a
-    // `SUITE_BOUND=<n>` env prefix (fleet-check does not export CHECK_FAST_TIMEOUT to the command, so the
-    // coupling lives in check.conf); reading only the script default once let a 960 s outer window sit on
-    // top of a 400 s batch cap — the suite phase was bound at static+415 s and a healthy loaded run read
-    // as `failed: <every suite>` (false red). Both drift directions are pinned: bound+15 < outer (the
-    // bound must fire first and name the suite), and the reserve outer-bound stays in [30, 95] — big
-    // enough for the warm static step + markers, small enough that the suite phase actually gets the
-    // window it was sized for.
+    // agent-do-cj6/gmr: the EFFECTIVE bound is what must relate to the outer window. A constant reserve
+    // (cj6's `SUITE_BOUND=880` env prefix in CHECK_FAST_CMD = outer minus a guessed 80 s) was wrong by
+    // 1-3x against the measured warm static step (58.7 s no-op, 220.4 s partial rebuild), so the OUTER
+    // window fired first and healthy loaded runs recorded `unknown`. fast-gate.sh now derives the bound
+    // after MEASURING the static step. Pinned here: (a) the two config files agree on the window —
+    // gate.conf's FAST_OUTER_WINDOW is the only channel the script has, because fleet-check does not
+    // export CHECK_FAST_TIMEOUT to the command; (b) CHECK_FAST_CMD stays the bare `bash <path>` form —
+    // an env-prefix hides the gate path from fleet-check's missing-target preflight (agent-do-a2t: a
+    // config naming a nonexistent gate then burns a heavy slot instead of being refused); (c) the
+    // derivation formula exists; (d) the fallback default still fits inside the window with its kill
+    // grace.
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
     const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
-    const scriptDefault = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
-    const cmdOverride = Number(/\bSUITE_BOUND=(\d+)\s/.exec(/^CHECK_FAST_CMD='(.*)'$/m.exec(conf)?.[1] ?? '')?.[1] ?? NaN);
-    const bound = Number.isFinite(cmdOverride) ? cmdOverride : scriptDefault;
+    const gconf = readFileSync(join(REPO, 'tools', 'gate.conf'), 'utf8');
     const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
-    expect(Number.isFinite(bound), 'the effective SUITE_BOUND must be a literal number in tools/fast-gate.sh or a CHECK_FAST_CMD env prefix in tools/check.conf').toBe(true);
+    const declared = Number(/^FAST_OUTER_WINDOW=(\d+)$/m.exec(gconf)?.[1]);
     expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
-    // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): the bound must be able to fire,
-    // escalate, and still leave the gate time to name the suite before the outer window ends.
-    expect(bound + 15).toBeLessThan(outer);
-    // And the suite phase must actually receive the window: a stale SUITE_BOUND far below the outer
-    // window silently caps it (agent-do-cj6). Reserve = headroom for the warm static step + reporting.
-    const reserve = outer - bound;
-    expect(reserve, 'the reserve above SUITE_BOUND must leave room for the warm static step and markers').toBeGreaterThanOrEqual(30);
-    expect(reserve, 'SUITE_BOUND must scale with CHECK_FAST_TIMEOUT: a stale bound caps the suite phase below the window (agent-do-cj6)').toBeLessThanOrEqual(95);
+    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr)').toBe(outer);
+    const cmd = /^CHECK_FAST_CMD='([^']*)'$/m.exec(conf)?.[1];
+    expect(cmd, "CHECK_FAST_CMD must stay the bare bash form so fleet-check's missing-target preflight sees the gate path (agent-do-a2t)").toBe('bash tools/fast-gate.sh');
+    expect(gate, 'the batch bound must be derived from the MEASURED static step (agent-do-gmr)').toMatch(/SUITE_BOUND=\$\(\( FAST_OUTER_WINDOW - static_secs - _margin \)\)/);
+    const fallback = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
+    expect(Number.isFinite(fallback), 'the no-window fallback must stay a literal number in tools/fast-gate.sh').toBe(true);
+    // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): even the fallback must be able to
+    // fire, escalate, and still leave the gate time to name the suite before the outer window ends.
+    expect(fallback + 15).toBeLessThan(outer);
   });
+
+  it('derives the batch bound at runtime: outer window minus measured static minus margin (agent-do-gmr)', () => {
+    const fx = fixture();
+    const hang = join(fx.root, 'hang-runner');
+    writeFileSync(hang, '#!/usr/bin/env bash\nsleep 60\n', { mode: 0o755 });
+    // window 14, margin 2, floor 2, static `sleep 1` -> derived bound 11 (10 if the clock ticks during
+    // spawn). The runner hangs, so the derived bound must fire, report unknown (NOT per-suite failed,
+    // agent-do-c45), and exit with the kill code.
+    const r = runGate(fx, ['--changed', 'src/a.ts'], {
+      FAST_GATE_RUNNER: hang,
+      STATIC_CMD: 'sleep 1',
+      FAST_OUTER_WINDOW: '14',
+      FAST_GATE_STATIC_MARGIN: '2',
+      FAST_GATE_BOUND_FLOOR: '2',
+    });
+    const out = r.out;
+    expect(out, 'the derivation must announce itself with the numbers it used').toMatch(/batch bound (?:10|11)s = 14s outer - [12]s static - 2s margin/);
+    expect(out).toMatch(/^fast-gate: unknown: the (?:10|11)s batch bound killed the run before any suite reported/m);
+    expect(r.status, 'a batch-bound kill exits with the kill code, recorded KILLED (agent-do-c45)').toBe(124);
+    expect(out, 'a report-less kill must not name suites as failed').not.toMatch(/^fast-gate: failed:/m);
+  }, 60_000);
 });
 
 describe('tools/fast-gate.sh — the runner gets a worker count (agent-do-664)', () => {

@@ -16,7 +16,7 @@ every landing paid for it.
 | gate | command | what it runs | measured (2026-10-22, see §4) | budget |
 |---|---|---|---|---|
 | **full** | `bash tools/full-gate.sh` | STATIC_CMD, then every suite + the mock-tier evals | **313 s at 4 workers, 356 s at one** | ≤ 300 s (R1) |
-| **fast** | `SUITE_BOUND=880 bash tools/fast-gate.sh` (the `CHECK_FAST_CMD` env prefix, agent-do-cj6) | STATIC_CMD, then the suites that reach the changed files | **247 s** worst row at the default 2 workers (see §4) | ≤ 60 s (R2) |
+| **fast** | `bash tools/fast-gate.sh` (batch bound derived at runtime from `FAST_OUTER_WINDOW` in `tools/gate.conf`, agent-do-gmr) | STATIC_CMD, then the suites that reach the changed files | **247 s** worst row at the default 2 workers (see §4) | ≤ 60 s (R2) |
 
 `fleet-check --fast` runs the fast gate; `fleet-check` runs the full gate. **Only the merger runs the full
 gate** (R13) — `bin/fleet-check` refuses it from any other lane unless the lane passes `--full`, because
@@ -170,13 +170,16 @@ whole gate as `unknown` and losing the tail. What the batch-bound kill SAYS chan
 a kill that left no report proves nothing about any suite, so it is reported
 `fast-gate: unknown: the <N>s batch bound killed the run before any suite reported` and exits with the kill code
 (124/137/143), which `fleet-check` records as KILLED — not a verdict, re-run. The earlier mapping (`failed:
-<suite>` for every selected suite) was a false red naming failures that never ran. Since agent-do-cj6
-(2026-10-26) the EFFECTIVE bound is the `SUITE_BOUND=880` env prefix in `CHECK_FAST_CMD` — outer 960 minus an
-80 s reserve for the warm static step — because fleet-check does not export `CHECK_FAST_TIMEOUT` to the
-command's environment; the script's own `400` default is only the fallback. `tests/gates.test.ts` asserts the
-relationship against the effective bound in `tools/check.conf`, and in BOTH directions: a bound too close to
-the window races the outer kill, and a stale bound far below it silently caps the suite phase under the
-window it was sized for.
+<suite>` for every selected suite) was a false red naming failures that never ran. Since agent-do-gmr
+(2026-10-30, superseding cj6's constant-reserve env prefix) the EFFECTIVE bound is DERIVED at runtime:
+`FAST_OUTER_WINDOW` in `tools/gate.conf` — the mirror of `CHECK_FAST_TIMEOUT` that `tests/gates.test.ts`
+pins, because fleet-check does not export it to the command's environment — minus the MEASURED static-step
+seconds minus a 60 s margin, floor 60 s. The measured-minus-guessed distinction is the fix: the warm static
+step measures 58.7 s no-op and 220.4 s partial-rebuild on this VM, so cj6's fixed 80 s reserve was 1–3× too
+small and the outer window fired before the batch bound, recording `unknown` on healthy loaded runs. The
+script's own `400` default is only the fallback when no outer window is declared. `tests/gates.test.ts`
+pins the agreement between the two config files, the bare-command form of `CHECK_FAST_CMD` (agent-do-a2t:
+an env prefix escapes fleet-check's missing-target preflight), and the derivation itself.
 
 The fast window was 480 s until 2026-10-26 (agent-do-94b), and its retirement numbers are the same class
 as the full gate's: **four consecutive healthy runs bound-killed at 482–497 s** — twice inside `npm run
@@ -185,9 +188,9 @@ the tsbuildinfo on SIGTERM by design, so every kill guaranteed a full rebuild ne
 and twice in the suite phase on the widest row (39 suites, zero failures). Even a coord-ordered quiet
 window — every implementer lane idle — was killed at 482 s: the background beads-sync churn alone keeps
 this 2-vCPU VM more than 4× the quiet-VM row cost (247 s). 960 s is 2× the window that fired (the same
-precedent as the full gate's 600→1200), and via the `SUITE_BOUND=880` prefix the suite phase now actually
-receives it. The loaded-VM rows this paragraph records are the honest state until the levers below land:
-the window is sized against a contended VM, not a quiet one.
+precedent as the full gate's 600→1200), and via the runtime-derived batch bound (agent-do-gmr) the suite
+phase now actually receives it. The loaded-VM rows this paragraph records are the honest state until the
+levers below land: the window is sized against a contended VM, not a quiet one.
 
 The full gate's window was 600 s until 2026-10-26, and the numbers that retired it are worth recording
 because they are the failure mode the window exists to avoid: **600 s was 94% of the worst healthy
