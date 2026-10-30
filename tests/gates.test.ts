@@ -42,7 +42,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     const child = spawn('bash', ['-c', 'while :; do sleep 1; done', marker]);
     try {
       await once(child, 'spawn');
-      await new Promise((done) => setTimeout(done, 250));
+      await new Promise((done) => setTimeout(done, 1_500)); // agent-do-94t: 250ms starved under load
       const pids = () => spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim();
       expect(pids(), 'the probe must be visible to the same match teardown uses').not.toBe('');
 
@@ -50,7 +50,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
       expect(pids(), 'teardown must leave nothing matching the fixture root').toBe('');
       const exited = await Promise.race([
         once(child, 'exit').then(() => true),
-        new Promise((done) => setTimeout(() => done(false), 2000)),
+        new Promise((done) => setTimeout(() => done(false), 10_000)), // agent-do-94t: 2s starved under load
       ]);
       expect(exited, 'the probe itself must be gone, not merely detached').toBe(true);
     } finally {
@@ -69,7 +69,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     const child = spawn('bash', ['-c', 'sleep 5 & echo $! > "$1"; wait', join(root, 'probe'), childPidFile]);
     try {
       await once(child, 'spawn');
-      const deadline = Date.now() + 3000;
+      const deadline = Date.now() + 15_000; // agent-do-94t: 3s starved under load (run D, 705a26f)
       while (!existsSync(childPidFile) && Date.now() < deadline) sleepSync(50);
       const grandchild = readFileSync(childPidFile, 'utf8').trim();
       const alive = () => spawnSync('kill', ['-0', grandchild]).status === 0;
@@ -77,7 +77,7 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
       expect(alive(), 'the rootless child must be running before teardown').toBe(true);
 
       expect(reapFixtureProcesses(root), 'both the matched process and its descendant').toBeGreaterThan(1);
-      const gone = Date.now() + 2000;
+      const gone = Date.now() + 10_000; // agent-do-94t: 2s starved under load
       while (alive() && Date.now() < gone) sleepSync(25);
       expect(alive(), 'a cmdline match alone would leave this child behind').toBe(false);
     } finally {
@@ -104,18 +104,22 @@ describe('fixture teardown', { timeout: 120_000 }, () => {
     );
     try {
       await once(child, 'spawn');
-      await new Promise((done) => setTimeout(done, 300));
+      await new Promise((done) => setTimeout(done, 1_500)); // agent-do-94t: 300ms starved under load
       expect(
         spawnSync('pgrep', ['-f', '--', `${root}/`], { encoding: 'utf8' }).stdout.trim(),
         'the probe must be matched before teardown',
       ).not.toBe('');
 
       expect(reapFixtureProcesses(root)).toBeGreaterThan(1);
+      // agent-do-94t: under load the TERM handler's pid-file write raced this read; poll bounded
+      // (the intent is unchanged: the handler must have run and recorded its child).
+      const wroteBy = Date.now() + 10_000;
+      while (!existsSync(lateChildPidFile) && Date.now() < wroteBy) sleepSync(25);
       expect(existsSync(lateChildPidFile), 'the TERM handler must have run').toBe(true);
       const late = readFileSync(lateChildPidFile, 'utf8').trim();
       expect(late, 'the handler must record a pid').toMatch(/^\d+$/);
       const alive = () => spawnSync('kill', ['-0', late]).status === 0;
-      const gone = Date.now() + 2000;
+      const gone = Date.now() + 10_000; // agent-do-94t: 2s starved under load
       while (alive() && Date.now() < gone) sleepSync(25);
       expect(alive(), 'a snapshot taken before TERM cannot see this child').toBe(false);
     } finally {
@@ -226,7 +230,10 @@ afterAll(() => {
     reapFixtureProcesses(dir);
     rmSync(dir, { recursive: true, force: true });
   }
-});
+  // agent-do-94t: the default 10s hookTimeout flaked the WHOLE FILE (35/35 tests passing) under VM load:
+  // reaping ~10 fixture roots (/proc walks + a 1s settle each) plus recursive rmSync does not fit in 10s
+  // on a contended 2-vCPU machine. The reaper's own 1s settle stays — it escalates to KILL and is bounded.
+}, 120_000);
 
 /** A throwaway checkout with this repo's tools/ and a tiny fixture of its own. */
 function fixture(opts: { map?: string; stub?: string } = {}) {
@@ -313,7 +320,7 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
   const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), ...args], {
     cwd: fx.repo,
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: 180_000, // agent-do-94t: 60s flaked to status=null (spawnSync kill) under VM load (run B, 705a26f)
     env: { ...process.env, FAST_GATE_RUNNER: fx.stub, STATIC_CMD: 'true', RUN_LOG: fx.log, ...env },
   });
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
@@ -526,20 +533,60 @@ describe('tools/fast-gate.sh — a batch-bound kill with no report is unknown, n
 });
 
 describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
-  it('bounds one suite well inside the outer fast-tier kill window', () => {
+  it('derives the batch bound from the outer window, and the config files agree', () => {
     // A per-suite bound that is not below the outer window is a race: whichever fires first decides, and
     // when the outer one does, a hung suite is recorded as `unknown` instead of `fast-gate: failed: X`
     // with its log tail. That was the case with 180 s in both places; the relationship is asserted here
     // rather than left to a comment, so raising one of them alone goes red.
+    //
+    // agent-do-cj6/gmr: the EFFECTIVE bound is what must relate to the outer window. A constant reserve
+    // (cj6's `SUITE_BOUND=880` env prefix in CHECK_FAST_CMD = outer minus a guessed 80 s) was wrong by
+    // 1-3x against the measured warm static step (58.7 s no-op, 220.4 s partial rebuild), so the OUTER
+    // window fired first and healthy loaded runs recorded `unknown`. fast-gate.sh now derives the bound
+    // after MEASURING the static step. Pinned here: (a) the two config files agree on the window —
+    // gate.conf's FAST_OUTER_WINDOW is the only channel the script has, because fleet-check does not
+    // export CHECK_FAST_TIMEOUT to the command; (b) CHECK_FAST_CMD stays the bare `bash <path>` form —
+    // an env-prefix hides the gate path from fleet-check's missing-target preflight (agent-do-a2t: a
+    // config naming a nonexistent gate then burns a heavy slot instead of being refused); (c) the
+    // derivation formula exists; (d) the fallback default still fits inside the window with its kill
+    // grace.
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
-    const bound = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
-    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8'))?.[1]);
-    expect(Number.isFinite(bound), 'SUITE_BOUND default must be a literal number in tools/fast-gate.sh').toBe(true);
+    const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
+    const gconf = readFileSync(join(REPO, 'tools', 'gate.conf'), 'utf8');
+    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
+    const declared = Number(/^FAST_OUTER_WINDOW=(\d+)$/m.exec(gconf)?.[1]);
     expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
-    // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): the bound must be able to fire,
-    // escalate, and still leave the gate time to name the suite before the outer window ends.
-    expect(bound + 15).toBeLessThan(outer);
+    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr)').toBe(outer);
+    const cmd = /^CHECK_FAST_CMD='([^']*)'$/m.exec(conf)?.[1];
+    expect(cmd, "CHECK_FAST_CMD must stay the bare bash form so fleet-check's missing-target preflight sees the gate path (agent-do-a2t)").toBe('bash tools/fast-gate.sh');
+    expect(gate, 'the batch bound must be derived from the MEASURED static step (agent-do-gmr)').toMatch(/SUITE_BOUND=\$\(\( FAST_OUTER_WINDOW - static_secs - _margin \)\)/);
+    const fallback = Number(/^SUITE_BOUND=\$\{SUITE_BOUND:-(\d+)\}/m.exec(gate)?.[1]);
+    expect(Number.isFinite(fallback), 'the no-window fallback must stay a literal number in tools/fast-gate.sh').toBe(true);
+    // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): even the fallback must be able to
+    // fire, escalate, and still leave the gate time to name the suite before the outer window ends.
+    expect(fallback + 15).toBeLessThan(outer);
   });
+
+  it('derives the batch bound at runtime: outer window minus measured static minus margin (agent-do-gmr)', () => {
+    const fx = fixture();
+    const hang = join(fx.root, 'hang-runner');
+    writeFileSync(hang, '#!/usr/bin/env bash\nsleep 60\n', { mode: 0o755 });
+    // window 14, margin 2, floor 2, static `sleep 1` -> derived bound 11 (10 if the clock ticks during
+    // spawn). The runner hangs, so the derived bound must fire, report unknown (NOT per-suite failed,
+    // agent-do-c45), and exit with the kill code.
+    const r = runGate(fx, ['--changed', 'src/a.ts'], {
+      FAST_GATE_RUNNER: hang,
+      STATIC_CMD: 'sleep 1',
+      FAST_OUTER_WINDOW: '14',
+      FAST_GATE_STATIC_MARGIN: '2',
+      FAST_GATE_BOUND_FLOOR: '2',
+    });
+    const out = r.out;
+    expect(out, 'the derivation must announce itself with the numbers it used').toMatch(/batch bound (?:10|11)s = 14s outer - [12]s static - 2s margin/);
+    expect(out).toMatch(/^fast-gate: unknown: the (?:10|11)s batch bound killed the run before any suite reported/m);
+    expect(r.status, 'a batch-bound kill exits with the kill code, recorded KILLED (agent-do-c45)').toBe(124);
+    expect(out, 'a report-less kill must not name suites as failed').not.toMatch(/^fast-gate: failed:/m);
+  }, 60_000);
 });
 
 describe('tools/fast-gate.sh — the runner gets a worker count (agent-do-664)', () => {
@@ -647,8 +694,9 @@ describe('tools/suite-map.tsv — the committed map is a true claim', () => {
  * the suite processes do, and a descendant of a runner cannot outlive the run.
  */
 describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120_000 }, () => {
-  /** How long the run gets before the outer window fires; the stub below never finishes on its own. */
-  const OUTER_WINDOW_MS = 3_000;
+  /** How long the run gets before the outer window fires; the stub below never finishes on its own.
+   * agent-do-94t: was 3s, which under VM load killed the run before the stub had written its pid file. */
+  const OUTER_WINDOW_MS = 10_000;
 
   it('kills the suite processes, takes their descendants with them, and does not race the scratch dir', async () => {
     const fx = fixture();
@@ -703,9 +751,9 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120
       .filter(Boolean)
       .map(Number);
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       // Do not leak the descendant out of a failing run: kill what the fix failed to kill.
@@ -724,7 +772,7 @@ describe('tools/fast-gate.sh — cleanup when the run is killed', { timeout: 120
       console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
     }
     expect(stillAlive, 'a descendant of the killed suite runner outlived the gate').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load (run C, 705a26f)
 });
 
 describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeout: 120_000 }, () => {
@@ -748,7 +796,7 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
     });
 
@@ -757,9 +805,9 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
     expect(r.status).toBe(0);
 
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
@@ -778,7 +826,7 @@ describe('tools/fast-gate.sh — a suite that leaves a process behind', { timeou
       console.error('[diag trace] ' + (readFileSync(process.env.FAST_GATE_DEBUG ?? '/dev/null', 'utf8') || 'no trace'));
     }
     expect(stillAlive, 'a suite left a process behind after the gate reported its verdict').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — reaping must not depend on helper processes', { timeout: 120_000 }, () => {
@@ -806,7 +854,7 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: {
         ...process.env,
         PATH: `${shim}:${process.env.PATH ?? ''}`,
@@ -822,9 +870,9 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
     expect(r.status).toBe(0);
 
     let stillAlive = true;
-    for (let i = 0; i < 20 && stillAlive; i++) {
+    for (let i = 0; i < 40 && stillAlive; i++) { // agent-do-94t: 20x250ms starved under load
       stillAlive = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).status === 0;
-      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
+      if (stillAlive) await new Promise((resolveSleep) => setTimeout(resolveSleep, 500));
     }
     if (stillAlive) {
       const leaked = spawnSync('pgrep', ['-f', marker], { encoding: 'utf8' }).stdout ?? '';
@@ -837,7 +885,7 @@ describe('tools/fast-gate.sh — reaping must not depend on helper processes', {
       }
     }
     expect(stillAlive, 'the reaper needed its helpers: a descendant survived with pgrep/pkill failing').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — teardown before the caller checks the slot', { timeout: 120_000 }, () => {
@@ -862,7 +910,7 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', { 
     const r = spawnSync('bash', [join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'], {
       cwd: fx.repo,
       encoding: 'utf8',
-      timeout: 60_000,
+      timeout: 180_000, // agent-do-94t: 60s starved under load
       env: { ...process.env, FAST_GATE_RUNNER: stub, STATIC_CMD: 'true', RUN_LOG: fx.log, MARKER: marker },
     });
 
@@ -881,7 +929,7 @@ describe('tools/fast-gate.sh — teardown before the caller checks the slot', { 
       }
     }
     expect(stillExiting, 'a descendant was still exiting when the gate returned').toBe(false);
-  }, 30_000);
+  }, 90_000); // agent-do-94t: 30s timed out under load
 });
 
 describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeout: 120_000 }, () => {
@@ -900,6 +948,9 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     // exit, and under fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL
     // and the run read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it
     // makes the assertion deterministic without weakening anything it proves.
+    // (agent-do-94t hit the same 137-vs-124 race independently on 2026-10-26 — run C, 705a26f — and widened
+    // the window to `-k 15 10`; the 7ix mirroring of production's real 30 s grace supersedes that: same cure,
+    // better fidelity. The 124 assertion stays the point of the test either way.)
     const r = spawnSync(
       'timeout',
       ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'src/a.ts'],
@@ -919,7 +970,78 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     // And it must not claim a suite result it never produced.
     expect(out).not.toMatch(/^fast-gate: (?:PASS|FAIL)/m);
     expect(out).not.toMatch(/^fast-gate: passed: /m);
-  }, 65_000);
+  }, 90_000); // agent-do-94t: headroom above the 60s spawnSync cap under load (7ix sized 65s; 5s of bookkeeping margin was too thin on the loaded VM)
+});
+
+describe('tools/install-gate.sh — the unlanded-config guard (agent-do-llc, agent-do-fqv)', { timeout: 120_000 }, () => {
+  // The installed check.conf is MACHINE-GLOBAL, so the installer must fail closed: a config that differs
+  // from origin/main's — or one that CANNOT be compared to origin/main (no checkout, missing ref, file
+  // absent from main; agent-do-fqv) — is refused unless the operator deliberately overrides. Sandboxed
+  // git repos keep this independent of the branch the suite itself runs on.
+  const script = readFileSync(join(REPO, 'tools', 'install-gate.sh'), 'utf8');
+  const gitEnv = {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+  };
+
+  function sandbox(conf: string): { root: string; repo: string } {
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-install-gate-'));
+    ROOTS.push(root);
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'tools'), { recursive: true });
+    writeFileSync(join(repo, 'tools', 'install-gate.sh'), script, { mode: 0o755 });
+    writeFileSync(join(repo, 'tools', 'check.conf'), conf);
+    return { root, repo };
+  }
+
+  const runInstall = (repo: string, dst: string, env: Record<string, string> = {}) =>
+    spawnSync('bash', [join(repo, 'tools', 'install-gate.sh'), dst], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ...gitEnv, ...env },
+    });
+
+  it('fails CLOSED when the source cannot be compared to origin/main, unless overridden', () => {
+    const { root, repo } = sandbox("CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=1\n");
+    spawnSync('git', ['-C', repo, 'init', '-q'], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    const dst = join(root, 'live', 'check.conf');
+
+    const refused = runInstall(repo, dst);
+    expect(refused.status, 'an unverifiable source must be refused, not warned-and-installed (agent-do-fqv)').toBe(1);
+    expect(refused.stdout + refused.stderr).toContain('fails CLOSED');
+    expect(existsSync(dst), 'a refused install must not write the destination').toBe(false);
+
+    const overridden = runInstall(repo, dst, { INSTALL_GATE_ALLOW_UNLANDED: '1' });
+    expect(overridden.status).toBe(0);
+    expect(existsSync(dst)).toBe(true);
+    expect(readFileSync(dst + '.provenance', 'utf8'), 'the provenance must say the source was unverifiable').toContain('UNVERIFIABLE');
+  }, 60_000);
+
+  it('refuses a config that differs from origin/main, and installs it only with the loud override', () => {
+    const { root, repo } = sandbox("CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=1\n");
+    const git = (...args: string[]) =>
+      spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    git('init', '-q', '-b', 'main');
+    git('add', 'tools');
+    git('commit', '-qm', 'landed conf');
+    spawnSync('git', ['init', '-q', '--bare', join(root, 'origin.git')], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    git('remote', 'add', 'origin', join(root, 'origin.git'));
+    git('push', '-q', 'origin', 'main');
+    // The branch now carries an UNLANDED change to the config.
+    writeFileSync(join(repo, 'tools', 'check.conf'), "CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=960\n");
+    const dst = join(root, 'live', 'check.conf');
+
+    const refused = runInstall(repo, dst);
+    expect(refused.status, 'a config main does not describe must be refused (agent-do-llc)').toBe(1);
+    expect(refused.stdout + refused.stderr).toContain('UNLANDED');
+    expect(existsSync(dst)).toBe(false);
+
+    const overridden = runInstall(repo, dst, { INSTALL_GATE_ALLOW_UNLANDED: '1' });
+    expect(overridden.status).toBe(0);
+    expect(readFileSync(dst, 'utf8')).toContain('CHECK_FAST_TIMEOUT=960');
+    expect(readFileSync(dst + '.provenance', 'utf8')).toContain('matches_origin_main: NO');
+  }, 90_000);
 });
 
 describe('tools/fast-gate.sh — a bound kill during the static step', { timeout: 120_000 }, () => {
@@ -935,7 +1057,8 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
     // --foreground again: fleet-check's real bound does not signal the process group, so a static step left
     // running after the bound fires is exactly what this case must catch. -k mirrors production's 30 s grace
     // (agent-do-7ix): 5 s starved a correct trap-and-reap under load and escalated to SIGKILL, so the run
-    // read 137 instead of 124 — a false red on a working gate.
+    // read 137 instead of 124 — a false red on a working gate. (agent-do-94t widened this window
+    // independently the same day; the production-mirroring grace supersedes it.)
     const r = spawnSync(
       'timeout',
       ['--foreground', '-k', '30', '3', 'bash', join(fx.repo, 'tools', 'fast-gate.sh'), '--changed', 'tests/gates.test.ts'],
@@ -961,7 +1084,7 @@ describe('tools/fast-gate.sh — a bound kill during the static step', { timeout
       }
     }
     expect(leaked, 'the killed static step was left running').toBe('');
-  }, 65_000);
+  }, 90_000); // agent-do-94t: headroom above the 60s spawnSync cap under load
 });
 
 describe('the gate re-checks its own generated metadata (agent-do-s5u)', { timeout: 120_000 }, () => {

@@ -90,12 +90,19 @@ CONF="$HERE/gate.conf"
 # value containing a placeholder inside a default form is parsed wrong — see tools/gate.conf.)
 _ENV_RUNNER=${FAST_GATE_RUNNER-}
 _ENV_STATIC=${STATIC_CMD-}
+_ENV_OUTER=${FAST_OUTER_WINDOW-}
+_ENV_MARGIN=${FAST_GATE_STATIC_MARGIN-}
+_ENV_FLOOR=${FAST_GATE_BOUND_FLOOR-}
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 [ -n "$_ENV_RUNNER" ] && FAST_GATE_RUNNER=$_ENV_RUNNER
 [ -n "$_ENV_STATIC" ] && STATIC_CMD=$_ENV_STATIC
+[ -n "$_ENV_OUTER" ] && FAST_OUTER_WINDOW=$_ENV_OUTER
+[ -n "$_ENV_MARGIN" ] && FAST_GATE_STATIC_MARGIN=$_ENV_MARGIN
+[ -n "$_ENV_FLOOR" ] && FAST_GATE_BOUND_FLOOR=$_ENV_FLOOR
 FAST_GATE_RUNNER=${FAST_GATE_RUNNER:-npx vitest run}
 STATIC_CMD=${STATIC_CMD:-true}
+FAST_OUTER_WINDOW=${FAST_OUTER_WINDOW-}
 JOBS=${FAST_GATE_JOBS-2}
 # Parallelism, passed to the runner and actually used (agent-do-664). Before this, JOBS was declared and
 # documented here and never reached the runner, so vitest fell back to its own default — ONE fork on this
@@ -117,7 +124,7 @@ case "$JOBS" in
   *) WORKERS_ARG="--maxWorkers=$JOBS" ;;
 esac
 # Kill window for the whole batch. MUST stay below the outer window (CHECK_FAST_TIMEOUT in tools/check.conf,
-# 480 s): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
+# 960 s since agent-do-94b): the batch bound has to be the one that fires, so a wedged run keeps its log tail — the evidence for
 # WHICH suite wedged. If the outer window fires first the tail is lost and the record says only `unknown`.
 #
 # What a batch-bound kill REPORTS (agent-do-c45, split from cj6/rev-94b): a batch that died before writing its
@@ -136,7 +143,19 @@ esac
 # case, because the variance here is CPU contention, not suite behaviour. docs/speed.md §4 carries the full
 # table and the budget deviation.
 # tests/gates.test.ts pins the relationship against tools/check.conf rather than trusting this comment.
-SUITE_BOUND=${SUITE_BOUND:-400}
+# How the EFFECTIVE bound is chosen (agent-do-gmr, superseding agent-do-cj6's env-prefix reserve):
+#   1. an explicitly exported SUITE_BOUND wins (tests/gates.test.ts fixtures, manual probes);
+#   2. else, when gate.conf declares FAST_OUTER_WINDOW (the mirror of CHECK_FAST_TIMEOUT that
+#      tests/gates.test.ts pins), the bound is DERIVED after the static step has been measured:
+#        SUITE_BOUND = FAST_OUTER_WINDOW - static_secs - FAST_GATE_STATIC_MARGIN (default 60)
+#      clamped at FAST_GATE_BOUND_FLOOR (default 60). A guessed constant reserve was wrong by 1-3x on
+#      the real machine: the warm static step measured 58.7 s (no-op) and 220.4 s (partial rebuild — the
+#      state every lane is in after a pull) against cj6's 80 s reserve, so the OUTER window fired first
+#      and healthy loaded runs recorded `unknown` instead of a verdict. Deriving measures instead of
+#      guessing, so the suite phase gets the window that is actually left. The margin covers the batch's
+#      own `timeout -k 15` SIGKILL grace plus report/marker/teardown;
+#   3. else the 400 s fallback below (agent-do-664's contended-worst-case sizing) applies.
+SUITE_BOUND=${SUITE_BOUND-}
 
 LIST=0; BASE="${FAST_GATE_BASE:-}"; EXPLICIT=()
 while [ $# -gt 0 ]; do
@@ -404,6 +423,7 @@ trap cleanup EXIT
 # type-checking: without this step a changed file with a type error is green on the fast gate and red on
 # the merger's build, i.e. the fast gate would be certifying something it never looked at.
 printf '\n[gate] static: %s\n' "$STATIC_CMD"
+static_start=$(date +%s)
 # Run it in its own session with that session recorded, exactly as the suites below are run. The traps above are
 # installed before this point (rev-48, review round 3: they used to be installed after STATIC_CMD, so a bound kill
 # during this step emitted no marker at all), and recording the session is what lets that same trap reap a killed
@@ -426,6 +446,19 @@ if [ "$STATIC_RC" -ne 0 ]; then
   echo 'fast-gate: unknown: STATIC_CMD failed, so no suite was reached (this is NOT a test result)'
   exit 1
 fi
+
+# agent-do-gmr: with no explicit SUITE_BOUND, derive the batch bound from the outer window that is ACTUALLY
+# left now that the static step has been measured (see the SUITE_BOUND comment for the sizing history).
+if [ -z "$SUITE_BOUND" ] && [ -n "$FAST_OUTER_WINDOW" ]; then
+  static_secs=$(( $(date +%s) - static_start ))
+  _margin=${FAST_GATE_STATIC_MARGIN:-60}
+  _floor=${FAST_GATE_BOUND_FLOOR:-60}
+  SUITE_BOUND=$(( FAST_OUTER_WINDOW - static_secs - _margin ))
+  [ "$SUITE_BOUND" -lt "$_floor" ] && SUITE_BOUND=$_floor
+  printf 'fast-gate: note: batch bound %ss = %ss outer - %ss static - %ss margin (agent-do-gmr)\n' \
+    "$SUITE_BOUND" "$FAST_OUTER_WINDOW" "$static_secs" "$_margin"
+fi
+SUITE_BOUND=${SUITE_BOUND:-400}
 
 # --- run the suites: ONE invocation, its per-file report mapped back onto the suites we asked for ---------
 
