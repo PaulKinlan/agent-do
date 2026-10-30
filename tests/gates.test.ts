@@ -943,12 +943,13 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
     writeFileSync(hang, '#!/usr/bin/env bash\nwhile :; do sleep 1; done\n', { mode: 0o755 });
 
     // `timeout --foreground -k 30 3` mirrors the real path: fleet-check invokes the gate as
-    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>`, and --foreground matters — without it coreutils
-    // signals the whole process group, which would mask a leak this test is meant to catch. The KILL grace
-    // is the number that must match production (agent-do-7ix): with -k 5 the trap had 5 s to print the
-    // marker, reap the tree and exit, and under fleet load a correct reap occasionally exceeded it — the
-    // wrapper escalated to SIGKILL and the run read 137 instead of 124, a false red on a working gate. The
-    // real grace is 30 s; mirroring it makes the assertion deterministic without weakening anything it proves.
+    // `timeout --foreground -k 30 <CHECK_FAST_TIMEOUT>` (the kill-window bound test reads that file), and
+    // --foreground matters — without it coreutils signals the whole process group, which would mask a
+    // leak this test is meant to catch. The KILL grace is the number that must match production
+    // (agent-do-7ix): with -k 5 the trap had 5 s to print the marker, reap the tree and exit, and under
+    // fleet load a correct reap occasionally exceeded it — the wrapper escalated to SIGKILL and the run
+    // read 137 instead of 124, a false red on a working gate. The real grace is 30 s; mirroring it makes
+    // the assertion deterministic without weakening anything it proves.
     // (agent-do-94t hit the same 137-vs-124 race independently on 2026-10-26 — run C, 705a26f — and widened
     // the window to `-k 15 10`; the 7ix mirroring of production's real 30 s grace supersedes that: same cure,
     // better fidelity. The 124 assertion stays the point of the test either way.)
