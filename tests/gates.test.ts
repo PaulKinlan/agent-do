@@ -973,6 +973,77 @@ describe('tools/fast-gate.sh — the bound kill still leaves a verdict', { timeo
   }, 90_000); // agent-do-94t: headroom above the 60s spawnSync cap under load (7ix sized 65s; 5s of bookkeeping margin was too thin on the loaded VM)
 });
 
+describe('tools/install-gate.sh — the unlanded-config guard (agent-do-llc, agent-do-fqv)', { timeout: 120_000 }, () => {
+  // The installed check.conf is MACHINE-GLOBAL, so the installer must fail closed: a config that differs
+  // from origin/main's — or one that CANNOT be compared to origin/main (no checkout, missing ref, file
+  // absent from main; agent-do-fqv) — is refused unless the operator deliberately overrides. Sandboxed
+  // git repos keep this independent of the branch the suite itself runs on.
+  const script = readFileSync(join(REPO, 'tools', 'install-gate.sh'), 'utf8');
+  const gitEnv = {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com',
+    GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null',
+  };
+
+  function sandbox(conf: string): { root: string; repo: string } {
+    const root = mkdtempSync(join(tmpdir(), 'agent-do-install-gate-'));
+    ROOTS.push(root);
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'tools'), { recursive: true });
+    writeFileSync(join(repo, 'tools', 'install-gate.sh'), script, { mode: 0o755 });
+    writeFileSync(join(repo, 'tools', 'check.conf'), conf);
+    return { root, repo };
+  }
+
+  const runInstall = (repo: string, dst: string, env: Record<string, string> = {}) =>
+    spawnSync('bash', [join(repo, 'tools', 'install-gate.sh'), dst], {
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ...gitEnv, ...env },
+    });
+
+  it('fails CLOSED when the source cannot be compared to origin/main, unless overridden', () => {
+    const { root, repo } = sandbox("CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=1\n");
+    spawnSync('git', ['-C', repo, 'init', '-q'], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    const dst = join(root, 'live', 'check.conf');
+
+    const refused = runInstall(repo, dst);
+    expect(refused.status, 'an unverifiable source must be refused, not warned-and-installed (agent-do-fqv)').toBe(1);
+    expect(refused.stdout + refused.stderr).toContain('fails CLOSED');
+    expect(existsSync(dst), 'a refused install must not write the destination').toBe(false);
+
+    const overridden = runInstall(repo, dst, { INSTALL_GATE_ALLOW_UNLANDED: '1' });
+    expect(overridden.status).toBe(0);
+    expect(existsSync(dst)).toBe(true);
+    expect(readFileSync(dst + '.provenance', 'utf8'), 'the provenance must say the source was unverifiable').toContain('UNVERIFIABLE');
+  }, 60_000);
+
+  it('refuses a config that differs from origin/main, and installs it only with the loud override', () => {
+    const { root, repo } = sandbox("CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=1\n");
+    const git = (...args: string[]) =>
+      spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    git('init', '-q', '-b', 'main');
+    git('add', 'tools');
+    git('commit', '-qm', 'landed conf');
+    spawnSync('git', ['init', '-q', '--bare', join(root, 'origin.git')], { encoding: 'utf8', timeout: 15_000, env: { ...process.env, ...gitEnv } });
+    git('remote', 'add', 'origin', join(root, 'origin.git'));
+    git('push', '-q', 'origin', 'main');
+    // The branch now carries an UNLANDED change to the config.
+    writeFileSync(join(repo, 'tools', 'check.conf'), "CHECK_CMD='true'\nCHECK_FAST_CMD='true'\nCHECK_FAST_TIMEOUT=960\n");
+    const dst = join(root, 'live', 'check.conf');
+
+    const refused = runInstall(repo, dst);
+    expect(refused.status, 'a config main does not describe must be refused (agent-do-llc)').toBe(1);
+    expect(refused.stdout + refused.stderr).toContain('UNLANDED');
+    expect(existsSync(dst)).toBe(false);
+
+    const overridden = runInstall(repo, dst, { INSTALL_GATE_ALLOW_UNLANDED: '1' });
+    expect(overridden.status).toBe(0);
+    expect(readFileSync(dst, 'utf8')).toContain('CHECK_FAST_TIMEOUT=960');
+    expect(readFileSync(dst + '.provenance', 'utf8')).toContain('matches_origin_main: NO');
+  }, 90_000);
+});
+
 describe('tools/fast-gate.sh — a bound kill during the static step', { timeout: 120_000 }, () => {
   it('prints the unknown marker and reaps the static step', async () => {
     // rev-48, review round 3: the traps were installed AFTER STATIC_CMD, so a bound kill during the static step
