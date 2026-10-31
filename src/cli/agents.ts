@@ -14,7 +14,7 @@ import { validateCliProviderToolNames } from './provider-tools.js';
 import { sanitiseForLine } from './terminal-safety.js';
 import {
   evaluateTrust,
-  hashAgentConfig,
+  hashContent,
   readTrustStore,
   recordAgentTrust,
   trustStorePath,
@@ -214,7 +214,7 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
   // Record provenance so `run <name>` can tell an operator-created config from a planted one. Failing to
   // record is not fatal for `create` — the file is written either way — but the operator has to know that
   // the next `run` will ask for --trust-agent-config.
-  const trust = await recordAgentTrust(filePath, hashAgentConfig(payload));
+  const trust = await recordAgentTrust(filePath, hashContent(payload));
   if (!trust.recorded) {
     writeDiagnostic([
       `[agent-do] Could not record trust for ${printable(filePath)} in ${printable(
@@ -429,6 +429,6 @@ async function readSavedAgentFile(filePath: string): Promise<SavedAgentRecord | 
   return {
     config: parsed.data,
     filePath: path.resolve(filePath),
-    sha256: hashAgentConfig(content),
+    sha256: hashContent(content),
   };
 }

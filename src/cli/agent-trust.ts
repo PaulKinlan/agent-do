@@ -31,9 +31,12 @@
  * The store lives outside every workspace (`~/.agent-do/trusted-agents.json`) so a repository cannot write to
  * it. Its path is overridable with `AGENT_DO_TRUST_STORE` — tests must never touch the real home directory.
  *
- * Deliberately NOT covered here: shellm frontmatter (`system:` in a `.shellm` file, src/cli/shellm.ts). That
- * surface names an explicit path the operator typed, and its documented trust model is "same as shell
- * scripts"; this module is about a name that resolves to a file the operator may never have seen.
+ * Two surfaces supply instructions this way, and both are gated by the same store (agent-do-5re, agent-do-e29):
+ *
+ *   - a saved agent config (`.agent-do/agents/<name>.json`), whose `systemPrompt` becomes the system prompt after a
+ *     name lookup that walks up from the working directory; and
+ *   - a shellm prompt file's `system:` frontmatter, which replaces the system prompt of that run. Its prompt BODY is
+ *     not gated — that is the task, the same text piping a file into `agent-do` would supply.
  */
 
 import { createHash } from 'node:crypto';
@@ -93,7 +96,7 @@ export function trustStorePath(): string {
 }
 
 /** sha256 of the exact bytes that were parsed. Content is the unit of trust, not the file's metadata. */
-export function hashAgentConfig(content: string | Buffer): string {
+export function hashContent(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
@@ -221,24 +224,53 @@ function line(parts: readonly string[]): string {
   return `[agent-do] ${parts.map((p) => sanitiseForLine(p)).join('')}\n`;
 }
 
-const REEXPLAIN =
-  'This file was not created by `agent-do create` on this machine, or its content changed after it was ' +
-  'recorded, so its systemPrompt is not promoted to the trusted system tier. Re-create it with ' +
-  '`agent-do create`, or re-run with --trust-agent-config to accept this exact content.';
+/**
+ * Where the instructions came from. The store and the mechanics are shared; only the wording differs, because
+ * the remedy differs: a saved agent config is re-created, a shellm file is one key away from being a plain
+ * prompt file (agent-do-5re, agent-do-e29).
+ */
+export type InstructionSource = 'saved-agent' | 'shellm';
+
+const SOURCE_TEXT: Record<InstructionSource, { what: string; remedy: string }> = {
+  'saved-agent': {
+    what: 'Saved agent config',
+    remedy:
+      'This file was not created by `agent-do create` on this machine, or its content changed after it was ' +
+      'recorded, so its systemPrompt is not promoted to the trusted system tier. Re-create it with ' +
+      '`agent-do create`, or re-run with --trust-agent-config to accept this exact content.',
+  },
+  shellm: {
+    what: 'Shellm prompt file',
+    remedy:
+      'This file\'s `system:` frontmatter was not trusted on this machine, or the file changed after it was ' +
+      'trusted, so it is not promoted to the trusted system tier (the prompt body is unaffected). Re-run with ' +
+      '--trust-agent-config to accept this content, or drop the `system:` key so the file only supplies the ' +
+      'prompt.',
+  },
+};
+
+/** Short, operator-readable phrasing of a check result, used in the thrown error. */
+const REASON_PHRASE: Record<TrustReason, string> = {
+  trusted: 'trusted',
+  'not-recorded': 'never vetted on this machine',
+  'content-changed': 'content changed since it was vetted',
+  'store-unreadable': 'the trust store could not be read',
+};
 
 /**
- * Enforce provenance for one saved agent config.
+ * Enforce provenance for one file whose contents would become (part of) the system prompt.
  *
- * Throws — before any model call, tool construction or memory write — when the config's `systemPrompt` would
- * otherwise be promoted to the system tier without the operator having sanctioned it. `accept` is the
- * operator's explicit `--trust-agent-config`: it records the current content and proceeds.
+ * Throws — before any model call, tool construction or memory write — when the instructions would otherwise be
+ * promoted to the system tier without the operator having sanctioned them. `accept` is the operator's explicit
+ * `--trust-agent-config`: it records the current content and proceeds.
  */
-export async function requireSavedAgentTrust(
+export async function requireInstructionTrust(
   filePath: string,
   sha256: string,
-  opts: { accept: boolean; write?: (chunk: string) => void },
+  opts: { accept: boolean; kind: InstructionSource; write?: (chunk: string) => void },
 ): Promise<void> {
   const write = opts.write ?? ((chunk: string) => process.stderr.write(chunk));
+  const { what, remedy } = SOURCE_TEXT[opts.kind];
   const check = await checkAgentTrust(filePath, sha256);
 
   if (check.trusted) return;
@@ -246,7 +278,8 @@ export async function requireSavedAgentTrust(
   const why =
     check.reason === 'content-changed'
       ? line([
-          'Saved agent config ',
+          what,
+          ' ',
           filePath,
           ' changed since it was trusted (was ',
           (check.recordedSha256 ?? '').slice(0, 16),
@@ -256,13 +289,16 @@ export async function requireSavedAgentTrust(
         ])
       : check.reason === 'store-unreadable'
         ? line(['Trust store ', trustStorePath(), ' could not be read: ', check.detail ?? 'unknown error', '.'])
-        : line(['Saved agent config ', filePath, ' has not been trusted on this machine.']);
+        : line([what, ' ', filePath, ' has not been trusted on this machine.']);
 
   if (!opts.accept) {
     write(why);
-    write(line([REEXPLAIN]));
+    write(line([remedy]));
+    // The reason travels in the error too: a caller that only sees the thrown message (or a test) must not have to
+    // scrape stderr to learn whether the file was never vetted or was vetted and then rewritten.
     throw new Error(
-      `Refusing to run a saved agent whose config was not trusted on this machine: ${path.resolve(filePath)}`,
+      `Refusing to use instructions from a file that has not been trusted on this machine ` +
+        `(${REASON_PHRASE[check.reason]}): ${path.resolve(filePath)}`,
     );
   }
 
@@ -277,4 +313,29 @@ export async function requireSavedAgentTrust(
     // Not fatal: the operator authorised THIS run. It just will not be remembered.
     write(line(['Could not record trust in ', trustStorePath(), ': ', recorded.detail, '.']));
   }
+}
+
+
+/** Gate a saved agent config (agent-do-5re). */
+export function requireSavedAgentTrust(
+  filePath: string,
+  sha256: string,
+  opts: { accept: boolean; write?: (chunk: string) => void },
+): Promise<void> {
+  return requireInstructionTrust(filePath, sha256, { ...opts, kind: 'saved-agent' });
+}
+
+/**
+ * Gate a shellm file's `system:` frontmatter (agent-do-e29).
+ *
+ * The prompt BODY is not gated: it is the task, the same text piping a file into `agent-do` would supply, and
+ * making it trusted would make shellm pointless. What is gated is the frontmatter key that quietly replaces the
+ * system prompt of the run.
+ */
+export function requireShellmTrust(
+  filePath: string,
+  sha256: string,
+  opts: { accept: boolean; write?: (chunk: string) => void },
+): Promise<void> {
+  return requireInstructionTrust(filePath, sha256, { ...opts, kind: 'shellm' });
 }

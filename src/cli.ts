@@ -101,9 +101,10 @@ Options:
   --accept-all           Allow every tool call without prompting (default: ask in a
                          TTY, deny without one)
   --allow <tools>        Tool names allowed without prompting (comma-separated)
-  --trust-agent-config   Accept a saved agent config this machine has not vetted
-                         (configs are found by walking up from cwd, so one can
-                         arrive with a cloned repo; create records what it writes)
+  --trust-agent-config   Accept instructions from a saved agent config or a shellm
+                         file's system: frontmatter that this machine has not
+                         vetted (configs are found by walking up from cwd, so one
+                         can arrive with a cloned repo; create records what it writes)
   --provider-tool <name> Enable a provider-native tool (repeatable)
   --provider-options <json>  Provider-specific options for every model call, e.g.
                          '{"google":{"useSearchGrounding":true}}'

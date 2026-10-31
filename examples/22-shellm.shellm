@@ -2,7 +2,10 @@
 ---
 # Shellm sample (issue #16). A prompt file you can chmod +x and run.
 #
-#   ./examples/22-shellm.shellm                 # uses frontmatter provider
+#   ./examples/22-shellm.shellm                 # uses frontmatter provider; the
+#                                               # `system:` block needs
+#                                               # --trust-agent-config the first
+#                                               # time this content is run
 #   ANTHROPIC_API_KEY=sk-... ./examples/22-shellm.shellm
 #   cat README.md | ./examples/22-shellm.shellm # pipe data as context
 #

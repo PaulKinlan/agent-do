@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseShellm, tryParseShellm, readShellmFile } from '../src/cli/shellm.js';
+import { hashContent } from '../src/cli/agent-trust.js';
 
 describe('parseShellm', () => {
   it('strips a shebang and uses the rest as the prompt', () => {
@@ -93,6 +94,33 @@ describe('tryParseShellm — opt-in detection', () => {
     const out = await tryParseShellm(p);
     expect(out).not.toBeNull();
     expect(out!.prompt).toBe('Summarize the log.');
+  });
+
+  it('carries the provenance the trust gate needs: absolute path + sha256 of the bytes parsed (agent-do-e29)', async () => {
+    const p = join(dir, 'prov.shellm');
+    const body = '#!/usr/bin/env agent-do\n---\nsystem: Be terse.\n---\nReview this.';
+    await writeFile(p, body);
+    const out = await tryParseShellm(p);
+
+    expect(out).not.toBeNull();
+    expect(out!.filePath).toBe(p);
+    // The hash is of the WHOLE file as read (shebang and frontmatter included), so any byte change re-opens the
+    // trust question — not just a change to the `system:` line.
+    expect(out!.sha256).toBe(hashContent(body));
+  });
+
+  it('hashes a relative positional against the file it resolves to, not the string', async () => {
+    const p = join(dir, 'rel.shellm');
+    await writeFile(p, '---\nsystem: x\n---\nbody');
+    const previous = process.cwd();
+    process.chdir(dir);
+    try {
+      const out = await tryParseShellm('./rel.shellm');
+      expect(out!.filePath).toBe(p);
+      expect(out!.sha256).toBe(hashContent('---\nsystem: x\n---\nbody'));
+    } finally {
+      process.chdir(previous);
+    }
   });
 
   it('detects a file with an agent-do shebang but no .shellm extension', async () => {
