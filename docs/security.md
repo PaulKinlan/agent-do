@@ -113,3 +113,45 @@ So the boundary is honest about its edges:
   boundary tags; it cannot recognise a hostile page phrased to look like ordinary results. A tool that fetches
   arbitrary URLs is a trust decision, not a toggle: leave `--provider-tool` off when the agent's own instructions are
   the thing worth protecting.
+
+## Saved agent configs: instructions nobody framed
+
+Every guard above treats third-party text as *data*: it is framed in `<tool_output>`, its injection markers are
+redacted, and the prompt tells the model not to obey it. A saved agent config is the opposite case — its
+`systemPrompt` **is** instructions, and it arrives from a file.
+
+That is fine when the operator wrote the file. It stops being fine because of how the file is found
+(`agent-do-5re`): `findAgentFile` walks **up** from the working directory, so `.agent-do/agents/<name>.json` can
+arrive with a cloned repository, a checked-out branch, an extracted tarball or a shared workspace. `npx agent-do
+run reviewer "fix the tests"` then promotes that file's text to the system tier with the agent's tools attached,
+and nothing in the run tells the operator which file supplied their instructions.
+
+The Zod schema cannot help here. It validates the *shape* of the file, and a schema-valid file is exactly what an
+attacker would plant.
+
+No path rule can answer the real question either, which is "did the operator sanction this?":
+
+- **"Inside the home directory"** is close to useless — most repositories live under `$HOME`.
+- **Ownership and permissions** do not survive a clone: checkout creates the files as the operator.
+- **"Not tracked by git"** misses a tarball and taints an operator's own committed config.
+
+So provenance is **recorded**. `agent-do create` records the sha256 of the bytes it wrote in a user-scoped store
+(`~/.agent-do/trusted-agents.json`), and `run` promotes a config's `systemPrompt` only while the file still hashes
+to a recorded value. Anything else needs `--trust-agent-config`, which records the current content. The check runs
+before the model is resolved, before tools are built and before any memory write, so a refused config has no side
+effects at all.
+
+What that buys, and what it does not:
+
+- **It closes the "I did not know this file existed" hole**, which is the whole finding: a config that arrives with
+  a repository is refused, loudly, by name and hash, instead of being adopted silently. `agent-do list` marks it
+  `(untrusted config)` so it is visible before anyone runs it.
+- **It is a hash, not a signature.** It establishes "this machine's operator sanctioned this content", not "this
+  content is safe". `--trust-agent-config` accepts a hostile config exactly as `--script` runs a hostile script;
+  both are explicit decisions rather than a directory walk nobody saw.
+- **It does not cover shellm frontmatter.** A `.shellm` file's `system:` also reaches the system prompt, but that
+  surface takes an explicit path the operator typed, and its documented trust model is "same as shell scripts"
+  (`src/cli/shellm.ts`). The distinction that matters here is a *name* resolving to a file the operator may never
+  have seen.
+- **Failing to write the store is not fatal.** The run the operator just authorised proceeds with a warning
+  saying the decision could not be remembered. A read-only home would otherwise turn a security check into an outage.

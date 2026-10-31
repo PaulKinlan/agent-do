@@ -204,6 +204,8 @@ Options:
                          "Debugging & Observability" below.
   --script               Required for `run <path>` to import local JS/TS files
   -y, --yes              Skip the interactive confirmation for --script
+  --trust-agent-config   Accept a saved agent config this machine has not vetted
+                         (see "Saved agents and provenance" below)
   --provider-tool <name> Enable a provider-native tool (repeatable). See below.
   --provider-options <json>
                          Provider-specific options forwarded to every model
@@ -293,6 +295,52 @@ export default {
   providerOptions: { google: { useSearchGrounding: true } },
 };
 ```
+
+### Saved agents and provenance
+
+`agent-do create <name>` writes `.agent-do/agents/<name>.json`, and
+`agent-do run <name>` finds it by walking **up** from the working
+directory (closest ancestor wins, like `.git`). That lookup means a
+config can reach you from somewhere other than yourself: a cloned
+repository, a checked-out branch, an extracted tarball, a shared
+workspace. Its `systemPrompt` becomes the agent's system prompt — the
+highest-trust position in the model's context, with the agent's tools
+attached.
+
+So provenance is recorded rather than assumed. `create` records the
+sha256 of the bytes it wrote in `~/.agent-do/trusted-agents.json`
+(override the path with `AGENT_DO_TRUST_STORE`). `run` promotes a
+config's `systemPrompt` only while the file still hashes to a recorded
+value; a config that was never recorded, or one that changed after it
+was recorded, is refused **before** any model call, tool construction or
+memory write:
+
+```text
+[agent-do] Saved agent config /repo/.agent-do/agents/reviewer.json has not been trusted on this machine.
+[agent-do] This file was not created by `agent-do create` on this machine, or its content changed after it
+           was recorded, so its systemPrompt is not promoted to the trusted system tier. Re-create it with
+           `agent-do create`, or re-run with --trust-agent-config to accept this exact content.
+```
+
+`agent-do list` marks such configs `(untrusted config)`, so a planted
+agent is visible before anyone runs it. `--trust-agent-config` accepts
+the current content and remembers it, which is what a shared project
+config needs once. `-y`/`--yes` does **not** imply it: skipping a prompt
+is a statement about interactivity, not about whose instructions you are
+willing to adopt.
+
+Two edges worth knowing:
+
+- **It is a hash, not a signature.** The record says "this machine's
+  operator sanctioned this content", which is the property that decides
+  whether the text belongs in the system tier. It does not claim the
+  content is safe: `--trust-agent-config` will accept a hostile config,
+  just as `--script` will run a hostile script. Both are explicit
+  decisions instead of a directory lookup nobody saw.
+- **If the store cannot be written** (a read-only home, say), the run you
+  just authorised still proceeds, with a warning saying the decision
+  could not be remembered. Failing to remember a decision never fails
+  the run.
 
 ### Script mode: `run <path> --script`
 
