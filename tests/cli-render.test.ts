@@ -25,6 +25,7 @@ function makeArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     script: false,
     yes: false,
     acceptAll: false,
+    trustAgentConfig: false,
     allow: [],
     providerTool: [],
     logLevel: 'info',
