@@ -40,7 +40,9 @@
     "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
+    "tests/cli-prompt-stream.test.ts",
     "tests/script-import.test.ts",
+    "tests/shellm.test.ts",
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/agents.ts": [
@@ -155,6 +157,7 @@
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-terminal-safety.test.ts",
     "tests/script-import.test.ts",
+    "tests/shellm.test.ts",
     "tests/trust-boundary.test.ts"
   ],
   "src/cli/warnings.ts": [

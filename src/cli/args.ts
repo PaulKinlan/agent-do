@@ -79,12 +79,13 @@ export interface ParsedArgs {
    */
   acceptAll: boolean;
   /**
-   * Accept a saved agent config whose content this machine has not recorded as trusted (agent-do-5re).
+   * Accept instructions from a file whose content this machine has not recorded as trusted (agent-do-5re,
+   * agent-do-e29).
    *
-   * Saved agents are found by walking up from cwd, so the file may belong to a cloned repository rather than to
-   * the operator — and its `systemPrompt` becomes the system prompt. `create` records what it writes; anything
-   * else is refused until the operator says otherwise here, which records the content's hash so later runs are
-   * silent.
+   * Two surfaces promote file text to the system tier: a saved agent config (found by walking up from cwd, so it
+   * may belong to a cloned repository rather than to the operator — `create` records what it writes) and a
+   * shellm file's `system:` frontmatter. Anything else is refused until the operator says otherwise here, which
+   * records the content's hash so later runs are silent.
    *
    * Deliberately NOT implied by `-y`/`--yes`: that flag means "do not prompt me", which is a statement about
    * interactivity, not about whose instructions the operator is willing to adopt. Running a hostile config on

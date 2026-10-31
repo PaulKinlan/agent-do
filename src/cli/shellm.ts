@@ -37,12 +37,22 @@
  * read/write/edit files in `--cwd`. Don't run shellm files from sources
  * you don't trust — same rule as shell scripts. `--read-only` /
  * `--no-tools` narrow the blast radius exactly as for a normal prompt.
+ *
+ * One key is stronger than "data", though: `system:` REPLACES the run's
+ * system prompt, i.e. it lands in the instruction tier with the agent's
+ * tools attached. Because the file can arrive with a cloned repository,
+ * that key is gated by the same content-hash trust store saved agent
+ * configs use (agent-do-e29, `src/cli/agent-trust.ts`): the first run of
+ * a given content needs `--trust-agent-config`, which records the hash,
+ * and later runs of the same content are silent. The prompt BODY is not
+ * gated — it is the task, not instructions.
  */
 
 import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
 import { splitFrontmatter } from '../frontmatter.js';
+import { hashContent } from './agent-trust.js';
 
 /** Max bytes we'll read from a shellm file. Mirrors script-mode cap. */
 const SHELLM_MAX_BYTES = 2 * 1024 * 1024;
@@ -67,6 +77,18 @@ export interface ParsedShellm {
   /** The prompt body (frontmatter and shebang stripped, trimmed). */
   prompt: string;
   config: ShellmConfig;
+}
+
+/**
+ * A shellm file that was actually read off disk, carrying the provenance the trust gate needs (agent-do-e29):
+ * the absolute path it came from, and the sha256 of the exact bytes that were parsed. `parseShellm` works on a
+ * string and cannot know either.
+ */
+export interface ParsedShellmFile extends ParsedShellm {
+  /** Absolute path of the file the content came from. */
+  filePath: string;
+  /** sha256 (hex) of `content` as parsed — the value recorded in the trust store. */
+  sha256: string;
 }
 
 /**
@@ -124,7 +146,7 @@ export function parseShellm(content: string): ParsedShellm {
  */
 export async function tryParseShellm(
   positional: string,
-): Promise<ParsedShellm | null> {
+): Promise<ParsedShellmFile | null> {
   // A multi-line or multi-token positional is never a file path we want
   // to auto-load — it's a literal prompt like "summarize ./readme.md".
   if (positional.includes('\n')) return null;
@@ -143,7 +165,13 @@ export async function tryParseShellm(
   const hasAgentDoShebang = /^#![^\n]*\bagent-do\b/.test(content);
   if (!isShellmExt && !hasAgentDoShebang) return null;
 
-  return parseShellm(content);
+  // Hash the bytes we are about to parse, not a re-read: a second read could see different content (TOCTOU) and
+  // the trust record would then vouch for something the model never receives.
+  return {
+    ...parseShellm(content),
+    filePath,
+    sha256: hashContent(content),
+  };
 }
 
 // ── Frontmatter (ReDoS-safe) ───────────────────────────────────────────

@@ -5,10 +5,11 @@ import * as path from 'node:path';
 import {
   checkAgentTrust,
   evaluateTrust,
-  hashAgentConfig,
+  hashContent,
   readTrustStore,
   recordAgentTrust,
   requireSavedAgentTrust,
+  requireShellmTrust,
   trustKeyFor,
   trustStorePath,
   TRUST_STORE_ENV,
@@ -99,18 +100,18 @@ describe('trust store path', () => {
   });
 });
 
-describe('hashAgentConfig', () => {
+describe('hashContent', () => {
   it('hashes the content, so identical content hashes identically', () => {
-    expect(hashAgentConfig('{"a":1}')).toBe(hashAgentConfig('{"a":1}'));
+    expect(hashContent('{"a":1}')).toBe(hashContent('{"a":1}'));
   });
 
   it('changes when a single byte changes — including whitespace', () => {
-    expect(hashAgentConfig('{"a":1}')).not.toBe(hashAgentConfig('{"a":2}'));
-    expect(hashAgentConfig('{"a":1}')).not.toBe(hashAgentConfig('{"a":1 }'));
+    expect(hashContent('{"a":1}')).not.toBe(hashContent('{"a":2}'));
+    expect(hashContent('{"a":1}')).not.toBe(hashContent('{"a":1 }'));
   });
 
   it('accepts a Buffer, so the bytes that were parsed can be hashed directly', () => {
-    expect(hashAgentConfig(Buffer.from('{"a":1}'))).toBe(hashAgentConfig('{"a":1}'));
+    expect(hashContent(Buffer.from('{"a":1}'))).toBe(hashContent('{"a":1}'));
   });
 });
 
@@ -119,7 +120,7 @@ describe('trust store', () => {
     const { store, error } = await readTrustStore();
     expect(error).toBeUndefined();
     expect(store.agents).toEqual({});
-    expect(await checkAgentTrust('/x/agent.json', hashAgentConfig('a'))).toEqual({
+    expect(await checkAgentTrust('/x/agent.json', hashContent('a'))).toEqual({
       trusted: false,
       reason: 'not-recorded',
     });
@@ -128,7 +129,7 @@ describe('trust store', () => {
   it('records and then trusts the same content', async () => {
     const file = path.join(testDir, 'agent.json');
     await fs.promises.writeFile(file, 'body');
-    const sha = hashAgentConfig('body');
+    const sha = hashContent('body');
 
     expect((await recordAgentTrust(file, sha)).recorded).toBe(true);
     expect(await checkAgentTrust(file, sha)).toEqual({ trusted: true, reason: 'trusted' });
@@ -137,21 +138,21 @@ describe('trust store', () => {
   it('keys on the resolved path, so the same file found from a child dir is the same entry', async () => {
     const file = path.join(testDir, 'agent.json');
     await fs.promises.writeFile(file, 'body');
-    await recordAgentTrust(file, hashAgentConfig('body'));
+    await recordAgentTrust(file, hashContent('body'));
 
     const child = path.join(testDir, 'nested', 'deeper');
     await fs.promises.mkdir(child, { recursive: true });
     process.chdir(child);
-    expect((await checkAgentTrust(path.relative(child, file), hashAgentConfig('body'))).trusted).toBe(true);
+    expect((await checkAgentTrust(path.relative(child, file), hashContent('body'))).trusted).toBe(true);
     expect(trustKeyFor(path.relative(child, file))).toBe(trustKeyFor(file));
   });
 
   it('reports content-changed, and what the vetted hash was, when the file is rewritten', async () => {
     const file = path.join(testDir, 'agent.json');
-    const vetted = hashAgentConfig('original');
+    const vetted = hashContent('original');
     await recordAgentTrust(file, vetted);
 
-    const check = await checkAgentTrust(file, hashAgentConfig('tampered'));
+    const check = await checkAgentTrust(file, hashContent('tampered'));
     expect(check.trusted).toBe(false);
     expect(check.reason).toBe('content-changed');
     expect(check.recordedSha256).toBe(vetted);
@@ -159,16 +160,16 @@ describe('trust store', () => {
 
   it('records the new content when the operator accepts a change (re-vetting)', async () => {
     const file = path.join(testDir, 'agent.json');
-    await recordAgentTrust(file, hashAgentConfig('v1'));
-    await recordAgentTrust(file, hashAgentConfig('v2'));
+    await recordAgentTrust(file, hashContent('v1'));
+    await recordAgentTrust(file, hashContent('v2'));
 
-    expect((await checkAgentTrust(file, hashAgentConfig('v2'))).trusted).toBe(true);
-    expect((await checkAgentTrust(file, hashAgentConfig('v1'))).reason).toBe('content-changed');
+    expect((await checkAgentTrust(file, hashContent('v2'))).trusted).toBe(true);
+    expect((await checkAgentTrust(file, hashContent('v1'))).reason).toBe('content-changed');
   });
 
   it('fails closed on a corrupt store instead of pretending nothing was recorded', async () => {
     await fs.promises.writeFile(storeFile(), '{ this is not json');
-    const check = await checkAgentTrust('/x/agent.json', hashAgentConfig('a'));
+    const check = await checkAgentTrust('/x/agent.json', hashContent('a'));
 
     expect(check.trusted).toBe(false);
     expect(check.reason).toBe('store-unreadable');
@@ -182,7 +183,7 @@ describe('trust store', () => {
       JSON.stringify({
         version: 1,
         agents: {
-          [good]: { sha256: hashAgentConfig('good'), recordedAt: '2026-01-01T00:00:00Z' },
+          [good]: { sha256: hashContent('good'), recordedAt: '2026-01-01T00:00:00Z' },
           '/not/a/hash': { sha256: 'nope', recordedAt: '2026-01-01T00:00:00Z' },
           '/not/an/entry': 'string',
         },
@@ -191,7 +192,7 @@ describe('trust store', () => {
     const { store, error } = await readTrustStore();
     expect(error).toBeUndefined();
     expect(Object.keys(store.agents)).toEqual([good]);
-    expect((await checkAgentTrust(good, hashAgentConfig('good'))).trusted).toBe(true);
+    expect((await checkAgentTrust(good, hashContent('good'))).trusted).toBe(true);
   });
 
   it('rejects a store whose `agents` field is the wrong shape', async () => {
@@ -202,7 +203,7 @@ describe('trust store', () => {
 
   it('writes the store atomically, with no temp file left behind', async () => {
     const file = path.join(testDir, 'agent.json');
-    await recordAgentTrust(file, hashAgentConfig('body'));
+    await recordAgentTrust(file, hashContent('body'));
 
     const leftovers = (await fs.promises.readdir(testDir)).filter((f) => f.endsWith('.tmp'));
     expect(leftovers).toEqual([]);
@@ -212,7 +213,7 @@ describe('trust store', () => {
 
   it('keeps the store private to the operator', async () => {
     const file = path.join(testDir, 'agent.json');
-    await recordAgentTrust(file, hashAgentConfig('body'));
+    await recordAgentTrust(file, hashContent('body'));
     const mode = (await fs.promises.stat(storeFile())).mode & 0o777;
     expect(mode).toBe(0o600);
   });
@@ -221,14 +222,14 @@ describe('trust store', () => {
     const agents: Record<string, { sha256: string; recordedAt: string }> = {};
     for (let i = 0; i < 600; i++) {
       agents[`/agents/${i}.json`] = {
-        sha256: hashAgentConfig(`body-${i}`),
+        sha256: hashContent(`body-${i}`),
         recordedAt: new Date(2026, 0, 1, 0, 0, i).toISOString(),
       };
     }
     await fs.promises.writeFile(storeFile(), JSON.stringify({ version: 1, agents }));
 
     const file = path.join(testDir, 'agent.json');
-    await recordAgentTrust(file, hashAgentConfig('body'));
+    await recordAgentTrust(file, hashContent('body'));
 
     const { store } = await readTrustStore();
     const keys = Object.keys(store.agents);
@@ -241,7 +242,7 @@ describe('trust store', () => {
   it('reports a write failure instead of throwing', async () => {
     // Make the store path a directory: mkdir succeeds, the rename cannot.
     await fs.promises.mkdir(storeFile(), { recursive: true });
-    const result = await recordAgentTrust(path.join(testDir, 'agent.json'), hashAgentConfig('body'));
+    const result = await recordAgentTrust(path.join(testDir, 'agent.json'), hashContent('body'));
     expect(result.recorded).toBe(false);
     expect(result.recorded === false && result.detail.length).toBeGreaterThan(0);
   });
@@ -260,9 +261,9 @@ describe('requireSavedAgentTrust', () => {
   const file = (): string => path.join(testDir, 'planted.json');
 
   it('is silent when the content was already vetted', async () => {
-    await recordAgentTrust(file(), hashAgentConfig('vetted'));
+    await recordAgentTrust(file(), hashContent('vetted'));
     const written = await capture((write) =>
-      requireSavedAgentTrust(file(), hashAgentConfig('vetted'), { accept: false, write }),
+      requireSavedAgentTrust(file(), hashContent('vetted'), { accept: false, write }),
     );
     expect(written).toBe('');
   });
@@ -270,8 +271,8 @@ describe('requireSavedAgentTrust', () => {
   it('refuses an unvetted config, naming the file and both remedies', async () => {
     const written = await capture(async (write) => {
       await expect(
-        requireSavedAgentTrust(file(), hashAgentConfig('planted'), { accept: false, write }),
-      ).rejects.toThrow(/not trusted on this machine/);
+        requireSavedAgentTrust(file(), hashContent('planted'), { accept: false, write }),
+      ).rejects.toThrow(/has not been trusted on this machine/);
     });
 
     expect(written).toContain(path.resolve(file()));
@@ -283,7 +284,7 @@ describe('requireSavedAgentTrust', () => {
 
   it('accepts and remembers when the operator passes --trust-agent-config', async () => {
     const written = await capture((write) =>
-      requireSavedAgentTrust(file(), hashAgentConfig('planted'), { accept: true, write }),
+      requireSavedAgentTrust(file(), hashContent('planted'), { accept: true, write }),
     );
 
     expect(written).toContain('--trust-agent-config: recording trust for');
@@ -291,22 +292,22 @@ describe('requireSavedAgentTrust', () => {
   });
 
   it('says the content changed, and shows both hashes, when a vetted file is rewritten', async () => {
-    await recordAgentTrust(file(), hashAgentConfig('v1'));
+    await recordAgentTrust(file(), hashContent('v1'));
     const written = await capture(async (write) => {
       await expect(
-        requireSavedAgentTrust(file(), hashAgentConfig('v2'), { accept: false, write }),
+        requireSavedAgentTrust(file(), hashContent('v2'), { accept: false, write }),
       ).rejects.toThrow();
     });
 
     expect(written).toContain('changed since it was trusted');
-    expect(written).toContain(hashAgentConfig('v1').slice(0, 16));
-    expect(written).toContain(hashAgentConfig('v2').slice(0, 16));
+    expect(written).toContain(hashContent('v1').slice(0, 16));
+    expect(written).toContain(hashContent('v2').slice(0, 16));
   });
 
   it('still runs when the store cannot be written, and says so', async () => {
     await fs.promises.mkdir(storeFile(), { recursive: true });
     const written = await capture((write) =>
-      requireSavedAgentTrust(file(), hashAgentConfig('planted'), { accept: true, write }),
+      requireSavedAgentTrust(file(), hashContent('planted'), { accept: true, write }),
     );
 
     expect(written).toContain('Could not record trust in');
@@ -317,7 +318,7 @@ describe('requireSavedAgentTrust', () => {
   it('reports an unreadable store to the operator and replaces it when accepting', async () => {
     await fs.promises.writeFile(storeFile(), 'garbage');
     const written = await capture((write) =>
-      requireSavedAgentTrust(file(), hashAgentConfig('planted'), { accept: true, write }),
+      requireSavedAgentTrust(file(), hashContent('planted'), { accept: true, write }),
     );
 
     expect(written).toContain('could not be read');
@@ -329,7 +330,7 @@ describe('requireSavedAgentTrust', () => {
     const nasty = path.join(testDir, 'evil\n[agent-do] Trusted: yes.json');
     const written = await capture(async (write) => {
       await expect(
-        requireSavedAgentTrust(nasty, hashAgentConfig('planted'), { accept: false, write }),
+        requireSavedAgentTrust(nasty, hashContent('planted'), { accept: false, write }),
       ).rejects.toThrow();
     });
 
@@ -339,6 +340,60 @@ describe('requireSavedAgentTrust', () => {
       // filename really is that value), but it must never start a line of its own.
       expect(line.startsWith('[agent-do] Trusted')).toBe(false);
     }
+  });
+});
+
+describe('requireShellmTrust (agent-do-e29)', () => {
+  const file = (): string => path.join(testDir, 'review.shellm');
+
+  it('refuses an unvetted system: block, naming the key and the flag', async () => {
+    const written = await capture(async (write) => {
+      await expect(
+        requireShellmTrust(file(), hashContent('body'), { accept: false, write }),
+      ).rejects.toThrow(/has not been trusted on this machine/);
+    });
+
+    expect(written).toContain('Shellm prompt file');
+    expect(written).toContain(path.resolve(file()));
+    expect(written).toContain('--trust-agent-config');
+    // The remedy must be the shellm one: re-creating an agent config would be nonsense here.
+    expect(written).toContain('system:');
+    expect(written).not.toContain('agent-do create');
+  });
+
+  it('says the prompt body is unaffected, so the operator knows what still runs', async () => {
+    const written = await capture(async (write) => {
+      await expect(
+        requireShellmTrust(file(), hashContent('body'), { accept: false, write }),
+      ).rejects.toThrow();
+    });
+    expect(written).toContain('prompt body is unaffected');
+  });
+
+  it('records on accept and is silent afterwards', async () => {
+    const first = await capture((write) =>
+      requireShellmTrust(file(), hashContent('v1'), { accept: true, write }),
+    );
+    expect(first).toContain('recording trust for');
+    expect((await checkAgentTrust(file(), hashContent('v1'))).trusted).toBe(true);
+
+    const second = await capture((write) =>
+      requireShellmTrust(file(), hashContent('v1'), { accept: false, write }),
+    );
+    expect(second).toBe('');
+  });
+
+  it('carries the reason in the thrown error, so a caller need not scrape stderr', async () => {
+    await recordAgentTrust(file(), hashContent('v1'));
+    await expect(
+      requireShellmTrust(file(), hashContent('v2'), { accept: false, write: () => {} }),
+    ).rejects.toThrow(/content changed since it was vetted/);
+    await expect(
+      requireShellmTrust(path.join(testDir, 'other.shellm'), hashContent('v2'), {
+        accept: false,
+        write: () => {},
+      }),
+    ).rejects.toThrow(/never vetted on this machine/);
   });
 });
 
@@ -429,5 +484,5 @@ describe('saved agents are vetted end to end', () => {
 
 /** The hash of a content body, spelled out where the assertion is about that body. */
 function agentHash(body: string): string {
-  return hashAgentConfig(body);
+  return hashContent(body);
 }

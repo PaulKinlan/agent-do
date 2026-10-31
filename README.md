@@ -204,8 +204,9 @@ Options:
                          "Debugging & Observability" below.
   --script               Required for `run <path>` to import local JS/TS files
   -y, --yes              Skip the interactive confirmation for --script
-  --trust-agent-config   Accept a saved agent config this machine has not vetted
-                         (see "Saved agents and provenance" below)
+  --trust-agent-config   Accept instructions from a saved agent config, or a shellm
+                         file's system: frontmatter, that this machine has not
+                         vetted (see "Saved agents and provenance" below)
   --provider-tool <name> Enable a provider-native tool (repeatable). See below.
   --provider-options <json>
                          Provider-specific options forwarded to every model
@@ -736,6 +737,14 @@ $ ./review.shellm
 Frontmatter values override the CLI defaults for `provider`, `model`, and
 `system`. Flags like `--read-only`, `--verbose`, and `--no-tools` still
 apply (they have no frontmatter twin).
+
+`system:` lands in the instruction tier, so it is the one frontmatter key
+that is gated (a `.shellm` file can arrive with a cloned repository): the
+first run of a given file content needs `--trust-agent-config`, which
+records the file's hash, and later runs of the same content are silent.
+The prompt **body** is not gated — that is the task, not instructions.
+Editing the file re-opens the question. See "Saved agents and provenance"
+above for the store and its failure modes.
 
 ### Piping
 

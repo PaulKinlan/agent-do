@@ -149,9 +149,10 @@ What that buys, and what it does not:
 - **It is a hash, not a signature.** It establishes "this machine's operator sanctioned this content", not "this
   content is safe". `--trust-agent-config` accepts a hostile config exactly as `--script` runs a hostile script;
   both are explicit decisions rather than a directory walk nobody saw.
-- **It does not cover shellm frontmatter.** A `.shellm` file's `system:` also reaches the system prompt, but that
-  surface takes an explicit path the operator typed, and its documented trust model is "same as shell scripts"
-  (`src/cli/shellm.ts`). The distinction that matters here is a *name* resolving to a file the operator may never
-  have seen.
+- **A shellm file's `system:` frontmatter is gated by the same store** (`agent-do-e29`). It is the other way file
+  text reaches the system tier: `system:` REPLACES the run's system prompt, so a `.shellm` file in a cloned
+  repository was one `agent-do ./review.shellm` away from the same promotion. The first run of a given content
+  needs `--trust-agent-config`; the prompt **body** is not gated, because that is the task — the same text piping a
+  file into `agent-do` would supply — and gating it would make shellm pointless.
 - **Failing to write the store is not fatal.** The run the operator just authorised proceeds with a warning
   saying the decision could not be remembered. A read-only home would otherwise turn a security check into an outage.
