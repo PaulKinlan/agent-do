@@ -12,6 +12,13 @@ import { z } from 'zod';
 import type { ParsedArgs } from './args.js';
 import { validateCliProviderToolNames } from './provider-tools.js';
 import { sanitiseForLine } from './terminal-safety.js';
+import {
+  evaluateTrust,
+  hashAgentConfig,
+  readTrustStore,
+  recordAgentTrust,
+  trustStorePath,
+} from './agent-trust.js';
 
 /**
  * Schema for a saved agent JSON file. See issue #22 — earlier
@@ -74,6 +81,20 @@ export const SavedAgentSchema = z.object({
 }).strict();
 
 export type SavedAgent = z.infer<typeof SavedAgentSchema>;
+
+/**
+ * A validated config together with the provenance the trust gate needs (agent-do-5re): where it was read
+ * from, and the sha256 of the exact bytes that were parsed. The schema guarantees the shape; only the hash
+ * plus the trust store can say whether the operator sanctioned this content, and it is the `systemPrompt`
+ * that makes the distinction matter.
+ */
+export interface SavedAgentRecord {
+  config: SavedAgent;
+  /** Absolute path of the config file. */
+  filePath: string;
+  /** sha256 (hex) of `content` as parsed — the value recorded in the trust store. */
+  sha256: string;
+}
 
 const AGENTS_DIR = path.join('.agent-do', 'agents');
 
@@ -185,7 +206,24 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
     console.log(printable(`Updating agent "${args.agentName}"...`));
   }
 
-  await fs.promises.writeFile(filePath, JSON.stringify(config, null, 2) + '\n');
+  // Serialise once: the bytes we write are the bytes we record as trusted. Hashing a second serialisation
+  // would tie the record to a string that could differ from what hit the disk (agent-do-5re).
+  const payload = JSON.stringify(config, null, 2) + '\n';
+  await fs.promises.writeFile(filePath, payload);
+
+  // Record provenance so `run <name>` can tell an operator-created config from a planted one. Failing to
+  // record is not fatal for `create` — the file is written either way — but the operator has to know that
+  // the next `run` will ask for --trust-agent-config.
+  const trust = await recordAgentTrust(filePath, hashAgentConfig(payload));
+  if (!trust.recorded) {
+    writeDiagnostic([
+      `[agent-do] Could not record trust for ${printable(filePath)} in ${printable(
+        path.resolve(trustStorePath()),
+      )}: ${printable(trust.detail)}`,
+      '[agent-do] `run` will require --trust-agent-config for this agent until it can be recorded.',
+    ]);
+  }
+
   console.log(printable(`Agent "${args.agentName}" saved to ${filePath}`));
   console.log();
   console.log(printable(`  Provider:     ${config.provider}`));
@@ -209,9 +247,17 @@ export async function createSavedAgent(args: ParsedArgs): Promise<void> {
  * List all saved agents visible from the current directory, walking up
  * the tree. If the same name appears at multiple levels, the closest
  * ancestor wins (matching the lookup behavior of `loadSavedAgent`).
+ *
+ * Each entry carries its provenance too (agent-do-5re): a config whose content this machine has not recorded
+ * as trusted is marked `(untrusted config)`. The listing is the one place an operator can see that a
+ * repository planted an agent that `run` will refuse — `run`'s error names the file, but only after they have
+ * asked for that name.
  */
 export async function listSavedAgents(): Promise<void> {
-  const seen = new Map<string, { config: SavedAgent | null; file: string; location: string }>();
+  const seen = new Map<
+    string,
+    { record: SavedAgentRecord | null; file: string; location: string }
+  >();
 
   for (const dir of walkUp(process.cwd())) {
     const agentsDir = path.join(dir, AGENTS_DIR);
@@ -226,8 +272,8 @@ export async function listSavedAgents(): Promise<void> {
       // be corrupt or hand-edited, so it must not reach the listing unchecked:
       // a bare `JSON.parse(...) as SavedAgent` let a planted file feed
       // arbitrary values (or a non-string name) into this output.
-      const config = await readSavedAgentFile(path.join(agentsDir, file));
-      seen.set(name, { config, file, location: dir });
+      const record = await readSavedAgentFile(path.join(agentsDir, file));
+      seen.set(name, { record, file, location: dir });
     }
   }
 
@@ -236,22 +282,37 @@ export async function listSavedAgents(): Promise<void> {
     return;
   }
 
+  // One read for the whole listing: the check itself is pure (`evaluateTrust`).
+  const { store, error: trustStoreError } = await readTrustStore();
+  if (trustStoreError) {
+    writeDiagnostic([
+      `[agent-do] Could not read the agent trust store ${printable(path.resolve(trustStorePath()))}: ${printable(
+        trustStoreError,
+      )}`,
+      '[agent-do] Every config below is reported as untrusted until that is fixed.',
+    ]);
+  }
+
   console.log('Saved agents:\n');
   const cwd = process.cwd();
   for (const name of [...seen.keys()].sort()) {
-    const { config, location } = seen.get(name)!;
+    const { record, location } = seen.get(name)!;
     const rel = path.relative(cwd, location) || '.';
-    if (!config) {
+    if (!record) {
       // `name` is derived from the filename, which can hold any character the
       // filesystem allows — `printable` keeps control characters (and therefore
       // terminal escape sequences) out of the operator's terminal.
       console.log(printable(`  ${printable(name).padEnd(20)} (invalid config)  [${rel}]`));
       continue;
     }
+    const config = record.config;
+    const trusted =
+      !trustStoreError && evaluateTrust(store, record.filePath, record.sha256).trusted;
     const model = printable(config.model ?? '(default)');
     const prompt = printable(config.systemPrompt);
+    const marker = trusted ? '' : '  (untrusted config: run needs --trust-agent-config)';
     console.log(printable(
-      `  ${printable(config.name).padEnd(20)} ${config.provider}/${model}  ${prompt.slice(0, 40)}${prompt.length > 40 ? '...' : ''}  [${rel}]`,
+      `  ${printable(config.name).padEnd(20)} ${config.provider}/${model}  ${prompt.slice(0, 40)}${prompt.length > 40 ? '...' : ''}  [${rel}]${marker}`,
     ));
   }
   console.log();
@@ -295,12 +356,25 @@ function writeDiagnostic(lines: readonly string[]): void {
  * print a diagnostic to stderr so a planted bad file doesn't fail
  * silently — the operator can see why the agent didn't load.
  *
+ * Validation is shape-only. A file that passes every constraint here is still a file this process did not
+ * create, which is why `run` checks provenance separately (agent-do-5re, `./agent-trust.ts`).
+ *
  * See #22 — pre-validation, this function did
  * `JSON.parse(content) as SavedAgent` and accepted any shape, which
  * let a planted agent file plant arbitrary system prompts and point
  * `memoryDir` outside the project root.
  */
 export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
+  const record = await loadSavedAgentRecord(name);
+  return record ? record.config : null;
+}
+
+/**
+ * As {@link loadSavedAgent}, but keeps the provenance: the absolute file path and the sha256 of the bytes
+ * that were parsed. `run` needs both to check the trust store before the config's `systemPrompt` is promoted
+ * to the system tier (agent-do-5re).
+ */
+export async function loadSavedAgentRecord(name: string): Promise<SavedAgentRecord | null> {
   const filePath = await findAgentFile(name);
   if (!filePath) return null;
   return readSavedAgentFile(filePath);
@@ -315,7 +389,7 @@ export async function loadSavedAgent(name: string): Promise<SavedAgent | null> {
  * with a bare `JSON.parse(content) as SavedAgent` and read fields the schema
  * had never checked.
  */
-async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> {
+async function readSavedAgentFile(filePath: string): Promise<SavedAgentRecord | null> {
   // Read and parse as two separate steps so the failure modes don't
   // blur together (Copilot #64). "Malformed JSON" is an actionable
   // diagnostic; "permission denied" is something the operator needs
@@ -350,5 +424,11 @@ async function readSavedAgentFile(filePath: string): Promise<SavedAgent | null> 
     ]);
     return null;
   }
-  return parsed.data;
+  // Hash the bytes that were actually parsed, not a re-read: a second read could see different content
+  // (TOCTOU), and then the trust record would vouch for something the model never sees.
+  return {
+    config: parsed.data,
+    filePath: path.resolve(filePath),
+    sha256: hashAgentConfig(content),
+  };
 }

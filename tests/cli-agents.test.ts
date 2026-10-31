@@ -28,6 +28,7 @@ function createArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
     script: false,
     yes: false,
     acceptAll: false,
+    trustAgentConfig: false,
     allow: [],
     providerTool: [],
     logLevel: 'info',
@@ -36,16 +37,22 @@ function createArgs(overrides: Partial<ParsedArgs> = {}): ParsedArgs {
 }
 
 const originalCwd = process.cwd();
+const originalTrustStoreEnv = process.env.AGENT_DO_TRUST_STORE;
 let testDir: string;
 
 describe('saved agents', () => {
   beforeEach(async () => {
     testDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agent-do-test-'));
     process.chdir(testDir);
+    // The trust store is user-scoped by default (~/.agent-do/trusted-agents.json). A test must never read or
+    // write the operator's real home directory: both sides of `create` -> `run` are driven from here.
+    process.env.AGENT_DO_TRUST_STORE = path.join(testDir, 'trusted-agents.json');
   });
 
   afterEach(async () => {
     process.chdir(originalCwd);
+    if (originalTrustStoreEnv === undefined) delete process.env.AGENT_DO_TRUST_STORE;
+    else process.env.AGENT_DO_TRUST_STORE = originalTrustStoreEnv;
     await fs.promises.rm(testDir, { recursive: true, force: true });
   });
 
@@ -274,6 +281,8 @@ function expectTrustedDiagnosticLinesOnly(output: string): void {
     '[agent-do] Could not read agent file ',
     '[agent-do] Ignoring malformed agent file ',
     '[agent-do] Ignoring invalid agent file ',
+    '[agent-do] Could not read the agent trust store ',
+    '[agent-do] Could not record trust for ',
   ];
   for (const line of output.split('\n')) {
     // Deliberately looser than the full prefix: an injected line may be truncated mid-prefix by whatever quotes

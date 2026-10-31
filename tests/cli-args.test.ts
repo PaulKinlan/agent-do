@@ -79,6 +79,13 @@ describe('parseArgs', () => {
     expect(args.noTools).toBe(true);
   });
 
+  it('parses --trust-agent-config, and does not let -y imply it (agent-do-5re)', () => {
+    expect(parseArgs(['run', 'mine']).trustAgentConfig).toBe(false);
+    expect(parseArgs(['run', 'mine', '--trust-agent-config']).trustAgentConfig).toBe(true);
+    // `-y` is about interactivity, not about adopting a config's instructions.
+    expect(parseArgs(['run', 'mine', '-y']).trustAgentConfig).toBe(false);
+  });
+
   it('parses --verbose', () => {
     const args = parseArgs(['--verbose', 'hello']);
     expect(args.verbose).toBe(true);

@@ -33,7 +33,15 @@
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts"
   ],
+  "src/cli/agent-trust.ts": [
+    "tests/agent-trust.test.ts",
+    "tests/cli-agents.test.ts",
+    "tests/cli-answer-stream.test.ts",
+    "tests/script-import.test.ts",
+    "tests/trust-boundary.test.ts"
+  ],
   "src/cli/agents.ts": [
+    "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/script-import.test.ts",
@@ -46,6 +54,7 @@
     "tests/script-import.test.ts"
   ],
   "src/cli/args.ts": [
+    "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
@@ -80,6 +89,7 @@
     "tests/cli-prompt-stream.test.ts"
   ],
   "src/cli/provider-tools.ts": [
+    "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
@@ -101,6 +111,7 @@
     "tests/script-import.test.ts"
   ],
   "src/cli/resolve-model.ts": [
+    "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
@@ -131,6 +142,7 @@
     "tests/shellm.test.ts"
   ],
   "src/cli/terminal-safety.ts": [
+    "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
@@ -284,6 +296,7 @@
     "tests/tool-result-integration.test.ts"
   ],
   "src/mcp.ts": [
+    "tests/agent-trust.test.ts",
     "tests/browser-entry.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
@@ -453,6 +466,7 @@
     "tests/workspace-tools.test.ts"
   ],
   "src/scheduled-tasks.ts": [
+    "tests/agent-trust.test.ts",
     "tests/browser-entry.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
@@ -727,6 +741,7 @@
     "tests/tools-build.test.ts"
   ],
   "src/tools/content-guards.ts": [
+    "tests/agent-trust.test.ts",
     "tests/browser-entry.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
@@ -863,6 +878,7 @@
     "tests/workspace-tools.test.ts"
   ],
   "src/types.ts": [
+    "tests/agent-trust.test.ts",
     "tests/browser-entry.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",
@@ -904,6 +920,7 @@
     "tests/workspace-tools.test.ts"
   ],
   "src/usage.ts": [
+    "tests/agent-trust.test.ts",
     "tests/browser-entry.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-args.test.ts",

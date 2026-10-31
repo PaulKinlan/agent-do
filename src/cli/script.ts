@@ -28,6 +28,14 @@
  *    end in `.js`/`.mjs`/`.cjs`/`.ts`/`.mts`/`.cts`) require the explicit
  *    `--script` flag, must be inside cwd, and prompt the user for
  *    confirmation (skip with `-y`/`--yes`, refuse in non-TTY without `-y`).
+ *
+ * ## Provenance (agent-do-5re)
+ *
+ * Saved agents are LOOKED UP, not named by path: `findAgentFile` walks up from cwd, so a cloned repository can
+ * ship `.agent-do/agents/<name>.json` whose `systemPrompt` would be promoted to the system tier with the
+ * agent's tools attached. Validating the file's shape cannot answer "did the operator write this", so
+ * `runSavedAgent` is reached only through `requireSavedAgentTrust`, which requires the content's hash to be
+ * recorded on this machine by `create` (or accepted once with `--trust-agent-config`). See `./agent-trust.ts`.
  */
 
 import * as fs from 'node:fs';
@@ -38,7 +46,8 @@ import { pathToFileURL } from 'node:url';
 import type { ParsedArgs } from './args.js';
 import { readStdin } from './args.js';
 import { resolveModel } from './resolve-model.js';
-import { loadSavedAgent } from './agents.js';
+import { loadSavedAgentRecord } from './agents.js';
+import { requireSavedAgentTrust } from './agent-trust.js';
 import { renderEvent, renderOptionsFromArgs } from './render.js';
 import { emitSandboxWarning } from './warnings.js';
 import { createAgent } from '../agent.js';
@@ -276,8 +285,17 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   // stray `.js` file in cwd masquerade as a saved agent and run before
   // any permission check. Split explicit, fail closed.
   if (!looksLikeScriptPath(args.file)) {
-    const saved = await loadSavedAgent(args.file);
-    if (saved) return runSavedAgent(saved, args);
+    const record = await loadSavedAgentRecord(args.file);
+    if (record) {
+      // Shape validation is not provenance (agent-do-5re). The file was found by walking UP from cwd, so it
+      // may have arrived with a cloned repository rather than from this operator, and its `systemPrompt`
+      // would land in the system tier with the agent's tools attached. Gate it BEFORE any model call, tool
+      // construction or memory write, so a refused config has no side effects at all.
+      await requireSavedAgentTrust(record.filePath, record.sha256, {
+        accept: args.trustAgentConfig,
+      });
+      return runSavedAgent(record.config, args);
+    }
     throw new Error(
       `No saved agent "${args.file}" found. If you meant to run a script file, ` +
       `use a path (e.g. ./agent.ts) and pass --script.`,

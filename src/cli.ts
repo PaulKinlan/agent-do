@@ -96,6 +96,10 @@ Options:
   --include-sensitive    Bypass built-in sensitive-file deny list (.env, .ssh, etc.)
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
+  --script               Required to run a local .js/.ts file (arbitrary code)
+  --trust-agent-config   Accept a saved agent config this machine has not vetted
+                         (configs are found by walking up from cwd, so one can
+                         arrive with a cloned repo; create records what it writes)
   --verbose              Show thinking, tool calls, and per-step summaries (stderr)
   --show-content         With --verbose: also print each tool's full result
   --log-level <level>    silent | info | verbose | debug | trace (default: info).
