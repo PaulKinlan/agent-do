@@ -30,10 +30,11 @@
 src/agent.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/script-import.test.ts tests/slash-commands.test.ts
 src/browser.ts	tests/browser-entry.test.ts
 src/cache.ts	tests/browser-entry.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/conversation-history.test.ts tests/cost-runaway.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/eval-runner.test.ts tests/hooks.test.ts tests/is-anthropic-model.test.ts tests/loop.test.ts tests/orchestrator.test.ts tests/permissions.test.ts tests/provider-output-guard.test.ts tests/provider-tool-loop.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/system-prompt-delivery.test.ts tests/tool-result-integration.test.ts
+src/cli.ts	tests/cli-help.test.ts
 src/cli/agent-trust.ts	tests/agent-trust.test.ts tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/script-import.test.ts tests/trust-boundary.test.ts
 src/cli/agents.ts	tests/agent-trust.test.ts tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/script-import.test.ts tests/trust-boundary.test.ts
 src/cli/answer-stream.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/cli-scheduled-tasks.test.ts tests/script-import.test.ts
-src/cli/args.ts	tests/agent-trust.test.ts tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-args.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
+src/cli/args.ts	tests/agent-trust.test.ts tests/cli-agents.test.ts tests/cli-answer-stream.test.ts tests/cli-args.test.ts tests/cli-help.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/cli-render.test.ts tests/cli-scheduled-tasks.test.ts tests/csv.test.ts tests/debug-observability.test.ts tests/script-import.test.ts tests/slash-commands.test.ts tests/trust-boundary.test.ts
 src/cli/debug-config.ts	tests/cli-answer-stream.test.ts tests/cli-prompt-stream.test.ts tests/debug-observability.test.ts tests/script-import.test.ts
 src/cli/eval-cmd.ts	tests/cli-answer-stream.test.ts tests/csv.test.ts
 src/cli/permission-handler.ts	tests/cli-answer-stream.test.ts tests/cli-permissions.test.ts tests/cli-prompt-stream.test.ts tests/script-import.test.ts
