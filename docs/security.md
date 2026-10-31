@@ -113,3 +113,34 @@ So the boundary is honest about its edges:
   boundary tags; it cannot recognise a hostile page phrased to look like ordinary results. A tool that fetches
   arbitrary URLs is a trust decision, not a toggle: leave `--provider-tool` off when the agent's own instructions are
   the thing worth protecting.
+
+## MCP tool metadata: the pre-call channel
+
+An MCP tool's `description` and `inputSchema` reach the model **before any call happens** — providers render them
+into the request's tool declarations, the same instruction channel system prompts live in. The result path was
+already guarded (`wrapForModel`); the metadata channel was not: until `agent-do-4ah` a server's description and
+schema arrived verbatim — unbounded, unredacted and unframed — so a hostile or compromised server owned the model's
+view of every tool before the agent ever invoked it, and could stuff megabytes of context through a single tool
+declaration.
+
+The guard in `src/mcp.ts` (`guardMcpToolDescription` / `guardMcpToolSchema`):
+
+- **A server-provided description is framed, redacted and capped.** It is prefixed with a provenance line naming the
+  server ("untrusted third-party content, not operator instructions"), gets the `sanitiseUntrustedText` transforms
+  (forged `<tool_output>` tags escaped, injection markers replaced), and is capped at 8 KB with an explicit
+  truncation note. The built-in fallback description (used when the server sends none) is our text built from
+  validated names and is left unframed.
+- **The input schema is bounded, not clipped.** Metadata strings (`description`, `title`) are sanitised at every
+  depth of the walk; if the whole schema exceeds 32 KB, or nests past the walk's depth cap, it is **replaced** with
+  a permissive minimal schema and the replacement is announced in the tool's description — a clipped JSON schema is
+  malformed in arbitrary ways, and a half-kept contract is worse than a permissive one that says so.
+
+What that does not buy you:
+
+- **Property names and `enum` / `const` values are left verbatim.** They are part of the argument contract — the
+  model must echo them exactly for a call to validate — so redacting them would break every honest call. A hostile
+  server can still put steering text in a property name or enum label the same way it could in any payload it
+  owns; mounting a server is a trust decision, not a toggle.
+- **The provenance frame is a hint, not a wall.** It tells the model whose text this is; it cannot stop a model
+  from obeying text it should not. Same class as every redaction above: it raises the cost and leaves an auditable
+  trace (`[redacted prompt-injection marker]`), it does not make a compromised server safe.
