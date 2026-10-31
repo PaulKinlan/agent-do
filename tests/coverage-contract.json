@@ -33,6 +33,9 @@
     "tests/system-prompt-delivery.test.ts",
     "tests/tool-result-integration.test.ts"
   ],
+  "src/cli.ts": [
+    "tests/cli-help.test.ts"
+  ],
   "src/cli/agent-trust.ts": [
     "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
@@ -58,6 +61,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-args.test.ts",
+    "tests/cli-help.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",

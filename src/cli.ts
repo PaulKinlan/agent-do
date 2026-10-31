@@ -97,9 +97,16 @@ Options:
   --max-iterations <n>   Max loop iterations (default: 20)
   --no-tools             Disable all file tools
   --script               Required to run a local .js/.ts file (arbitrary code)
+  -y, --yes              Skip interactive confirmations (also implies --accept-all)
+  --accept-all           Allow every tool call without prompting (default: ask in a
+                         TTY, deny without one)
+  --allow <tools>        Tool names allowed without prompting (comma-separated)
   --trust-agent-config   Accept a saved agent config this machine has not vetted
                          (configs are found by walking up from cwd, so one can
                          arrive with a cloned repo; create records what it writes)
+  --provider-tool <name> Enable a provider-native tool (repeatable)
+  --provider-options <json>  Provider-specific options for every model call, e.g.
+                         '{"google":{"useSearchGrounding":true}}'
   --verbose              Show thinking, tool calls, and per-step summaries (stderr)
   --show-content         With --verbose: also print each tool's full result
   --log-level <level>    silent | info | verbose | debug | trace (default: info).
