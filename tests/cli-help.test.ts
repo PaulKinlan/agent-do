@@ -83,12 +83,40 @@ describe('CLI help text', () => {
   });
 
   it('explains what --trust-agent-config is for, not just that it exists', () => {
-    // A bare flag name is not documentation: the whole point is that the operator knows a config can arrive
-    // with a repository (agent-do-5re).
-    const help = helpText();
-    const entry = help.slice(help.indexOf('--trust-agent-config'));
-    const line = entry.slice(0, entry.indexOf('\n') + 1) + entry.slice(entry.indexOf('\n') + 1, entry.indexOf('\n') * 2);
-    expect(line).toMatch(/saved agent config/i);
-    expect(line).toMatch(/repo|vett|record|creat/i);
+    // A bare flag name is not documentation. The whole point is that an operator learns a config or prompt file
+    // can arrive with a repository (agent-do-5re, agent-do-e29) and what accepting it means.
+    const entry = helpEntry('--trust-agent-config');
+    expect(entry).toMatch(/saved agent config/i);
+    expect(entry).toMatch(/shellm/i);
+    expect(entry).toMatch(/vetted|trust|record|creat|repo/i);
+  });
+
+  it('keeps each option entry contiguous, so the entry reader is not fooled by a wrapped line', () => {
+    // The reader above is the thing under test here: if it swallowed the following option, the assertions in the
+    // case above would pass on someone else's words.
+    const entry = helpEntry('--no-tools');
+    expect(entry).toContain('--no-tools');
+    expect(entry).not.toContain('--verbose');
   });
 });
+
+/**
+ * The lines belonging to one option: the flag's own line plus its wrapped continuation lines, stopping at the
+ * next option or a blank line. Splitting the help with a fixed line count (the previous version of this test) is
+ * what broke when the entry grew a line — the test then read the FOLLOWING option's text and failed for a reason
+ * that had nothing to do with the flag it claimed to check.
+ */
+function helpEntry(flag: string): string {
+  const lines = helpText().split('\n');
+  const start = lines.findIndex((l) => l.trim().startsWith(flag));
+  expect(start, `--help has no entry for ${flag}`).toBeGreaterThan(-1);
+
+  const entry = [lines[start]!];
+  for (let i = start + 1; i < lines.length; i++) {
+    const next = lines[i]!;
+    const isOption = /^\s{1,}(--?[a-z][a-z-]*)/.test(next);
+    if (next.trim() === '' || isOption || /^\S/.test(next)) break;
+    entry.push(next);
+  }
+  return entry.join('\n');
+}
