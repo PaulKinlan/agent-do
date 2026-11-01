@@ -8,7 +8,12 @@ const ENV_VARS = [
   'ZAI_API_KEY',
 ] as const;
 
-describe('resolveModel — API key preflight', () => {
+// agent-do-yuc: the preflight tests pay a dynamic `await import('@ai-sdk/<pkg>')`
+// inside the test body (src/cli/resolve-model.ts tryImport), so the SDK module graph
+// loads against the per-test clock: the ollama test measured 3.1 s on a loaded lane VM
+// and the merger's serial full gate on merged tree 6e506fc failed it at the vitest 5s
+// default (the docs/speed.md §4 lottery). 30s matches the repo convention elsewhere.
+describe('resolveModel — API key preflight', { timeout: 30_000 }, () => {
   const saved: Partial<Record<(typeof ENV_VARS)[number], string | undefined>> = {};
 
   beforeEach(() => {
@@ -126,7 +131,7 @@ describe('DEFAULT_MODELS', () => {
 
 // ─── Supply-chain export-shape guard (#40) ─────────────────────────────
 
-describe('resolveModel — missing factory export (#40)', () => {
+describe('resolveModel — missing factory export (#40)', { timeout: 30_000 }, () => {
   // Restore ENV after each test so we don't leak the stub API keys
   // into the preflight-focused suite above.
   const saved: Record<string, string | undefined> = {};
