@@ -326,6 +326,18 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
+/**
+ * Read a `NAME=<number>` bound out of a conf file with bash-sourcing semantics (agent-do-0yl):
+ * the LAST assignment wins when the shell sources the file, so a first-match regex parse pins the
+ * wrong value after a keep-both-sides conflict resolution leaves two assignments in the file (the
+ * fleet's rule for check.conf conflicts). A duplicated key is therefore reported (NaN) rather than
+ * resolved — loud red via the caller's Number.isFinite assertion — instead of a false green.
+ */
+function readBound(conf: string, name: string): number {
+  const values = [...conf.matchAll(new RegExp(`^${name}=(\\d+)\\s*$`, 'gm'))].map((m) => Number(m[1]));
+  return values.length === 1 ? values[0] : NaN;
+}
+
 function readLog(fx: ReturnType<typeof fixture>): string[] {
   return existsSync(fx.log) ? readFileSync(fx.log, 'utf8').split('\n').filter(Boolean) : [];
 }
@@ -554,10 +566,10 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
     const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
     const gconf = readFileSync(join(REPO, 'tools', 'gate.conf'), 'utf8');
-    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
-    const declared = Number(/^FAST_OUTER_WINDOW=(\d+)$/m.exec(gconf)?.[1]);
-    expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
-    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr)').toBe(outer);
+    const outer = readBound(conf, 'CHECK_FAST_TIMEOUT');
+    const declared = readBound(gconf, 'FAST_OUTER_WINDOW');
+    expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST, agent-do-0yl)').toBe(true);
+    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must appear exactly once and mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr; last-wins/once: agent-do-0yl)').toBe(outer);
     const cmd = /^CHECK_FAST_CMD='([^']*)'$/m.exec(conf)?.[1];
     expect(cmd, "CHECK_FAST_CMD must stay the bare bash form so fleet-check's missing-target preflight sees the gate path (agent-do-a2t)").toBe('bash tools/fast-gate.sh');
     expect(gate, 'the batch bound must be derived from the MEASURED static step (agent-do-gmr)').toMatch(/SUITE_BOUND=\$\(\( FAST_OUTER_WINDOW - static_secs - _margin \)\)/);
@@ -577,8 +589,8 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     // §4 lever lands and the full gate gets genuinely faster, lower this floor AND tools/check.conf together
     // (speed.md R4: re-measure and tighten).
     const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
-    const full = Number(/^CHECK_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
-    expect(Number.isFinite(full), 'CHECK_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
+    const full = readBound(conf, 'CHECK_TIMEOUT');
+    expect(Number.isFinite(full), 'CHECK_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST assignment while a first-match parse pins the first — agent-do-0yl)').toBe(true);
     // 563 s = the worst healthy full-gate observation recorded in docs/speed.md §4 and tools/check.conf's
     // prose (measured 2026-10-22); the 2× ratio is the v3m precedent ("2x the window that fired").
     expect(
@@ -586,8 +598,8 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
       'CHECK_TIMEOUT must stay >= 2x the worst healthy full-gate row (563 s) — at 94% of the window (v3m) it fired twice on healthy runs; if the §4 lever made the full gate faster, lower this floor and the conf together (speed.md R4)',
     ).toBeGreaterThanOrEqual(1126);
     // The full tier runs a strict superset of the fast tier (R2), so its kill window cannot be smaller.
-    const fast = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
-    expect(Number.isFinite(fast), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
+    const fast = readBound(conf, 'CHECK_FAST_TIMEOUT');
+    expect(Number.isFinite(fast), 'CHECK_FAST_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST, agent-do-0yl)').toBe(true);
     expect(full, 'the full gate\'s kill window must not be smaller than the fast tier\'s (R2: fast is a strict subset of full)').toBeGreaterThanOrEqual(fast);
   });
 
