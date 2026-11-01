@@ -568,6 +568,29 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     expect(fallback + 15).toBeLessThan(outer);
   });
 
+  it('pins the FULL gate window at or above 2x the worst healthy full-gate measurement (agent-do-yuc)', () => {
+    // Nothing else in tests/ reads CHECK_TIMEOUT: the full gate has no inner window of its own, so this one
+    // literal is all that stands between a healthy loaded run and an UNKNOWN. It has gone silently wrong
+    // twice (agent-do-v3m: 600 s against a 563 s worst healthy row — 94% of the window — and it fired twice
+    // on one tree; agent-do-ewz: the installed conf sat at 600 s while the repo said 1200 s). A floor makes
+    // lowering it a red test that names the measurement instead of a load-dependent kill. When the speed.md
+    // §4 lever lands and the full gate gets genuinely faster, lower this floor AND tools/check.conf together
+    // (speed.md R4: re-measure and tighten).
+    const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
+    const full = Number(/^CHECK_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
+    expect(Number.isFinite(full), 'CHECK_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
+    // 563 s = the worst healthy full-gate observation recorded in docs/speed.md §4 and tools/check.conf's
+    // prose (measured 2026-10-22); the 2× ratio is the v3m precedent ("2x the window that fired").
+    expect(
+      full,
+      'CHECK_TIMEOUT must stay >= 2x the worst healthy full-gate row (563 s) — at 94% of the window (v3m) it fired twice on healthy runs; if the §4 lever made the full gate faster, lower this floor and the conf together (speed.md R4)',
+    ).toBeGreaterThanOrEqual(1126);
+    // The full tier runs a strict superset of the fast tier (R2), so its kill window cannot be smaller.
+    const fast = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
+    expect(Number.isFinite(fast), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
+    expect(full, 'the full gate\'s kill window must not be smaller than the fast tier\'s (R2: fast is a strict subset of full)').toBeGreaterThanOrEqual(fast);
+  });
+
   it('derives the batch bound at runtime: outer window minus measured static minus margin (agent-do-gmr)', () => {
     const fx = fixture();
     const hang = join(fx.root, 'hang-runner');
