@@ -52,7 +52,14 @@ function providerToolSet(): AgentConfig['tools'] {
   } as unknown as AgentConfig['tools'];
 }
 
-describe('provider-executed tool calls: toolLimits enforcement (run loop)', () => {
+// Each test here drives full streamText/runAgentLoop pipelines over the AI SDK's
+// stream machinery, so per-test time is CPU-starvation sensitive: 0.1–1.7 s on an
+// idle-to-loaded lane VM, but the serial full gate under VM load measured > 5 s
+// (merger run on merged tree b9c2094: this file's first test timed out at the
+// 5 s default while 1263 siblings passed — agent-do-yuc). The 5 s default is a
+// lottery on this hardware (docs/speed.md §4); 30 s matches cost-runaway.test.ts
+// and still fails fast on a genuinely wedged loop.
+describe('provider-executed tool calls: toolLimits enforcement (run loop)', { timeout: 30_000 }, () => {
   it('stops scheduling iterations once provider calls push the total over the cap', async () => {
     const model = mockModel({
       responses: [
@@ -129,7 +136,7 @@ describe('provider-executed tool calls: toolLimits enforcement (run loop)', () =
   });
 });
 
-describe('provider-executed tool calls: per-iteration budget (agent-do-7kf)', () => {
+describe('provider-executed tool calls: per-iteration budget (agent-do-7kf)', { timeout: 30_000 }, () => {
   const twoProviderCalls = {
     toolCalls: [
       { toolName: 'web', args: {}, providerExecuted: true },
@@ -249,7 +256,7 @@ describe('provider-executed tool calls: per-iteration budget (agent-do-7kf)', ()
   });
 });
 
-describe('provider-executed tool calls: hooks and result enrichment', () => {
+describe('provider-executed tool calls: hooks and result enrichment', { timeout: 30_000 }, () => {
   it('stream loop: fires onPostToolUse (never onPreToolUse) and enriches the tool-result event', async () => {
     const onPreToolUse = vi.fn();
     const onPostToolUse = vi.fn();
