@@ -727,6 +727,15 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     ['a declare duplicate', 'CHECK_TIMEOUT=1800\ndeclare CHECK_TIMEOUT=600\n'],
     ['a readonly duplicate', 'CHECK_TIMEOUT=1800\nreadonly CHECK_TIMEOUT=600\n'],
     ['a negated-command duplicate', 'CHECK_TIMEOUT=1800\n! CHECK_TIMEOUT=600\n'],
+    // agent-do-b29z: the remaining members of that same prefix family, plus one shape NO prefix list can enumerate (a
+    // `case` branch). Each left value below was sourced by bash and printed 600 over the 1800, so every one of them
+    // really moves the gate window; the last two are only readable because rule 2 fails closed on live text it cannot
+    // parse, which is what makes the list stop being the bug. (`local` is not here: bash rejects it outside a
+    // function, so it is not a shape a sourced conf can carry.)
+    ['a typeset duplicate', 'CHECK_TIMEOUT=1800\ntypeset CHECK_TIMEOUT=600\n'],
+    ['an indented declare duplicate', 'CHECK_TIMEOUT=1800\n   declare  CHECK_TIMEOUT=600\n'],
+    ['an elif-declare duplicate', 'CHECK_TIMEOUT=1800\nif false; then :; elif true; then declare CHECK_TIMEOUT=600; fi\n'],
+    ['a case-branch duplicate', 'CHECK_TIMEOUT=1800\ncase x in x) CHECK_TIMEOUT=600;; esac\n'],
     // Counted although this loop never runs, so bash would keep 1800: the guard does not model control flow, and
     // the count is the conservative reading (`while false; do NAME=600; done` alone leaves bash with no value).
     ['a while-do duplicate', 'CHECK_TIMEOUT=1800\nwhile false; do CHECK_TIMEOUT=600; done\n'],
@@ -757,6 +766,10 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
       // 600 and nothing else assigns the key, so a red here would be a false alarm.
       'if true; then CHECK_TIMEOUT=600; fi\n',
       'false || CHECK_TIMEOUT=600\n',
+      // agent-do-b29z: a declare/typeset prefix is one assignment, like `export`, so the hardening above must not
+      // turn the prefixes the fix added into a false red on a conf that legitimately uses them.
+      'declare CHECK_TIMEOUT=600\n',
+      'typeset CHECK_TIMEOUT=600\n',
     ]) {
       expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
     }
