@@ -290,6 +290,12 @@ This repo is tiered, and the tiers are the contract (`docs/speed.md`, `~/fleet/d
 - **A dependency, lockfile or `vitest.config.ts` change is not a fast-tier change.** Those are deliberately
   unmapped: they can reach every suite, so the fast gate refuses them and the full gate pays. Say so on the
   bead when you need `fleet-check --full`.
+- **`tools/` is mapped and fast-gateable; `check.conf` is only *install*-blocked.** `tools/suite-map.tsv` maps
+  `tools/*` to `tests/gates.test.ts` — `bash tools/fast-gate.sh --list --changed tools/check.conf` prints
+  `tests/gates.test.ts` — so a change to the gate scripts, either `.conf` or `gen-suite-map.mjs` is selected and
+  run. What a lane cannot do is *install* it: `tools/install-gate.sh` refuses a `check.conf` that is not on
+  `origin/main`, so the gate that runs while you iterate obeys the installed windows, not your branch's
+  (`docs/speed.md` §5). Run the fast gate anyway and say which window the verdict used.
 - **Tests must be independent** — no order dependence, no machine state, no other lane's files, no
   wall-clock bounds. Use `mkdtemp` for anything on disk; never write under `$HOME` or a fixed `/tmp` path.
   Those three pathologies are defects in the suite, not flakiness (`docs/speed.md` §6).

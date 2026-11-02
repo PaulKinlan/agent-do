@@ -238,6 +238,23 @@ Anything else unmapped is a prompt to act, not a rule to work around: **run `nod
 first** (a module with a suite is normally mapped already — the map is generated), and if the module really
 has no suite, the fix is the suite, not an exemption.
 
+The refused list above is short on purpose. Two other buckets are easy to confuse with it, and that confusion is
+how "this branch is impossible to gate here" gets said about a change that is gateable (`agent-do-l17` had that
+claim made about `tools/check.conf`):
+
+- **Mapped.** `src/**` modules, and `tools/*` — the gate scripts, both `.conf` files and `gen-suite-map.mjs` —
+  which map to `tests/gates.test.ts`. `bash tools/fast-gate.sh --list --changed tools/check.conf` prints
+  `tests/gates.test.ts`, so a `tools/` change IS selected and the fast gate runs it.
+- **Exempt.** Prose and config nothing can assert on: `**/*.md`, `docs/**`, `llms.txt`, `.github/**`, `LICENSE`,
+  `.gitignore`, `tsconfig.json`, `typedoc.json`, `scripts/**`, `examples/**`, `demos/**`, `evals/**`. The gate
+  prints `(N exempt)` and exits 0; each exemption is a row in `tools/suite-map.tsv` with its reason on the line.
+
+What a lane genuinely cannot do to a `tools/check.conf` change is **install** it: `tools/install-gate.sh` refuses
+any config that is not on `origin/main` (`agent-do-llc`), so the fast gate that runs while you iterate obeys the
+**installed** windows, not your branch's. `INSTALL_GATE_ALLOW_UNLANDED=1` is the deliberate, logged escape hatch
+for that chicken-and-egg, and it must be reconciled (re-install from main) when the branch lands or dies. Run the
+fast gate anyway — it validates the change — and say in the hand-off which window the verdict was produced under.
+
 ## 6. A gate that can fail for reasons outside the diff is a defect
 
 Three named pathologies from the fleet standard, and what each means here:
