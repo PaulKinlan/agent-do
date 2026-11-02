@@ -327,71 +327,95 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
 }
 
 /**
- * Read a `NAME=<number>` bound out of a conf file with bash-sourcing semantics (agent-do-0yl):
- * the LAST assignment wins when the shell sources the file, so a first-match regex parse pins the
- * wrong value after a keep-both-sides conflict resolution leaves two assignments in the file (the
- * fleet's rule for check.conf conflicts). A duplicated key is therefore reported (NaN) rather than
- * resolved — loud red via the caller's Number.isFinite assertion — instead of a false green.
+ * Read a `NAME=<number>` bound out of a conf file by ASKING THE SHELL THAT SOURCES IT, instead of parsing the text
+ * (agent-do-3au6).
+ *
+ * Six reviews found six shapes a hand parser could not see - vw9 indentation/export/quotes/comments, 2lww command
+ * terminators, dzjx expansion values, 3y0o stacked prefixes, b29z builtin prefixes (`declare`/`typeset`/`readonly`),
+ * 3au6 `printf -v` / `read` / `eval`-assembled overrides - and each fix was another entry in a list. A guard whose
+ * coverage IS a list has its bug in the list, so the list is gone. Two questions, both answered by bash:
+ *
+ *   1. WHAT value does the shell end up with? Source the file, then read the variable. The last assignment wins,
+ *      expansions are really evaluated, and anything the shell refuses simply does not happen - exactly what the
+ *      gate sees, because the gate sources this same file with this same shell.
+ *   2. HOW MANY times was the key assigned? A keep-both-sides conflict must not quietly pick a side, so the count
+ *      has to come from bash too. Two instruments, because bash lies in both directions here:
+ *        - pre-declare the key `readonly`, then bash reports one `NAME: readonly variable` per assignment it would
+ *          really perform. But that error ABORTS the rest of its command list, so `NAME=600; NAME=700` counts once.
+ *        - `set -x`, which traces one line per command really run, so a same-line duplicate counts twice. But bash
+ *          traces `export NAME=600` as two commands (the builtin and its assignment), so a lone export counts twice.
+ *      Each blind spot is in the direction of the other instrument's strength, so the MAX of the two counts is what
+ *      this uses; the export double-trace is de-duplicated explicitly (see countTraceAssignments) or every
+ *      `export NAME=600` conf would read as a conflict.
+ *
+ * NaN (loud, via the caller's Number.isFinite pin) when the key is assigned anything other than exactly once, or
+ * when the value bash produces is not a bare integer - `600#note`, an expansion that resolves to nothing, a shell
+ * that dies or a conf that turns tracing off. And when in doubt this errs RED, never toward binding a number nobody
+ * wrote: that one literal is what stands between a healthy loaded run and an UNKNOWN.
  */
 function readBound(conf: string, name: string): number {
-  // This reads a conf file the way the shell would SOURCE it, because a duplicated or overridden key is what turns
-  // a pin green over the wrong kill window. Three rules, in an order that matters:
-  //
-  //   1. Every assignment of the key counts, whatever its value looks like and whatever shell syntax precedes it.
-  //   2. Anything that MENTIONS the key in live shell text but that this cannot read as an assignment makes the
-  //      whole read NaN - loud - instead of being skipped. This is the rule that stops the shape-by-shape chase:
-  //      vw9 taught it indentation/export/quotes/comments, 2lww terminators, dzjx expansion values, and each time
-  //      the NEXT shape was another finding (3y0o: `then export NAME=600`, where one prefix hid behind the other).
-  //      A guard whose coverage is a list of shapes must fail closed, or the list is the bug.
-  //   3. Only when the key is assigned exactly once AND that value is a literal number does it resolve.
-  //
-  // What this deliberately does NOT do is evaluate the shell: `$((600))`, `${X}`, `$(date +%s)` and `600#note` never
-  // resolve to a number, and a bare `NAME` is not an assignment at all. An unresolvable value reads as NaN so the
-  // caller's Number.isFinite assertion fails loud, never a quiet 1800. Nor can it tell whether a guarded assignment
-  // would ever run - `false || NAME=600`, `if false; then NAME=600; fi`, a pipeline or a backgrounded assignment are
-  // all counted, and those that bash would not apply still make the read loud rather than silently choosing a side.
-  // Every way this can be wrong is toward a red test, which is the only safe direction for the one literal standing
-  // between a healthy loaded run and an UNKNOWN.
-  const prefixes = String.raw`[ \t]*(?:(?:export|readonly|declare|local|typeset|then|else|elif|do|if|while|until|time|!)[ \t]+)*`;
-  const assignments: string[] = [];
-  let unreadable = false;
-  for (const line of conf.split('\n')) {
-    const statement = stripShellComment(line);
-    // Terminators and pipes end a simple command; `then`/`do`/`else` may decorate the assignment that follows, and
-    // several assignments can share one line. Splitting first means the unit is a whole simple command.
-    for (const segment of statement.split(/[|&;]+/)) {
-      const m = new RegExp(`^${prefixes}${name}=(.*)$`).exec(segment);
-      if (m) {
-        assignments.push(m[1]!.trim());
-      } else if (new RegExp(`(^|[^A-Za-z0-9_])${name}=`).test(segment)) {
-        // Live shell text that names the key in a way this cannot read. Counting it would be a guess and skipping it
-        // is how the false greens happened, so fail closed.
-        unreadable = true;
-      }
-    }
+  const dir = mkdtempSync(join(tmpdir(), 'readbound-'));
+  try {
+    const file = join(dir, 'check.conf');
+    const out = join(dir, 'value');
+    writeFileSync(file, conf);
+    // Question 1 and the trace half of question 2, in one source: the value goes to a file only we named (the conf
+    // cannot write it and its own stdout is discarded), so nothing the conf prints can be mistaken for the answer.
+    const sourced = spawnSync(
+      'bash',
+      ['-c', `set -x; . "$1"; set +x; printf '%s' "\${${name}-__unset__}" >"$2"`, 'readbound', file, out],
+      { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
+    );
+    // The readonly-probe half of question 2, in a shell of its own so its deliberate errors cannot disturb the value.
+    // Skipped when the trace already counted a second assignment: the answer is NaN either way, and this is the
+    // common case in this suite, so duplicates cost one spawn instead of two.
+    const traced = countTraceAssignments(sourced.stderr ?? '', name);
+    const probed = traced > 1
+      ? { status: 0, stderr: '' }
+      : spawnSync(
+          'bash',
+          ['-c', `${name}=__readbound; readonly ${name}; set +e; . "$1"`, 'readbound', file],
+          { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
+        );
+    // `status === null` is the bound above killing a conf that blocks: UNKNOWN, so loud rather than a quiet number.
+    if (sourced.status === null || probed.status === null) return NaN;
+    const assignments = Math.max(
+      traced,
+      (probed.stderr ?? '').split(`${name}: readonly variable`).length - 1,
+    );
+    if (assignments !== 1) return NaN;
+    const value = existsSync(out) ? readFileSync(out, 'utf8') : '__unset__';
+    const literal = /^(\d+)$/.exec(value);
+    return literal ? Number(literal[1]) : NaN;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
-  if (unreadable || assignments.length !== 1) return NaN;
-  const literal = /^(["']?)(\d+)\1$/.exec(assignments[0]!);
-  return literal ? Number(literal[2]) : NaN;
 }
 
 /**
- * Drop a shell comment from one line: `#` starts a comment only at the start of a word and outside quotes, so
- * `NAME=600#x` keeps its `#x` (bash stores `600#x` as the value) while `NAME=600  # why` loses the comment.
+ * Count the traced commands that assign `name`, from a `set -x` trace of a sourced conf. Two bash renderings have to
+ * be undone, both of which only ever over-count: PS4 (`+`, `++` when the source nests) is not part of the command,
+ * and `export NAME=600` is traced as TWO commands (the export builtin, then its assignment), so the bare repeat that
+ * follows an export of the same key is dropped. A genuine duplicate on separate lines traces twice with no export
+ * line between them, so it still counts twice - which is what keeps a keep-both-sides conflict loud.
  */
-function stripShellComment(line: string): string {
-  let quote: '"' | "'" | null = null;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (ch === '#' && (i === 0 || /[ \t]/.test(line[i - 1] ?? ''))) {
-      return line.slice(0, i);
+function countTraceAssignments(trace: string, name: string): number {
+  const assigns = new RegExp(`(^|[^A-Za-z0-9_])${name}=`);
+  let count = 0;
+  let afterExport = false; // the previous traced command was `export NAME=...`, whose assignment bash traces again
+  for (const raw of trace.split('\n')) {
+    const line = raw.replace(/^\++[ \t]*/, '').trim();
+    if (line.startsWith(`export ${name}=`) || line.startsWith(`export ${name} =`)) {
+      count += 1;
+      afterExport = true;
+    } else if (assigns.test(line)) {
+      if (!afterExport) count += 1; // the second trace line of an export was already counted above
+      afterExport = false;
+    } else {
+      afterExport = false;
     }
   }
-  return line;
+  return count;
 }
 
 function readLog(fx: ReturnType<typeof fixture>): string[] {
@@ -727,11 +751,27 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     ['a declare duplicate', 'CHECK_TIMEOUT=1800\ndeclare CHECK_TIMEOUT=600\n'],
     ['a readonly duplicate', 'CHECK_TIMEOUT=1800\nreadonly CHECK_TIMEOUT=600\n'],
     ['a negated-command duplicate', 'CHECK_TIMEOUT=1800\n! CHECK_TIMEOUT=600\n'],
+    // agent-do-b29z: the remaining members of that same prefix family, plus one shape NO prefix list can enumerate (a
+    // `case` branch). Each left value below was sourced by bash and printed 600 over the 1800, so every one of them
+    // really moves the gate window; the last two are only readable because rule 2 fails closed on live text it cannot
+    // parse, which is what makes the list stop being the bug. (`local` is not here: bash rejects it outside a
+    // function, so it is not a shape a sourced conf can carry.)
+    ['a typeset duplicate', 'CHECK_TIMEOUT=1800\ntypeset CHECK_TIMEOUT=600\n'],
+    ['an indented declare duplicate', 'CHECK_TIMEOUT=1800\n   declare  CHECK_TIMEOUT=600\n'],
+    ['an elif-declare duplicate', 'CHECK_TIMEOUT=1800\nif false; then :; elif true; then declare CHECK_TIMEOUT=600; fi\n'],
+    ['a case-branch duplicate', 'CHECK_TIMEOUT=1800\ncase x in x) CHECK_TIMEOUT=600;; esac\n'],
     // Counted although this loop never runs, so bash would keep 1800: the guard does not model control flow, and
     // the count is the conservative reading (`while false; do NAME=600; done` alone leaves bash with no value).
-    ['a while-do duplicate', 'CHECK_TIMEOUT=1800\nwhile false; do CHECK_TIMEOUT=600; done\n'],
-    // Rule 2: a live mention the scanner cannot read is loud, not skipped. This is the closing move on the shape
-    // chase - a shape nobody thought of fails the pin instead of greening it.
+    // agent-do-3au6: the three shapes that ended the shape chase. Each one sets the key a second time without ever
+    // writing `NAME=` as shell TEXT, so a reader that looks for that text (or for a prefix in front of it) cannot
+    // count them at all - `printf -v` names the key as an argument, `read` fills it, and `eval` assembles the
+    // assignment from a string. bash counts every one of them, so the pin stays loud.
+    ['a printf-v duplicate', 'CHECK_TIMEOUT=1800\nprintf -v CHECK_TIMEOUT %s 600\n'],
+    ['a read-builtin duplicate', 'CHECK_TIMEOUT=1800\nread CHECK_TIMEOUT <<< 600\n'],
+    ['an eval-assembled duplicate', 'CHECK_TIMEOUT=1800\nX=CHECK; eval "${X}_TIMEOUT=600"\n'],
+    // A live mention that is NOT an assignment is still loud when a real assignment sits beside it: bash traces the
+    // echo as a command naming the key, so the count is two and the reader refuses to choose. (The old rule-2 note
+    // claimed this for every unreadable mention; what it actually rests on is the count, which is the honest claim.)
     ['an unreadable live mention', 'CHECK_TIMEOUT=1800\necho CHECK_TIMEOUT=600\n'],
   ];
 
@@ -757,6 +797,15 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
       // 600 and nothing else assigns the key, so a red here would be a false alarm.
       'if true; then CHECK_TIMEOUT=600; fi\n',
       'false || CHECK_TIMEOUT=600\n',
+      // agent-do-b29z: a declare/typeset prefix is one assignment, like `export`, so the hardening above must not
+      // turn the prefixes the fix added into a false red on a conf that legitimately uses them.
+      'declare CHECK_TIMEOUT=600\n',
+      'typeset CHECK_TIMEOUT=600\n',
+      // agent-do-3au6: and the shapes bash renders in its own way. `export NAME=600` is traced as two commands (the
+      // builtin and its assignment), which is the one place the trace over-counts - so a lone export must stay
+      // readable, and an indirect assignment with no duplicate must too.
+      'export CHECK_TIMEOUT=600\n',
+      'printf -v CHECK_TIMEOUT %s 600\n',
     ]) {
       expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
     }
@@ -775,14 +824,21 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
   });
 
   it('never resolves a value it cannot read, and never lets a second assignment pass (documented contract)', () => {
-    // `NAME=600#note` is a string in bash; expansions are not evaluated at all. Neither resolves to a number, so
-    // the caller's Number.isFinite pin goes red instead of binding a number nobody wrote.
+    // `NAME=600#note` is a string in bash, so it is not a bound; an expansion that resolves to nothing is not one
+    // either. Both go NaN, so the caller's Number.isFinite pin goes red instead of binding a number nobody wrote.
     expect(Number.isFinite(readBound('CHECK_TIMEOUT=600#note\n', 'CHECK_TIMEOUT'))).toBe(false);
-    expect(Number.isFinite(readBound('CHECK_TIMEOUT=$((600))\n', 'CHECK_TIMEOUT'))).toBe(false);
-    // And an unreadable assignment is still counted as an assignment: with a literal alongside it the key is set
+    expect(Number.isFinite(readBound('CHECK_TIMEOUT=${WINDOW}\n', 'CHECK_TIMEOUT'))).toBe(false);
+    // An expansion that DOES resolve is read, because bash resolves it (agent-do-3au6): `$((30 * 60))` is 1800 in
+    // the shell the gate sources this file with, so returning NaN here was a false red on a legitimate conf. The
+    // number is no longer guessed from the text - it is what the shell computes.
+    expect(readBound('CHECK_TIMEOUT=$((30 * 60))\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // ...and an unreadable assignment is still counted as an assignment: with a literal alongside it the key is set
     // twice, so this is NaN rather than the literal 1800. Before agent-do-dzjx this line returned 1800 - which is
     // exactly the false green, because bash runs the expansion last.
     expect(Number.isFinite(readBound('CHECK_TIMEOUT=$((600))\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT'))).toBe(false);
+    // Control flow is not modelled by hand either, because bash is the oracle: an assignment in a branch that never
+    // runs is not an assignment, so this reads the 1800 the shell keeps rather than a conflict that does not exist.
+    expect(readBound('CHECK_TIMEOUT=1800\nwhile false; do CHECK_TIMEOUT=600; done\n', 'CHECK_TIMEOUT')).toBe(1800);
   });
 
   it('still finds exactly one of each key in the conf files this repo actually ships', () => {
