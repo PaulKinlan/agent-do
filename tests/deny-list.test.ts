@@ -52,14 +52,26 @@ describe('createDenyGuard', () => {
     // self-granted persistence — workflows run with repo secrets, editor tasks
     // and devcontainer lifecycle commands run on the next build, agent hooks and
     // MCP server definitions launch arbitrary commands. Write-only: reads stay open.
+    // agent-do-uush/nc7i: every pattern is depth-independent (monorepo subfolders
+    // are live surfaces when opened in the corresponding host), and the devcontainer
+    // spec's single-file form is covered beside the directory form.
     it('blocks writes to execution-surface config (agent-do-x6v6)', async () => {
       expect((await g().checkWrite('.github/workflows/ci.yml')).blocked).toBe(true);
       expect((await g().checkWrite('.vscode/tasks.json')).blocked).toBe(true);
       expect((await g().checkWrite('.devcontainer/devcontainer.json')).blocked).toBe(true);
+      expect((await g().checkWrite('.devcontainer.json')).blocked).toBe(true);
       expect((await g().checkWrite('.claude/settings.json')).blocked).toBe(true);
       expect((await g().checkWrite('.cursor/mcp.json')).blocked).toBe(true);
       expect((await g().checkWrite('.mcp.json')).blocked).toBe(true);
-      // gitignore semantics: a bare filename pattern matches at any depth.
+    });
+
+    it('blocks execution-surface writes at ANY depth (agent-do-uush, agent-do-nc7i)', async () => {
+      expect((await g().checkWrite('packages/web/.vscode/tasks.json')).blocked).toBe(true);
+      expect((await g().checkWrite('services/api/.github/workflows/ci.yml')).blocked).toBe(true);
+      expect((await g().checkWrite('services/api/.devcontainer/devcontainer.json')).blocked).toBe(true);
+      expect((await g().checkWrite('packages/web/.devcontainer.json')).blocked).toBe(true);
+      expect((await g().checkWrite('apps/desktop/.claude/settings.json')).blocked).toBe(true);
+      expect((await g().checkWrite('apps/desktop/.cursor/settings.json')).blocked).toBe(true);
       expect((await g().checkWrite('services/api/.mcp.json')).blocked).toBe(true);
     });
 
@@ -67,6 +79,8 @@ describe('createDenyGuard', () => {
       expect((await g().checkRead('.github/workflows/ci.yml')).blocked).toBe(false);
       expect((await g().checkRead('.vscode/tasks.json')).blocked).toBe(false);
       expect((await g().checkRead('.devcontainer/devcontainer.json')).blocked).toBe(false);
+      expect((await g().checkRead('.devcontainer.json')).blocked).toBe(false);
+      expect((await g().checkRead('packages/web/.vscode/tasks.json')).blocked).toBe(false);
       expect((await g().checkRead('.mcp.json')).blocked).toBe(false);
     });
 
