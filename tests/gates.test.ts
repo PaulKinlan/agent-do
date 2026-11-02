@@ -334,18 +334,52 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  * resolved — loud red via the caller's Number.isFinite assertion — instead of a false green.
  */
 function readBound(conf: string, name: string): number {
-  // The shapes matter: bash sources this file, and it honours a leading space or tab, an `export` prefix,
-  // quotes around the value, and a trailing `# comment` (all verified against bash, agent-do-vw9). A regex
-  // anchored at `^NAME=` therefore matched NONE of those, so a duplicated key written that way left exactly
-  // one match, the exactly-once rule said "fine", and the caller's pin stayed green while the gate sourced
-  // the other value - the same false green agent-do-0yl closed for the verbatim keep-both-sides case.
-  // `600#note` is deliberately NOT matched: bash reads that as the literal string `600#note`, which is not a
-  // number at all, so it is a broken assignment rather than a duplicate this guard should absorb.
-  const matches = conf.matchAll(
-    new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}=(["']?)(\\d+)\\1[ \\t]*(?:#.*)?$`, 'gm'),
-  );
-  const values = [...matches].map((m) => Number(m[2]));
+  // This reads a conf file the way the shell would SOURCE it, because that is what turns a duplicated key into a
+  // wrong kill window. The shapes it understands are the ones a keep-both-sides conflict resolution and a hand
+  // edit actually produce: a literal value, indentation, an `export` prefix, single or double quotes, a `#`
+  // comment, and shell command terminators - which is why this is not one anchored regex any more (agent-do-vw9
+  // added indentation/export/quotes/comments; agent-do-2lww added `;`, `&&` and `&`, including two assignments
+  // on one line). Each of those shapes was sourced through bash and printed 600, so treating a terminator as
+  // part of the value is what made the pin green over a key bash had really changed. One nuance this cannot
+  // model: `NAME=600&` backgrounds the assignment, so the parent shell keeps nothing from it - readBound still
+  // counts it, which errs toward RED (a file that declares the bound is reported, not silently ignored).
+  // Two acknowledgements, because the exactly-once rule is only as good as what it can see:
+  //   - `NAME=600#note` is NOT an assignment of 600: bash stores the literal string `600#note`, which is not a
+  //     number, so it stays unread (caller's Number.isFinite goes red) rather than being quietly accepted.
+  //   - The shell's own grammar is out of scope deliberately: `NAME=$((600))`, `NAME=${X}`, `NAME=$(...)` and a
+  //     bare `NAME` are not evaluated here. They read as absent, which fails the caller's pin LOUD, and they are
+  //     not shapes a merge conflict invents. If the conf ever needs them, this must grow a real shell evaluation
+  //     instead of another special case.
+  const values: number[] = [];
+  for (const line of conf.split('\n')) {
+    const statement = stripShellComment(line);
+    // `;`, `&&` and `&` all end a simple command, so a second assignment can hide after any of them on the same
+    // line; splitting first means each segment is matched as a whole assignment or not at all.
+    for (const segment of statement.split(/[;&]+/)) {
+      const m = new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}=(["']?)(\\d+)\\1[ \\t]*$`).exec(segment);
+      if (m) values.push(Number(m[2]));
+    }
+  }
   return values.length === 1 ? values[0] : NaN;
+}
+
+/**
+ * Drop a shell comment from one line: `#` starts a comment only at the start of a word and outside quotes, so
+ * `NAME=600#x` keeps its `#x` (bash stores `600#x` as the value) while `NAME=600  # why` loses the comment.
+ */
+function stripShellComment(line: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '#' && (i === 0 || /[ \t]/.test(line[i - 1] ?? ''))) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
 }
 
 function readLog(fx: ReturnType<typeof fixture>): string[] {
@@ -652,6 +686,15 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     ['a second assignment with a trailing comment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600  # keep both sides\n'],
     ['a second assignment carrying a conflict marker', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600 # >>>>>>> fleet/imp-1\n'],
     ['the duplicate written first and the plain one last', '  export CHECK_TIMEOUT=1800\nCHECK_TIMEOUT=600\n'],
+    // agent-do-2lww: a command terminator is not part of the value, so `NAME=600;` is an assignment of 600.
+    ['a semicolon-terminated second assignment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600;\n'],
+    ['a semicolon-terminated second assignment with a comment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600;  # keep both sides\n'],
+    ['two assignments on one command line', 'CHECK_TIMEOUT=600;CHECK_TIMEOUT=600\n'],
+    ['a semicolon-joined export duplicate', 'CHECK_TIMEOUT=600; export CHECK_TIMEOUT=600\n'],
+    ['duplicates joined with &&', 'CHECK_TIMEOUT=600&&CHECK_TIMEOUT=600\n'],
+    // A backgrounded first assignment (`&`) does not survive into the parent shell, so bash keeps only the
+    // second here; counting both errs on the loud side, which is the right direction for a guard.
+    ['duplicates joined with a background &', 'CHECK_TIMEOUT=600&CHECK_TIMEOUT=600\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
@@ -668,6 +711,10 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
       'export CHECK_TIMEOUT=600\n',
       'CHECK_TIMEOUT="600"\n',
       'CHECK_TIMEOUT=600  # measured 2026-10-22\n',
+      'CHECK_TIMEOUT=600;\n',
+      'CHECK_TIMEOUT=600;  # a terminator and a note\n',
+      'export CHECK_TIMEOUT=600;\n',
+      '  CHECK_TIMEOUT="600";  # quoted, terminated, annotated\n',
     ]) {
       expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
     }
@@ -677,6 +724,18 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     expect(readBound('# CHECK_TIMEOUT=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
     expect(readBound('CHECK_FAST_TIMEOUT=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
     expect(readBound('CHECK_TIMEOUT_SUFFIX=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // A commented-out override is not an assignment, even when it carries a terminator of its own.
+    expect(readBound('CHECK_TIMEOUT=1800\n# CHECK_TIMEOUT=600; CHECK_TIMEOUT=700\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // ...nor is the key mentioned inside a quoted string on a command line.
+    expect(readBound('echo "CHECK_TIMEOUT=600"\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+  });
+
+  it('does not evaluate shell syntax, and fails loud rather than guessing (documented contract)', () => {
+    // `NAME=600#note` is a string in bash, and expansions are not evaluated at all; both read as absent, and an
+    // absent value is NOT finite, so the caller's pin goes red instead of binding a number nobody wrote.
+    expect(Number.isFinite(readBound('CHECK_TIMEOUT=600#note\n', 'CHECK_TIMEOUT'))).toBe(false);
+    expect(Number.isFinite(readBound('CHECK_TIMEOUT=$((600))\n', 'CHECK_TIMEOUT'))).toBe(false);
+    expect(readBound('CHECK_TIMEOUT=$((600))\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
   });
 
   it('still finds exactly one of each key in the conf files this repo actually ships', () => {
