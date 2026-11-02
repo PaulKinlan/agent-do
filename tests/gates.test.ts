@@ -334,33 +334,38 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  * resolved — loud red via the caller's Number.isFinite assertion — instead of a false green.
  */
 function readBound(conf: string, name: string): number {
-  // This reads a conf file the way the shell would SOURCE it, because that is what turns a duplicated key into a
-  // wrong kill window. The shapes it understands are the ones a keep-both-sides conflict resolution and a hand
-  // edit actually produce: a literal value, indentation, an `export` prefix, single or double quotes, a `#`
-  // comment, and shell command terminators - which is why this is not one anchored regex any more (agent-do-vw9
-  // added indentation/export/quotes/comments; agent-do-2lww added `;`, `&&` and `&`, including two assignments
-  // on one line). Each of those shapes was sourced through bash and printed 600, so treating a terminator as
-  // part of the value is what made the pin green over a key bash had really changed. One nuance this cannot
-  // model: `NAME=600&` backgrounds the assignment, so the parent shell keeps nothing from it - readBound still
-  // counts it, which errs toward RED (a file that declares the bound is reported, not silently ignored).
-  // Two acknowledgements, because the exactly-once rule is only as good as what it can see:
-  //   - `NAME=600#note` is NOT an assignment of 600: bash stores the literal string `600#note`, which is not a
-  //     number, so it stays unread (caller's Number.isFinite goes red) rather than being quietly accepted.
-  //   - The shell's own grammar is out of scope deliberately: `NAME=$((600))`, `NAME=${X}`, `NAME=$(...)` and a
-  //     bare `NAME` are not evaluated here. They read as absent, which fails the caller's pin LOUD, and they are
-  //     not shapes a merge conflict invents. If the conf ever needs them, this must grow a real shell evaluation
-  //     instead of another special case.
-  const values: number[] = [];
+  // This reads a conf file the way the shell would SOURCE it, because a duplicated or overridden key is what turns
+  // a pin green over the wrong kill window. Two rules, and the ORDER matters:
+  //
+  //   1. Count every assignment of the key, whatever the value looks like. Indentation, an `export` prefix, quotes,
+  //      a `#` comment, the simple-command terminators `;`, `&&`, `||`, `|` and `&`, and a keyword prefix
+  //      (`then`/`else`/`do`) are all things bash accepts, and each was sourced through bash and printed the
+  //      assignment's value before it was handled here (agent-do-vw9, agent-do-2lww, agent-do-dzjx).
+  //   2. Only if the key is assigned exactly ONCE, read its value - and only if that value is a literal number.
+  //
+  // Rule 1 has to come first, and that is what agent-do-dzjx fixed: when the count only included LITERAL values, a
+  // file reading `CHECK_TIMEOUT=1800` followed by `CHECK_TIMEOUT=$((600))` counted once, so the pin bound 1800
+  // while bash ran 600. Counting assignments instead means the duplicate is seen whatever it is written as.
+  //
+  // What this deliberately does NOT do is evaluate the shell. `$((600))`, `${X}`, `$(date +%s)` and `600#note` are
+  // never resolved to a number, and a bare `NAME` is not an assignment at all. An unresolvable value therefore
+  // reads as NaN and the caller's Number.isFinite assertion fails LOUD - never a quiet 1800. Nor can it tell
+  // whether a guarded assignment would actually run: `false || NAME=600` is counted, so a second assignment is
+  // always a conflict rather than a maybe. Both choices err toward a red test, which is the only safe direction
+  // for a guard whose whole job is to be the one thing standing between a healthy loaded run and an UNKNOWN.
+  const assignments: string[] = [];
   for (const line of conf.split('\n')) {
     const statement = stripShellComment(line);
-    // `;`, `&&` and `&` all end a simple command, so a second assignment can hide after any of them on the same
-    // line; splitting first means each segment is matched as a whole assignment or not at all.
-    for (const segment of statement.split(/[;&]+/)) {
-      const m = new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}=(["']?)(\\d+)\\1[ \\t]*$`).exec(segment);
-      if (m) values.push(Number(m[2]));
+    // Terminators and pipes end a simple command, and `then`/`else`/`do` may sit in front of the assignment in the
+    // segment that follows, so a second assignment cannot hide behind any of them on the same line.
+    for (const segment of statement.split(/[|&;]+/)) {
+      const m = new RegExp(`^[ \\t]*(?:(?:export|then|else|do)[ \\t]+)?${name}=(.*)$`).exec(segment);
+      if (m) assignments.push(m[1]!.trim());
     }
   }
-  return values.length === 1 ? values[0] : NaN;
+  if (assignments.length !== 1) return NaN; // zero assignments, or more than one: never resolve a conflict silently
+  const literal = /^(["']?)(\d+)\1$/.exec(assignments[0]!);
+  return literal ? Number(literal[2]) : NaN; // an expansion, substitution or stray text is not a number we may bind
 }
 
 /**
@@ -669,12 +674,13 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
   }, 60_000);
 });
 
-describe('readBound — a duplicated bound cannot hide behind a shape bash honours (agent-do-vw9)', { timeout: 120_000 }, () => {
+describe('readBound — a duplicated bound cannot hide behind a shape bash honours (agent-do-vw9, agent-do-dzjx)', { timeout: 120_000 }, () => {
   // Every LEFT value below is a file bash would source successfully: each of these assignment shapes was run
-  // through `bash -c 'source ./c.conf; echo $CHECK_TIMEOUT'` and printed 600, i.e. a keep-both-sides
-  // resolution that produced one of them would really change the gate's window while the pin above stayed
-  // green. The guard's contract is "exactly one assignment", so each of these must read as NaN (duplicated)
-  // rather than as a value.
+  // through `bash -c 'source ./c.conf; echo $CHECK_TIMEOUT'` and printed the assigned value, i.e. a keep-both-sides
+  // resolution or a stray edit that produced one of them would really change the gate's window while the pin above
+  // stayed green. The guard's contract is "exactly one ASSIGNMENT", so each of these must read as NaN (duplicated)
+  // rather than as a value - including the ones whose value is an expansion, where there is nothing to read but
+  // the fact that the key is set twice.
   const duplicated: [string, string][] = [
     ['a verbatim second assignment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600\n'],
     ['a space-indented second assignment', 'CHECK_TIMEOUT=600\n  CHECK_TIMEOUT=600\n'],
@@ -695,6 +701,18 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // A backgrounded first assignment (`&`) does not survive into the parent shell, so bash keeps only the
     // second here; counting both errs on the loud side, which is the right direction for a guard.
     ['duplicates joined with a background &', 'CHECK_TIMEOUT=600&CHECK_TIMEOUT=600\n'],
+    // agent-do-dzjx: the count is of ASSIGNMENTS, not of readable numbers. An expansion is still an assignment, and
+    // bash runs it, so a literal followed by one of these is a duplicated key that used to count once and bind the
+    // literal while the shell used the other value.
+    ['an arithmetic expansion duplicate', 'CHECK_TIMEOUT=1800\nCHECK_TIMEOUT=$((600))\n'],
+    ['a parameter expansion duplicate', 'CHECK_TIMEOUT=1800\nCHECK_TIMEOUT=${WINDOW}\n'],
+    ['a command substitution duplicate', 'CHECK_TIMEOUT=1800\nCHECK_TIMEOUT=$(date +%s)\n'],
+    ['an expansion duplicate on the same line', 'CHECK_TIMEOUT=1800; CHECK_TIMEOUT=$((600))\n'],
+    ['a guard-shortcircuit duplicate', 'CHECK_TIMEOUT=1800\nfalse || CHECK_TIMEOUT=600\n'],
+    ['an if-guarded duplicate', 'CHECK_TIMEOUT=1800\nif true; then CHECK_TIMEOUT=600; fi\n'],
+    // A pipeline runs each side in a subshell, so bash leaves the parent's value UNSET here and only the count
+    // (two assignments seen) is what fires; like the `&` case above this errs toward a red, never a quiet bind.
+    ['a pipe-separated duplicate', 'CHECK_TIMEOUT=1800 | CHECK_TIMEOUT=600\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
@@ -715,6 +733,10 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
       'CHECK_TIMEOUT=600;  # a terminator and a note\n',
       'export CHECK_TIMEOUT=600;\n',
       '  CHECK_TIMEOUT="600";  # quoted, terminated, annotated\n',
+      // One assignment is one assignment, however it is reachable: these are all files where bash ends up with
+      // 600 and nothing else assigns the key, so a red here would be a false alarm.
+      'if true; then CHECK_TIMEOUT=600; fi\n',
+      'false || CHECK_TIMEOUT=600\n',
     ]) {
       expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
     }
@@ -730,12 +752,15 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     expect(readBound('echo "CHECK_TIMEOUT=600"\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
   });
 
-  it('does not evaluate shell syntax, and fails loud rather than guessing (documented contract)', () => {
-    // `NAME=600#note` is a string in bash, and expansions are not evaluated at all; both read as absent, and an
-    // absent value is NOT finite, so the caller's pin goes red instead of binding a number nobody wrote.
+  it('never resolves a value it cannot read, and never lets a second assignment pass (documented contract)', () => {
+    // `NAME=600#note` is a string in bash; expansions are not evaluated at all. Neither resolves to a number, so
+    // the caller's Number.isFinite pin goes red instead of binding a number nobody wrote.
     expect(Number.isFinite(readBound('CHECK_TIMEOUT=600#note\n', 'CHECK_TIMEOUT'))).toBe(false);
     expect(Number.isFinite(readBound('CHECK_TIMEOUT=$((600))\n', 'CHECK_TIMEOUT'))).toBe(false);
-    expect(readBound('CHECK_TIMEOUT=$((600))\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // And an unreadable assignment is still counted as an assignment: with a literal alongside it the key is set
+    // twice, so this is NaN rather than the literal 1800. Before agent-do-dzjx this line returned 1800 - which is
+    // exactly the false green, because bash runs the expansion last.
+    expect(Number.isFinite(readBound('CHECK_TIMEOUT=$((600))\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT'))).toBe(false);
   });
 
   it('still finds exactly one of each key in the conf files this repo actually ships', () => {
