@@ -203,6 +203,21 @@ gate holds its heavy slot for up to 20 min instead of 10, still well inside the 
 remains a kill window and not a budget — 600 s of wall is still the target, and the levers below are how to
 reach it.
 
+**Per-test timeouts: 30 s globally, decided 2026-11-02 (agent-do-tnnc).** Vitest's 5 s per-test default is the
+same lottery one level down, and it false-failed three merger full gates under contention while every test
+involved passes serially on an idle lane: `provider-tool-loop` on merged tree b9c2094, then `loop`
+("max iterations") and `resolve-model` ("ollama" — which pays a dynamic `import('@ai-sdk/openai')` inside the
+test body, 3.1 s on a merely-loaded lane) on 6e506fc. The reviewer of those fixes counted **eight more
+pipeline files** (ten total) driving `runAgentLoop`/`streamText` with no timeout declaration, and measured
+"basic run" in `tests/loop.test.ts` at 4 201 ms on a loaded lane — under the old cliff. Per-file bumps
+(c26/512/7ja, then yuc's three) were whack-a-mole, so the default is now set once: `testTimeout: 30_000` in
+`vitest.config.ts`, the same number every explicit bump had already converged on (6–8× the worst loaded
+observation). Per-test timeouts bind only failures, so green runs pay nothing; a genuinely wedged test now
+reports at 30 s instead of 5 s, still an order of magnitude under the derived batch bound. Explicit per-file
+`{ timeout: ... }` declarations (gates 60–180 s, build-script, cost-runaway, ...) override the global and
+stay. `vitest.config.ts` is deliberately unmapped in `tools/suite-map.tsv`, so this change gated through the
+full tier, not the fast gate (§5).
+
 Loosening a bound is not a budget fix. The ordering that would get this repo back inside R2 is: (1) a shared
 module graph for suites that are shown not to leak state (`--no-isolate`, measured 115 s), or (2) fewer
 suites reaching the central surfaces (R6/R7), or (3) a smaller static step. Until one of those lands, the
