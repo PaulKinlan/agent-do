@@ -79,6 +79,20 @@ export interface ParsedArgs {
    */
   acceptAll: boolean;
   /**
+   * Accept instructions from a file whose content this machine has not recorded as trusted (agent-do-5re,
+   * agent-do-e29).
+   *
+   * Two surfaces promote file text to the system tier: a saved agent config (found by walking up from cwd, so it
+   * may belong to a cloned repository rather than to the operator — `create` records what it writes) and a
+   * shellm file's `system:` frontmatter. Anything else is refused until the operator says otherwise here, which
+   * records the content's hash so later runs are silent.
+   *
+   * Deliberately NOT implied by `-y`/`--yes`: that flag means "do not prompt me", which is a statement about
+   * interactivity, not about whose instructions the operator is willing to adopt. Running a hostile config on
+   * purpose is a decision worth typing.
+   */
+  trustAgentConfig: boolean;
+  /**
    * Comma-separated list of tool names that bypass the confirmation
    * prompt (e.g. `--allow write_file,memory_write`). Useful for
    * semi-automated sessions where some destructive tools are expected.
@@ -150,6 +164,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     script: false,
     yes: false,
     acceptAll: false,
+    trustAgentConfig: false,
     allow: [],
     providerTool: [],
     logLevel: 'info',
@@ -273,6 +288,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
     } else if (arg === '--script') {
       args.script = true;
+    } else if (arg === '--trust-agent-config') {
+      args.trustAgentConfig = true;
     } else if (arg === '--accept-all') {
       args.acceptAll = true;
     } else if (arg === '-y' || arg === '--yes') {

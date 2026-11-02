@@ -25,6 +25,7 @@ import { tryParseShellm } from './shellm.js';
 import type { ProgressEvent, ConversationMessage } from '../types.js';
 import type { ToolSet } from 'ai';
 import { writeAnswerChunk } from './answer-stream.js';
+import { requireShellmTrust } from './agent-trust.js';
 
 export async function runPromptMode(args: ParsedArgs): Promise<void> {
   // Emit the sandbox warning first — before model init or stdin reads —
@@ -54,9 +55,19 @@ export async function runPromptMode(args: ParsedArgs): Promise<void> {
       // --no-tools still apply because they don't have frontmatter twins.
       if (shellm.config.provider) args.provider = shellm.config.provider;
       if (shellm.config.model) args.model = shellm.config.model;
-      if (shellm.config.system) args.systemPrompt = shellm.config.system;
+      if (shellm.config.system) {
+        // A `system:` key in the file REPLACES the run's system prompt, which is the same promotion a saved
+        // agent config gets and the same reason to gate it (agent-do-e29): the file can arrive with a cloned
+        // repository. The prompt BODY is not gated — that is the task, not instructions.
+        await requireShellmTrust(shellm.filePath, shellm.sha256, {
+          accept: args.trustAgentConfig,
+        });
+        args.systemPrompt = shellm.config.system;
+      }
       // `agent:` is parsed but not yet wired (saved-agent loading is a
-      // follow-up); a future version will load the named agent here.
+      // follow-up); when it is wired it must go through
+      // requireSavedAgentTrust — loading a named agent here would otherwise
+      // re-open exactly the hole agent-do-5re closed.
     }
   }
 

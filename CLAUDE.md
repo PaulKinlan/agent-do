@@ -70,6 +70,7 @@ src/
     shellm.ts         — prompt files as executable scripts (#16)
     scheduled-tasks-cmd.ts — `agent-do scheduled-tasks` (#79)
     agents.ts         — create / list / load saved agent configs
+    agent-trust.ts    — saved-agent provenance: content-hash trust store (agent-do-5re)
     resolve-model.ts  — dynamic provider/model resolution + DEFAULT_MODELS
     provider-tools.ts — `--provider-tool` registry (provider-native tools)
     permission-handler.ts — interactive permission prompts (#17)
