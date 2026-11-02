@@ -326,6 +326,28 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
   return { status: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
+/**
+ * Read a `NAME=<number>` bound out of a conf file with bash-sourcing semantics (agent-do-0yl):
+ * the LAST assignment wins when the shell sources the file, so a first-match regex parse pins the
+ * wrong value after a keep-both-sides conflict resolution leaves two assignments in the file (the
+ * fleet's rule for check.conf conflicts). A duplicated key is therefore reported (NaN) rather than
+ * resolved — loud red via the caller's Number.isFinite assertion — instead of a false green.
+ */
+function readBound(conf: string, name: string): number {
+  // The shapes matter: bash sources this file, and it honours a leading space or tab, an `export` prefix,
+  // quotes around the value, and a trailing `# comment` (all verified against bash, agent-do-vw9). A regex
+  // anchored at `^NAME=` therefore matched NONE of those, so a duplicated key written that way left exactly
+  // one match, the exactly-once rule said "fine", and the caller's pin stayed green while the gate sourced
+  // the other value - the same false green agent-do-0yl closed for the verbatim keep-both-sides case.
+  // `600#note` is deliberately NOT matched: bash reads that as the literal string `600#note`, which is not a
+  // number at all, so it is a broken assignment rather than a duplicate this guard should absorb.
+  const matches = conf.matchAll(
+    new RegExp(`^[ \\t]*(?:export[ \\t]+)?${name}=(["']?)(\\d+)\\1[ \\t]*(?:#.*)?$`, 'gm'),
+  );
+  const values = [...matches].map((m) => Number(m[2]));
+  return values.length === 1 ? values[0] : NaN;
+}
+
 function readLog(fx: ReturnType<typeof fixture>): string[] {
   return existsSync(fx.log) ? readFileSync(fx.log, 'utf8').split('\n').filter(Boolean) : [];
 }
@@ -554,10 +576,10 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     const gate = readFileSync(join(REPO, 'tools', 'fast-gate.sh'), 'utf8');
     const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
     const gconf = readFileSync(join(REPO, 'tools', 'gate.conf'), 'utf8');
-    const outer = Number(/^CHECK_FAST_TIMEOUT=(\d+)/m.exec(conf)?.[1]);
-    const declared = Number(/^FAST_OUTER_WINDOW=(\d+)$/m.exec(gconf)?.[1]);
-    expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must be a literal number in tools/check.conf').toBe(true);
-    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr)').toBe(outer);
+    const outer = readBound(conf, 'CHECK_FAST_TIMEOUT');
+    const declared = readBound(gconf, 'FAST_OUTER_WINDOW');
+    expect(Number.isFinite(outer), 'CHECK_FAST_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST, agent-do-0yl)').toBe(true);
+    expect(declared, 'FAST_OUTER_WINDOW in tools/gate.conf must appear exactly once and mirror CHECK_FAST_TIMEOUT (fleet-check does not export it; agent-do-gmr; last-wins/once: agent-do-0yl)').toBe(outer);
     const cmd = /^CHECK_FAST_CMD='([^']*)'$/m.exec(conf)?.[1];
     expect(cmd, "CHECK_FAST_CMD must stay the bare bash form so fleet-check's missing-target preflight sees the gate path (agent-do-a2t)").toBe('bash tools/fast-gate.sh');
     expect(gate, 'the batch bound must be derived from the MEASURED static step (agent-do-gmr)').toMatch(/SUITE_BOUND=\$\(\( FAST_OUTER_WINDOW - static_secs - _margin \)\)/);
@@ -566,6 +588,29 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     // 15 s is the SIGKILL grace the runner is given (`timeout -k 15`): even the fallback must be able to
     // fire, escalate, and still leave the gate time to name the suite before the outer window ends.
     expect(fallback + 15).toBeLessThan(outer);
+  });
+
+  it('pins the FULL gate window at or above 2x the worst healthy full-gate measurement (agent-do-yuc)', () => {
+    // Nothing else in tests/ reads CHECK_TIMEOUT: the full gate has no inner window of its own, so this one
+    // literal is all that stands between a healthy loaded run and an UNKNOWN. It has gone silently wrong
+    // twice (agent-do-v3m: 600 s against a 563 s worst healthy row — 94% of the window — and it fired twice
+    // on one tree; agent-do-ewz: the installed conf sat at 600 s while the repo said 1200 s). A floor makes
+    // lowering it a red test that names the measurement instead of a load-dependent kill. When the speed.md
+    // §4 lever lands and the full gate gets genuinely faster, lower this floor AND tools/check.conf together
+    // (speed.md R4: re-measure and tighten).
+    const conf = readFileSync(join(REPO, 'tools', 'check.conf'), 'utf8');
+    const full = readBound(conf, 'CHECK_TIMEOUT');
+    expect(Number.isFinite(full), 'CHECK_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST assignment while a first-match parse pins the first — agent-do-0yl)').toBe(true);
+    // 563 s = the worst healthy full-gate observation recorded in docs/speed.md §4 and tools/check.conf's
+    // prose (measured 2026-10-22); the 2× ratio is the v3m precedent ("2x the window that fired").
+    expect(
+      full,
+      'CHECK_TIMEOUT must stay >= 2x the worst healthy full-gate row (563 s) — at 94% of the window (v3m) it fired twice on healthy runs; if the §4 lever made the full gate faster, lower this floor and the conf together (speed.md R4)',
+    ).toBeGreaterThanOrEqual(1126);
+    // The full tier runs a strict superset of the fast tier (R2), so its kill window cannot be smaller.
+    const fast = readBound(conf, 'CHECK_FAST_TIMEOUT');
+    expect(Number.isFinite(fast), 'CHECK_FAST_TIMEOUT must appear exactly once as a literal number in tools/check.conf (a duplicated key is a keep-both-sides conflict: bash runs the LAST, agent-do-0yl)').toBe(true);
+    expect(full, 'the full gate\'s kill window must not be smaller than the fast tier\'s (R2: fast is a strict subset of full)').toBeGreaterThanOrEqual(fast);
   });
 
   it('derives the batch bound at runtime: outer window minus measured static minus margin (agent-do-gmr)', () => {
@@ -588,6 +633,62 @@ describe('tools/fast-gate.sh — kill windows', { timeout: 120_000 }, () => {
     expect(r.status, 'a batch-bound kill exits with the kill code, recorded KILLED (agent-do-c45)').toBe(124);
     expect(out, 'a report-less kill must not name suites as failed').not.toMatch(/^fast-gate: failed:/m);
   }, 60_000);
+});
+
+describe('readBound — a duplicated bound cannot hide behind a shape bash honours (agent-do-vw9)', { timeout: 120_000 }, () => {
+  // Every LEFT value below is a file bash would source successfully: each of these assignment shapes was run
+  // through `bash -c 'source ./c.conf; echo $CHECK_TIMEOUT'` and printed 600, i.e. a keep-both-sides
+  // resolution that produced one of them would really change the gate's window while the pin above stayed
+  // green. The guard's contract is "exactly one assignment", so each of these must read as NaN (duplicated)
+  // rather than as a value.
+  const duplicated: [string, string][] = [
+    ['a verbatim second assignment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600\n'],
+    ['a space-indented second assignment', 'CHECK_TIMEOUT=600\n  CHECK_TIMEOUT=600\n'],
+    ['a tab-indented second assignment', 'CHECK_TIMEOUT=600\n\tCHECK_TIMEOUT=600\n'],
+    ['an export-prefixed second assignment', 'CHECK_TIMEOUT=600\nexport CHECK_TIMEOUT=600\n'],
+    ['an indented export-prefixed second assignment', 'CHECK_TIMEOUT=600\n  export   CHECK_TIMEOUT=600\n'],
+    ['a double-quoted second assignment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT="600"\n'],
+    ['a single-quoted second assignment', "CHECK_TIMEOUT=600\nCHECK_TIMEOUT='600'\n"],
+    ['a second assignment with a trailing comment', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600  # keep both sides\n'],
+    ['a second assignment carrying a conflict marker', 'CHECK_TIMEOUT=600\nCHECK_TIMEOUT=600 # >>>>>>> fleet/imp-1\n'],
+    ['the duplicate written first and the plain one last', '  export CHECK_TIMEOUT=1800\nCHECK_TIMEOUT=600\n'],
+  ];
+
+  it.each(duplicated)('reports NaN for %s', (_label, conf) => {
+    expect(
+      Number.isFinite(readBound(conf, 'CHECK_TIMEOUT')),
+      `readBound read a single value out of a file with two assignments bash would both run:\n${conf}`,
+    ).toBe(false);
+  });
+
+  it('reads each shape on its own, so the hardening does not turn a valid conf into a false red', () => {
+    for (const one of [
+      'CHECK_TIMEOUT=600\n',
+      '  CHECK_TIMEOUT=600\n',
+      'export CHECK_TIMEOUT=600\n',
+      'CHECK_TIMEOUT="600"\n',
+      'CHECK_TIMEOUT=600  # measured 2026-10-22\n',
+    ]) {
+      expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
+    }
+  });
+
+  it('does not count a commented-out or differently-named assignment as the key', () => {
+    expect(readBound('# CHECK_TIMEOUT=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+    expect(readBound('CHECK_FAST_TIMEOUT=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+    expect(readBound('CHECK_TIMEOUT_SUFFIX=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+  });
+
+  it('still finds exactly one of each key in the conf files this repo actually ships', () => {
+    for (const [file, name] of [
+      ['check.conf', 'CHECK_TIMEOUT'],
+      ['check.conf', 'CHECK_FAST_TIMEOUT'],
+      ['gate.conf', 'FAST_OUTER_WINDOW'],
+    ] as const) {
+      const text = readFileSync(join(REPO, 'tools', file), 'utf8');
+      expect(Number.isFinite(readBound(text, name)), `${name} must appear exactly once in tools/${file}`).toBe(true);
+    }
+  });
 });
 
 describe('tools/fast-gate.sh — the runner gets a worker count (agent-do-664)', () => {

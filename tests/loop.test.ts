@@ -28,7 +28,13 @@ function baseConfig(
   };
 }
 
-describe('runAgentLoop', () => {
+// agent-do-yuc: these tests drive full runAgentLoop/streamAgentLoop pipelines over
+// the AI SDK, so per-test time is CPU-starvation sensitive (0.6-1s+ on a loaded VM;
+// the merger's serial full gate on merged tree 6e506fc failed 'max iterations: model
+// keeps calling tools, hits limit' at the vitest 5s default — the docs/speed.md §4
+// lottery). 30s matches the cost-runaway/provider-tool-loop convention and still
+// fails fast on a genuinely wedged loop.
+describe('runAgentLoop', { timeout: 30_000 }, () => {
   it('basic run: model returns text, completes in 1 step', async () => {
     const config = baseConfig({
       model: mockModel({ responses: [{ text: 'Task complete.' }] }),
@@ -113,7 +119,7 @@ describe('runAgentLoop', () => {
   });
 });
 
-describe('streamAgentLoop', () => {
+describe('streamAgentLoop', { timeout: 30_000 }, () => {
   it('yields progress events', async () => {
     const config = baseConfig({
       model: mockModel({ responses: [{ text: 'Streamed.' }] }),
