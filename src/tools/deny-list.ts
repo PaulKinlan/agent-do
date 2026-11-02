@@ -68,7 +68,10 @@ export const DEFAULT_READ_DENY: readonly string[] = [
  * a middle-slash glob like '.vscode/**' is gitignore-ANCHORED to the root, so
  * monorepo subfolders opened in the corresponding host were writable) — and
  * the devcontainer spec's single-file form is covered beside the directory
- * form (agent-do-nc7i). Reading those stays allowed — the risk is mutation,
+ * form (agent-do-nc7i). `.husky/**` joins `.git/hooks/**` (agent-do-60j9):
+ * husky points core.hooksPath at .husky/_, so its scripts run on the
+ * operator's next commit — the same persistence path, one directory over.
+ * Reading those stays allowed — the risk is mutation,
  * not disclosure.
  */
 export const DEFAULT_WRITE_DENY: readonly string[] = [
@@ -80,6 +83,7 @@ export const DEFAULT_WRITE_DENY: readonly string[] = [
   '**/.devcontainer/**',
   '**/.claude/**',
   '**/.cursor/**',
+  '**/.husky/**',
   '.devcontainer.json',
   '.mcp.json',
 ];
