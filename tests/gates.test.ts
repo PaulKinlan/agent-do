@@ -348,28 +348,44 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  *      this uses; the export double-trace is de-duplicated explicitly (see countTraceAssignments) or every
  *      `export NAME=600` conf would read as a conflict.
  *
- * NaN (loud, via the caller's Number.isFinite pin) when the key is assigned anything other than exactly once, or
- * when the value bash produces is not a bare integer - `600#note`, an expansion that resolves to nothing, a shell
- * that dies or a conf that turns tracing off. And when in doubt this errs RED, never toward binding a number nobody
- * wrote: that one literal is what stands between a healthy loaded run and an UNKNOWN.
+ * NaN (loud, via the caller's Number.isFinite pin) when the key is assigned anything other than exactly once, when
+ * the conf silences an instrument (it turns tracing off, so the count is short by construction - agent-do-hgk7), or
+ * when the value bash produces is not a bare integer: `600#note`, an expansion that resolves to nothing, a shell
+ * that dies. Silence is never treated as agreement. And when in doubt this errs RED, never toward binding a number
+ * nobody wrote: that one literal is what stands between a healthy loaded run and an UNKNOWN. Note what a conf
+ * redirecting its OWN stderr does NOT do - `exec 2>/dev/null` still leaves the count intact, because the trace has
+ * its own fd (agent-do-hgk7).
  */
 function readBound(conf: string, name: string): number {
   const dir = mkdtempSync(join(tmpdir(), 'readbound-'));
   try {
     const file = join(dir, 'check.conf');
     const out = join(dir, 'value');
+    const traceFile = join(dir, 'trace');
+    const offFile = join(dir, 'trace-off');
     writeFileSync(file, conf);
-    // Question 1 and the trace half of question 2, in one source: the value goes to a file only we named (the conf
-    // cannot write it and its own stdout is discarded), so nothing the conf prints can be mistaken for the answer.
+    // Question 1 and the trace half of question 2, in one source. Two channels the conf cannot reach: the value goes
+    // to a file only we named, and the trace goes to ITS OWN FD (BASH_XTRACEFD), not to stderr - so a conf that runs
+    // `exec 2>/dev/null` silences bash's diagnostics but not the count (agent-do-hgk7). If the conf turns tracing off
+    // under us, the trace is incomplete by definition, so it says so and the read is unknown rather than short.
     const sourced = spawnSync(
       'bash',
-      ['-c', `set -x; . "$1"; set +x; printf '%s' "\${${name}-__unset__}" >"$2"`, 'readbound', file, out],
+      [
+        '-c',
+        `exec 3>"$3"; BASH_XTRACEFD=3; printf BEGIN >&3; set -x; . "$1"; [ -o xtrace ] || printf INCOMPLETE >"$4"; printf END >&3 2>/dev/null || printf INCOMPLETE >"$4"; set +x; printf '%s' "\${${name}-__unset__}" >"$2"`,
+        'readbound',
+        file,
+        out,
+        traceFile,
+        offFile,
+      ],
       { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
     );
     // The readonly-probe half of question 2, in a shell of its own so its deliberate errors cannot disturb the value.
     // Skipped when the trace already counted a second assignment: the answer is NaN either way, and this is the
     // common case in this suite, so duplicates cost one spawn instead of two.
-    const traced = countTraceAssignments(sourced.stderr ?? '', name);
+    const trace = existsSync(traceFile) ? readFileSync(traceFile, 'utf8') : '';
+    const traced = countTraceAssignments(trace, name);
     const probed = traced > 1
       ? { status: 0, stderr: '' }
       : spawnSync(
@@ -379,6 +395,9 @@ function readBound(conf: string, name: string): number {
         );
     // `status === null` is the bound above killing a conf that blocks: UNKNOWN, so loud rather than a quiet number.
     if (sourced.status === null || probed.status === null) return NaN;
+    // A conf that turned tracing off shortens the trace to whatever ran before it, which is an undercount by
+    // construction - exactly the shape that would let a duplicate read as "assigned once". Unknown, so loud.
+    if (existsSync(offFile)) return NaN;
     const assignments = Math.max(
       traced,
       (probed.stderr ?? '').split(`${name}: readonly variable`).length - 1,
@@ -773,6 +792,12 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // echo as a command naming the key, so the count is two and the reader refuses to choose. (The old rule-2 note
     // claimed this for every unreadable mention; what it actually rests on is the count, which is the honest claim.)
     ['an unreadable live mention', 'CHECK_TIMEOUT=1800\necho CHECK_TIMEOUT=600\n'],
+    // agent-do-hgk7: a conf that silences an instrument must not thereby read as "assigned once". A stderr redirect no
+    // longer touches the count at all (the trace has its own fd), and turning tracing off or closing that fd is
+    // reported as unknown rather than trusted as a short trace.
+    ['a duplicate behind a stderr redirect', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nCHECK_TIMEOUT=600\n'],
+    ['a duplicate once tracing is off', 'CHECK_TIMEOUT=1800; set +x; CHECK_TIMEOUT=600\n'],
+    ['a duplicate once the trace fd is closed', 'exec 3>&-\nCHECK_TIMEOUT=1800\nCHECK_TIMEOUT=600\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
@@ -806,6 +831,8 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
       // readable, and an indirect assignment with no duplicate must too.
       'export CHECK_TIMEOUT=600\n',
       'printf -v CHECK_TIMEOUT %s 600\n',
+      // agent-do-hgk7: and a conf redirecting its OWN stderr still reads, because the trace does not use stderr.
+      'exec 2>/dev/null\nCHECK_TIMEOUT=600\n',
     ]) {
       expect(readBound(one, 'CHECK_TIMEOUT'), `a single assignment must stay readable: ${JSON.stringify(one)}`).toBe(600);
     }
@@ -839,6 +866,9 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // Control flow is not modelled by hand either, because bash is the oracle: an assignment in a branch that never
     // runs is not an assignment, so this reads the 1800 the shell keeps rather than a conflict that does not exist.
     expect(readBound('CHECK_TIMEOUT=1800\nwhile false; do CHECK_TIMEOUT=600; done\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // Silence is never agreement (agent-do-hgk7): a conf that turns tracing off leaves a trace that is short BY
+    // CONSTRUCTION, so even its single visible assignment is unreadable - the count cannot be vouched for.
+    expect(Number.isFinite(readBound('set +x\nCHECK_TIMEOUT=600\n', 'CHECK_TIMEOUT'))).toBe(false);
   });
 
   it('still finds exactly one of each key in the conf files this repo actually ships', () => {
