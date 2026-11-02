@@ -352,7 +352,16 @@ access to credential material by default:
 - **Reads blocked:** `.env*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`,
   `.ssh/**`, `.aws/**`, `.gcloud/**`, `.kube/**`, `.git/objects/**`,
   `.git/hooks/**`.
-- **Writes blocked** (above plus): `.git/**`, `node_modules/**`.
+- **Writes blocked** (above plus): `.git/**`, `node_modules/**`, and
+  execution-surface config a toolchain or agent host would execute —
+  `.github/workflows/**`, `.vscode/**`, `.devcontainer/**`, `.devcontainer.json`,
+  `.claude/**`, `.cursor/**`, `.mcp.json` (all matched at any depth, so monorepo
+  subfolders are covered). Writing these would let an agent grant itself
+  persistence: workflows run with repo secrets, editor tasks and devcontainer
+  lifecycle commands run on the next build, agent hooks and MCP server
+  definitions launch arbitrary commands. Reads of them stay allowed; to opt out
+  (e.g. you legitimately want the agent to edit CI workflows), pass
+  `--include-sensitive`.
 
 Reads of `node_modules/**` and `.git/HEAD` are allowed — the agent can
 inspect dependencies and branch state but cannot silently rewrite git
