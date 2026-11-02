@@ -335,37 +335,44 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  */
 function readBound(conf: string, name: string): number {
   // This reads a conf file the way the shell would SOURCE it, because a duplicated or overridden key is what turns
-  // a pin green over the wrong kill window. Two rules, and the ORDER matters:
+  // a pin green over the wrong kill window. Three rules, in an order that matters:
   //
-  //   1. Count every assignment of the key, whatever the value looks like. Indentation, an `export` prefix, quotes,
-  //      a `#` comment, the simple-command terminators `;`, `&&`, `||`, `|` and `&`, and a keyword prefix
-  //      (`then`/`else`/`do`) are all things bash accepts, and each was sourced through bash and printed the
-  //      assignment's value before it was handled here (agent-do-vw9, agent-do-2lww, agent-do-dzjx).
-  //   2. Only if the key is assigned exactly ONCE, read its value - and only if that value is a literal number.
+  //   1. Every assignment of the key counts, whatever its value looks like and whatever shell syntax precedes it.
+  //   2. Anything that MENTIONS the key in live shell text but that this cannot read as an assignment makes the
+  //      whole read NaN - loud - instead of being skipped. This is the rule that stops the shape-by-shape chase:
+  //      vw9 taught it indentation/export/quotes/comments, 2lww terminators, dzjx expansion values, and each time
+  //      the NEXT shape was another finding (3y0o: `then export NAME=600`, where one prefix hid behind the other).
+  //      A guard whose coverage is a list of shapes must fail closed, or the list is the bug.
+  //   3. Only when the key is assigned exactly once AND that value is a literal number does it resolve.
   //
-  // Rule 1 has to come first, and that is what agent-do-dzjx fixed: when the count only included LITERAL values, a
-  // file reading `CHECK_TIMEOUT=1800` followed by `CHECK_TIMEOUT=$((600))` counted once, so the pin bound 1800
-  // while bash ran 600. Counting assignments instead means the duplicate is seen whatever it is written as.
-  //
-  // What this deliberately does NOT do is evaluate the shell. `$((600))`, `${X}`, `$(date +%s)` and `600#note` are
-  // never resolved to a number, and a bare `NAME` is not an assignment at all. An unresolvable value therefore
-  // reads as NaN and the caller's Number.isFinite assertion fails LOUD - never a quiet 1800. Nor can it tell
-  // whether a guarded assignment would actually run: `false || NAME=600` is counted, so a second assignment is
-  // always a conflict rather than a maybe. Both choices err toward a red test, which is the only safe direction
-  // for a guard whose whole job is to be the one thing standing between a healthy loaded run and an UNKNOWN.
+  // What this deliberately does NOT do is evaluate the shell: `$((600))`, `${X}`, `$(date +%s)` and `600#note` never
+  // resolve to a number, and a bare `NAME` is not an assignment at all. An unresolvable value reads as NaN so the
+  // caller's Number.isFinite assertion fails loud, never a quiet 1800. Nor can it tell whether a guarded assignment
+  // would ever run - `false || NAME=600`, `if false; then NAME=600; fi`, a pipeline or a backgrounded assignment are
+  // all counted, and those that bash would not apply still make the read loud rather than silently choosing a side.
+  // Every way this can be wrong is toward a red test, which is the only safe direction for the one literal standing
+  // between a healthy loaded run and an UNKNOWN.
+  const prefixes = String.raw`[ \t]*(?:(?:export|readonly|declare|local|typeset|then|else|elif|do|if|while|until|time|!)[ \t]+)*`;
   const assignments: string[] = [];
+  let unreadable = false;
   for (const line of conf.split('\n')) {
     const statement = stripShellComment(line);
-    // Terminators and pipes end a simple command, and `then`/`else`/`do` may sit in front of the assignment in the
-    // segment that follows, so a second assignment cannot hide behind any of them on the same line.
+    // Terminators and pipes end a simple command; `then`/`do`/`else` may decorate the assignment that follows, and
+    // several assignments can share one line. Splitting first means the unit is a whole simple command.
     for (const segment of statement.split(/[|&;]+/)) {
-      const m = new RegExp(`^[ \\t]*(?:(?:export|then|else|do)[ \\t]+)?${name}=(.*)$`).exec(segment);
-      if (m) assignments.push(m[1]!.trim());
+      const m = new RegExp(`^${prefixes}${name}=(.*)$`).exec(segment);
+      if (m) {
+        assignments.push(m[1]!.trim());
+      } else if (new RegExp(`(^|[^A-Za-z0-9_])${name}=`).test(segment)) {
+        // Live shell text that names the key in a way this cannot read. Counting it would be a guess and skipping it
+        // is how the false greens happened, so fail closed.
+        unreadable = true;
+      }
     }
   }
-  if (assignments.length !== 1) return NaN; // zero assignments, or more than one: never resolve a conflict silently
+  if (unreadable || assignments.length !== 1) return NaN;
   const literal = /^(["']?)(\d+)\1$/.exec(assignments[0]!);
-  return literal ? Number(literal[2]) : NaN; // an expansion, substitution or stray text is not a number we may bind
+  return literal ? Number(literal[2]) : NaN;
 }
 
 /**
@@ -713,6 +720,19 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // A pipeline runs each side in a subshell, so bash leaves the parent's value UNSET here and only the count
     // (two assignments seen) is what fires; like the `&` case above this errs toward a red, never a quiet bind.
     ['a pipe-separated duplicate', 'CHECK_TIMEOUT=1800 | CHECK_TIMEOUT=600\n'],
+    // agent-do-3y0o: prefixes stack, and the previous list allowed only one of them, so `then export NAME=600` hid a
+    // duplicate one keyword deeper than the shape that had just been fixed.
+    ['a then-export duplicate', 'CHECK_TIMEOUT=1800\nif true; then export CHECK_TIMEOUT=600; fi\n'],
+    ['an else-export duplicate', 'CHECK_TIMEOUT=1800\nif false; then CHECK_TIMEOUT=900; else export CHECK_TIMEOUT=600; fi\n'],
+    ['a declare duplicate', 'CHECK_TIMEOUT=1800\ndeclare CHECK_TIMEOUT=600\n'],
+    ['a readonly duplicate', 'CHECK_TIMEOUT=1800\nreadonly CHECK_TIMEOUT=600\n'],
+    ['a negated-command duplicate', 'CHECK_TIMEOUT=1800\n! CHECK_TIMEOUT=600\n'],
+    // Counted although this loop never runs, so bash would keep 1800: the guard does not model control flow, and
+    // the count is the conservative reading (`while false; do NAME=600; done` alone leaves bash with no value).
+    ['a while-do duplicate', 'CHECK_TIMEOUT=1800\nwhile false; do CHECK_TIMEOUT=600; done\n'],
+    // Rule 2: a live mention the scanner cannot read is loud, not skipped. This is the closing move on the shape
+    // chase - a shape nobody thought of fails the pin instead of greening it.
+    ['an unreadable live mention', 'CHECK_TIMEOUT=1800\necho CHECK_TIMEOUT=600\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
@@ -748,8 +768,10 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     expect(readBound('CHECK_TIMEOUT_SUFFIX=600\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
     // A commented-out override is not an assignment, even when it carries a terminator of its own.
     expect(readBound('CHECK_TIMEOUT=1800\n# CHECK_TIMEOUT=600; CHECK_TIMEOUT=700\n', 'CHECK_TIMEOUT')).toBe(1800);
-    // ...nor is the key mentioned inside a quoted string on a command line.
-    expect(readBound('echo "CHECK_TIMEOUT=600"\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT')).toBe(1800);
+    // ...but a live shell mention of the key that is not an assignment is no longer ignored: it is unreadable, and
+    // an unreadable file reads as NaN. Before agent-do-3y0o this returned 1800 by silently skipping the segment,
+    // which is the same "skip what you do not understand" habit that let every previous shape through.
+    expect(Number.isFinite(readBound('echo "CHECK_TIMEOUT=600"\nCHECK_TIMEOUT=1800\n', 'CHECK_TIMEOUT'))).toBe(false);
   });
 
   it('never resolves a value it cannot read, and never lets a second assignment pass (documented contract)', () => {
