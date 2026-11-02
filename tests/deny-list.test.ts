@@ -63,6 +63,9 @@ describe('createDenyGuard', () => {
       expect((await g().checkWrite('.claude/settings.json')).blocked).toBe(true);
       expect((await g().checkWrite('.cursor/mcp.json')).blocked).toBe(true);
       expect((await g().checkWrite('.mcp.json')).blocked).toBe(true);
+      // agent-do-60j9: husky points core.hooksPath at .husky/_, so its scripts
+      // run on the operator's next commit — same persistence path as .git/hooks.
+      expect((await g().checkWrite('.husky/pre-commit')).blocked).toBe(true);
     });
 
     it('blocks execution-surface writes at ANY depth (agent-do-uush, agent-do-nc7i)', async () => {
@@ -73,6 +76,7 @@ describe('createDenyGuard', () => {
       expect((await g().checkWrite('apps/desktop/.claude/settings.json')).blocked).toBe(true);
       expect((await g().checkWrite('apps/desktop/.cursor/settings.json')).blocked).toBe(true);
       expect((await g().checkWrite('services/api/.mcp.json')).blocked).toBe(true);
+      expect((await g().checkWrite('packages/web/.husky/pre-commit')).blocked).toBe(true);
     });
 
     it('still allows reads of execution-surface config (the risk is mutation, not disclosure)', async () => {
@@ -81,6 +85,7 @@ describe('createDenyGuard', () => {
       expect((await g().checkRead('.devcontainer/devcontainer.json')).blocked).toBe(false);
       expect((await g().checkRead('.devcontainer.json')).blocked).toBe(false);
       expect((await g().checkRead('packages/web/.vscode/tasks.json')).blocked).toBe(false);
+      expect((await g().checkRead('.husky/pre-commit')).blocked).toBe(false);
       expect((await g().checkRead('.mcp.json')).blocked).toBe(false);
     });
 
