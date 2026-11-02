@@ -8,8 +8,9 @@
  * centralises the policy:
  *
  *   - a small opinionated default deny list (secrets + credential material
- *     for reads, all of the above plus `node_modules` + `.git/**` for
- *     writes);
+ *     for reads, all of the above plus `.git/**`, `node_modules/**` and
+ *     execution-surface config (workflows, editor/devcontainer/agent-host
+ *     config, `.mcp.json`) for writes);
  *   - optional `.agent-doignore` at the workspace root, gitignore-style,
  *     merged on top of the defaults;
  *   - caller-supplied extra patterns from `--exclude <glob>`;
@@ -58,12 +59,23 @@ export const DEFAULT_READ_DENY: readonly string[] = [
  * Default write deny list. Everything on the read list plus things we
  * don't want the agent silently mutating: `.git/**` (branches, config,
  * hooks); `node_modules/**` (malware persistence surface, also clobbered
- * by `npm install`).
+ * by `npm install`); and execution surfaces — config files a toolchain or
+ * agent host will EXECUTE, so writing one is self-granted persistence
+ * (agent-do-x6v6): CI workflows run with repo secrets, editor tasks and
+ * devcontainer lifecycle commands run on the next build, agent hooks and
+ * MCP server definitions launch arbitrary commands. Reading those stays
+ * allowed — the risk is mutation, not disclosure.
  */
 export const DEFAULT_WRITE_DENY: readonly string[] = [
   ...DEFAULT_READ_DENY,
   '.git/**',
   'node_modules/**',
+  '.github/workflows/**',
+  '.vscode/**',
+  '.devcontainer/**',
+  '.claude/**',
+  '.cursor/**',
+  '.mcp.json',
 ];
 
 /** Filename used for project-scoped ignore rules, layered on the defaults. */

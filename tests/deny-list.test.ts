@@ -48,6 +48,28 @@ describe('createDenyGuard', () => {
       expect((await g().checkWrite('node_modules/foo/index.js')).blocked).toBe(true);
     });
 
+    // agent-do-x6v6: config a toolchain or agent host EXECUTES. Writing one is
+    // self-granted persistence — workflows run with repo secrets, editor tasks
+    // and devcontainer lifecycle commands run on the next build, agent hooks and
+    // MCP server definitions launch arbitrary commands. Write-only: reads stay open.
+    it('blocks writes to execution-surface config (agent-do-x6v6)', async () => {
+      expect((await g().checkWrite('.github/workflows/ci.yml')).blocked).toBe(true);
+      expect((await g().checkWrite('.vscode/tasks.json')).blocked).toBe(true);
+      expect((await g().checkWrite('.devcontainer/devcontainer.json')).blocked).toBe(true);
+      expect((await g().checkWrite('.claude/settings.json')).blocked).toBe(true);
+      expect((await g().checkWrite('.cursor/mcp.json')).blocked).toBe(true);
+      expect((await g().checkWrite('.mcp.json')).blocked).toBe(true);
+      // gitignore semantics: a bare filename pattern matches at any depth.
+      expect((await g().checkWrite('services/api/.mcp.json')).blocked).toBe(true);
+    });
+
+    it('still allows reads of execution-surface config (the risk is mutation, not disclosure)', async () => {
+      expect((await g().checkRead('.github/workflows/ci.yml')).blocked).toBe(false);
+      expect((await g().checkRead('.vscode/tasks.json')).blocked).toBe(false);
+      expect((await g().checkRead('.devcontainer/devcontainer.json')).blocked).toBe(false);
+      expect((await g().checkRead('.mcp.json')).blocked).toBe(false);
+    });
+
     it('does not block reads of node_modules or .git/HEAD (useful for recon)', async () => {
       expect((await g().checkRead('node_modules/foo/index.js')).blocked).toBe(false);
       expect((await g().checkRead('.git/HEAD')).blocked).toBe(false);
@@ -101,6 +123,10 @@ describe('createDenyGuard', () => {
       });
       expect((await guard.checkRead('.env')).blocked).toBe(false);
       expect((await guard.checkWrite('.git/hooks/pre-commit')).blocked).toBe(false);
+      // The execution surfaces ride the same defaults, so the same explicit
+      // operator opt-in reopens them (agent-do-x6v6).
+      expect((await guard.checkWrite('.mcp.json')).blocked).toBe(false);
+      expect((await guard.checkWrite('.github/workflows/ci.yml')).blocked).toBe(false);
     });
 
     it('includeSensitive still honours caller-supplied extras', async () => {
