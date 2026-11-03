@@ -248,6 +248,35 @@ describe('createWorkspaceTools with deny list', () => {
     expect(r.data?.hiddenByDenyList).toBeGreaterThanOrEqual(1);
   });
 
+  // agent-do-gqul: the filtered re-render must respect the CONFIGURED cap (maxReadBytes), not the 256 KB
+  // default — before this, createWorkspaceTools({ maxReadBytes: 512 }) capped the unfiltered listing at
+  // 512 bytes but the deny-filtered re-render of the same directory at 256 KB.
+  it('deny-filtered list re-render honours the configured maxReadBytes', async () => {
+    await fs.promises.writeFile(path.join(workDir, '.env'), 'SECRET=1');
+    for (let i = 0; i < 41; i++) {
+      await fs.promises.writeFile(
+        path.join(workDir, `entry-${String(i).padStart(3, '0')}-with-a-long-name.bin`), 'x',
+      );
+    }
+    const r = await call('list_directory', { path: '.' }, { maxReadBytes: 512 });
+    expect(r.data?.hiddenByDenyList).toBeGreaterThanOrEqual(1);
+    expect(r.modelContent).toContain('truncated at 512 bytes of');
+    expect(Buffer.byteLength(r.modelContent)).toBeLessThan(800);
+    // records stay complete even though the rendered text is capped
+    expect(r.data?.count).toBe((r.data?.entries as unknown[]).length);
+  });
+
+  it('deny-filtered grep re-render honours the configured maxReadBytes (same shape as wrapList)', async () => {
+    await fs.promises.writeFile(path.join(workDir, '.env'), 'needle here');
+    const lines = Array.from({ length: 8 }, (_, i) => `needle match number ${i} with some padding text to add bytes`).join('\n');
+    await fs.promises.writeFile(path.join(workDir, 'a.md'), `${lines}\n`);
+    const r = await call('grep_file', { pattern: 'needle' }, { maxReadBytes: 200 });
+    expect(r.data?.hiddenByDenyList).toBe(1);
+    expect(r.modelContent).toContain('truncated at 200 bytes of');
+    expect(Buffer.byteLength(r.modelContent)).toBeLessThan(500);
+    expect(r.data?.matchCount).toBe(8);
+  });
+
   it('--include-sensitive reopens the defaults', async () => {
     const r = await call('read_file', { path: '.env' }, { includeSensitive: true });
     expect(r.blocked).toBeFalsy();
