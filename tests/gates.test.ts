@@ -407,7 +407,10 @@ function readBound(conf: string, name: string): number {
         'readbound',
         file,
       ],
-      { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe', traceFd, 'pipe'] },
+      // cwd is the throwaway directory, not the repo: a conf that redirects to a path it read out of /proc/self/fd
+      // gets a name like `pipe:[12345]`, and bash would create that file in the CURRENT DIRECTORY. In the repo root it
+      // is an untracked file that the next fast gate reports as an unmapped change - which is how this was found.
+      { encoding: 'utf8', timeout: 10_000, cwd: dir, stdio: ['ignore', 'ignore', 'pipe', traceFd, 'pipe'] },
     );
     // The readonly-probe half of question 2, in a shell of its own so its deliberate errors cannot disturb the value.
     // Skipped when the trace already counted a second assignment: the answer is NaN either way, and this is the
@@ -419,7 +422,7 @@ function readBound(conf: string, name: string): number {
       : spawnSync(
           'bash',
           ['-c', `${name}=__readbound; readonly ${name}; set +e; . "$1"`, 'readbound', file],
-          { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
+          { encoding: 'utf8', timeout: 10_000, cwd: dir, stdio: ['ignore', 'ignore', 'pipe'] },
         );
     // `status === null` is the bound above killing a conf that blocks: UNKNOWN, so loud rather than a quiet number.
     if (sourced.status === null || probed.status === null) return NaN;
