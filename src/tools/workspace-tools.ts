@@ -291,11 +291,18 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
           kept.push(e);
         }
         if (hidden === 0) return result;
-        const modelContent = kept.length === 0
+        // agent-do-m5cz: the filtered re-render is model-facing text built from workspace entry names, so it
+        // goes through the same guarding as the unfiltered listing (frame + redaction + cap) — exactly what
+        // wrapGrep does for grep_file. Without this, a listing that hides even one denied entry silently
+        // LOST the frame the unfiltered path now has, and the kept names flowed unredacted and uncapped.
+        const body = kept.length === 0
           ? `(all ${entries.length} entries hidden by deny list)`
           : `${kept.map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`).join('\n')}\n... ${hidden} entr${hidden === 1 ? 'y' : 'ies'} hidden by deny list`;
+        const wrapped = kept.length === 0
+          ? null
+          : wrapForModel(body, { tool: toolName, path: basePath });
         return {
-          modelContent,
+          modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} hidden by deny list`,
           data: { ...(result.data ?? {}), hiddenByDenyList: hidden, count: kept.length, entries: kept },
           blocked: result.blocked,
