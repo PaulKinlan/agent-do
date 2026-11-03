@@ -255,12 +255,33 @@ export function createFileTools(
           const rendered = records
             .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`)
             .join('\n');
+          // Same guarding as grep_file (agent-do-m5cz): entry names are workspace data, so the listing is
+          // framed, injection-marker redacted and size-capped before it reaches the model. The records stay
+          // complete — the deny-list wrapper filters ALL of them even when the rendered text is capped.
+          const wrapped = wrapForModel(rendered, {
+            tool: 'list_directory',
+            path: listPath,
+            maxBytes: maxReadBytes,
+          });
+          const boundNote = wrapped.truncated
+            ? `, truncated at ${maxReadBytes} bytes of ${wrapped.totalBytes}`
+            : '';
           const dirs = entries.filter((e) => e.type === 'directory').length;
           const files = entries.length - dirs;
           return {
-            modelContent: rendered,
-            userSummary: `[list_directory] ${listPath} — ${entries.length} entries (${dirs} dirs, ${files} files)`,
-            data: { path: listPath, count: entries.length, dirs, files, entries: records },
+            modelContent: wrapped.content,
+            userSummary: `[list_directory] ${listPath} — ${entries.length} entries (${dirs} dirs, ${files} files)${boundNote}`,
+            data: {
+              path: listPath,
+              count: entries.length,
+              dirs,
+              files,
+              entries: records,
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            },
           };
         } catch (err) {
           return errorResult(err, 'list_directory', listPath);
@@ -393,12 +414,32 @@ export function createFileTools(
               data: { path: scope, count: 0, entries: [] },
             };
           }
+          // Same guarding as list_directory/grep_file (agent-do-m5cz): the recursive walk can return a
+          // huge tree, so the rendered listing is framed, redacted and capped before it reaches the model;
+          // data.entries stays complete for the deny-list wrapper.
+          const rendered = result
+            .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`)
+            .join('\n');
+          const wrapped = wrapForModel(rendered, {
+            tool: 'find_files',
+            path: scope,
+            maxBytes: maxReadBytes,
+          });
+          const boundNote = wrapped.truncated
+            ? `, truncated at ${maxReadBytes} bytes of ${wrapped.totalBytes}`
+            : '';
           return {
-            modelContent: result
-              .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`)
-              .join('\n'),
-            userSummary: `[find_files] ${scope} — ${result.length} entries`,
-            data: { path: scope, count: result.length, entries: result },
+            modelContent: wrapped.content,
+            userSummary: `[find_files] ${scope} — ${result.length} entries${boundNote}`,
+            data: {
+              path: scope,
+              count: result.length,
+              entries: result,
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            },
           };
         } catch (err) {
           return errorResult(err, 'find_files', scope);
