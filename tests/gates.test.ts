@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -359,46 +359,58 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  * (agent-do-hgk7). That channel is vouched for by FACTS, not by mode checks (agent-do-qvlv): a per-call nonce is
  * written at both ends of the trace file and both marks must be IN THE FILE WE NAMED, and bash must still report
  * BASH_XTRACEFD=3 at the end. A conf that redirects the channel (`exec 3>/dev/null`) sends the end mark elsewhere and
- * is disowned; one that reassigns BASH_XTRACEFD is disowned by the variable check. The measured ceiling, stated
- * rather than hidden: a conf that SAVES the fd and restores it (`exec 5>&3; exec 3>/dev/null; ...; exec 3>&5`) plus
- * `exec 2>/dev/null` can still hide a duplicate from both instruments - no post-hoc check can see inside the gap.
- * Even then the VALUE is bash's true final value, so the pin can never be green over a window the gate does not use;
- * only the "assigned exactly once" advisory is lost, and only to a conf that is deliberately hiding its own work.
+ * is disowned; one that reassigns BASH_XTRACEFD is disowned by the variable check.
+ *
+ * The ceiling is stated rather than implied away, and it has two parts - both pinned by a test, both consequences of
+ * the fact that a correct reading means EXECUTING the conf in the same shell (agent-do-yf46, agent-do-l7at):
+ *
+ *   - the COUNT: a conf that saves the trace fd and restores it around a redirect plus `exec 2>/dev/null` hides a
+ *     duplicate from both instruments. Only the "assigned exactly once" advisory is lost, and only against a conf
+ *     hiding its own work; the value is unaffected, so a window the gate does not use still reds the pin.
+ *   - the VALUE: every forgery that arrives LATE - an exit trap writing to the open fd, a duplicate the conf saved
+ *     first, a reopen through the path /proc/self/fd exposes - loses, because the mark is first-wins, the pipe has no
+ *     path, and the shell closes both fds before it exits. What no ordering can stop is a conf that forges the mark
+ *     DURING the source, before our own printf: to do that it must first read our per-call nonce out of its own
+ *     process state, which nothing accidental does. That is the floor, and it is the price of the property this
+ *     function exists for - reporting the window the shell really uses instead of the text it likes best.
  */
 function readBound(conf: string, name: string): number {
   const dir = mkdtempSync(join(tmpdir(), 'readbound-'));
+  // Paths are opened HERE and handed over as inherited FDs, never as arguments (agent-do-yf46). The conf is sourced in
+  // the same shell as the instrument, so anything it can name it can rewrite: a `$3` trace path let a conf reopen the
+  // channel it had redirected and let our own end mark vouch for a shortened trace, and a `$2` value path let an EXIT
+  // trap overwrite the answer after we wrote it. An inherited fd has no name to name.
+  const traceFile = join(dir, 'trace');
+  const nonce = randomUUID();
+  const traceFd = openSync(traceFile, 'w');
   try {
     const file = join(dir, 'check.conf');
-    const out = join(dir, 'value');
-    const traceFile = join(dir, 'trace');
-    const offFile = join(dir, 'trace-off');
-    // A per-call nonce in the vouchers: the witness must be something the conf cannot fabricate even if it writes to
-    // the trace channel, because it cannot know the string (agent-do-qvlv).
-    const nonce = randomUUID();
     writeFileSync(file, conf);
-    // Question 1 and the trace half of question 2, in one source. Two channels the conf cannot reach: the value goes
-    // to a file only we named, and the trace goes to ITS OWN FD (BASH_XTRACEFD), not to stderr - so a conf that runs
-    // `exec 2>/dev/null` silences bash's diagnostics but not the count (agent-do-hgk7). If the conf turns tracing off
-    // under us, the trace is incomplete by definition, so it says so and the read is unknown rather than short.
+    // One source answers three questions. The trace goes to fd 3 (BASH_XTRACEFD), which `exec 2>/dev/null` cannot touch,
+    // so a conf silencing bash's diagnostics does not shorten the count (agent-do-hgk7). The trace is vouched for by two
+    // facts, and an END mark exists only if BOTH held: bash was still tracing when the conf finished, and BASH_XTRACEFD
+    // was still our fd. Absence of the mark is the failure signal, so nothing here can be deleted to look innocent.
+    // The value leaves on fd 4 as a PIPE to this process, not a file: a pipe has no path, so /proc/self/fd/4 hands the
+    // conf nothing it can reopen. Nonce mark, first one wins, and the shell closes both fds before it exits, so every
+    // forgery that arrives late loses (agent-do-l7at).
     const sourced = spawnSync(
       'bash',
       [
         '-c',
-        `exec 3>"$3"; BASH_XTRACEFD=3; printf 'BEGIN ${nonce}' >&3; set -x; . "$1"; ` +
-          // Vouch for the trace itself (agent-do-qvlv). Mode checks are not enough: a conf that REDIRECTS fd 3 leaves
-          // it open, and one that reassigns BASH_XTRACEFD leaves our variable alone in the file only if bash did not
-          // close it. So the vouchers are facts about our own file and our own variable - tracing still on, the trace
-          // variable still ours - and anything that does not vouch is unknown rather than trusted.
-          `[ -o xtrace ] && [ "\${BASH_XTRACEFD:-}" = 3 ] || printf INCOMPLETE >"$4"; ` +
-          `printf 'END ${nonce}' >&3 2>/dev/null || printf INCOMPLETE >"$4"; ` +
-          `set +x; printf '%s' "\${${name}-__unset__}" >"$2"`,
+        `BASH_XTRACEFD=3; printf 'BEGIN ${nonce}' >&3; set -x; . "$1"; ` +
+          // Capture the voucher facts while tracing is still on, then stop tracing BEFORE writing the end mark - so the
+          // mark can only be a line our own printf produced, never a traced rendering of the command that writes it.
+          `v_xt=off; [ -o xtrace ] && v_xt=on; v_fd="\${BASH_XTRACEFD:-}"; set +x; ` +
+          // One positive mark, written only if both vouchers held; a redirected or closed channel makes it fail silently.
+          `{ [ "$v_xt" = on ] && [ "$v_fd" = 3 ] && printf '\nEND ${nonce}' >&3; } 2>/dev/null; ` +
+          `printf '\nVALUE ${nonce} %s' "\${${name}-__unset__}" >&4; exec 4>&- 3>&-`,
         'readbound',
         file,
-        out,
-        traceFile,
-        offFile,
       ],
-      { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
+      // cwd is the throwaway directory, not the repo: a conf that redirects to a path it read out of /proc/self/fd
+      // gets a name like `pipe:[12345]`, and bash would create that file in the CURRENT DIRECTORY. In the repo root it
+      // is an untracked file that the next fast gate reports as an unmapped change - which is how this was found.
+      { encoding: 'utf8', timeout: 10_000, cwd: dir, stdio: ['ignore', 'ignore', 'pipe', traceFd, 'pipe'] },
     );
     // The readonly-probe half of question 2, in a shell of its own so its deliberate errors cannot disturb the value.
     // Skipped when the trace already counted a second assignment: the answer is NaN either way, and this is the
@@ -410,16 +422,13 @@ function readBound(conf: string, name: string): number {
       : spawnSync(
           'bash',
           ['-c', `${name}=__readbound; readonly ${name}; set +e; . "$1"`, 'readbound', file],
-          { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'ignore', 'pipe'] },
+          { encoding: 'utf8', timeout: 10_000, cwd: dir, stdio: ['ignore', 'ignore', 'pipe'] },
         );
     // `status === null` is the bound above killing a conf that blocks: UNKNOWN, so loud rather than a quiet number.
     if (sourced.status === null || probed.status === null) return NaN;
-    // A conf that turned tracing off, or redirected the channel it goes to, shortens the trace to whatever ran
-    // before it - an undercount by construction, exactly the shape that would let a duplicate read as "assigned
-    // once". Unknown, so loud. The witness is neither a mode nor a variable on its own: BEGIN and END must both be in
-    // THE FILE WE NAMED (so a redirect of fd 3 sends END elsewhere and the trace is disowned) and bash must still be
-    // reporting BASH_XTRACEFD=3 at the end (so a reassignment of the variable is disowned too). agent-do-qvlv.
-    if (existsSync(offFile)) return NaN;
+    // A conf that turned tracing off, or redirected the channel it goes to, shortens the trace to whatever ran before
+    // it - an undercount by construction, exactly the shape that would let a duplicate read as "assigned once".
+    // Unknown, so loud: both nonce marks must be in the trace, the opening one first (agent-do-qvlv).
     const endMarker = trace.indexOf(`END ${nonce}`);
     if (!trace.startsWith(`BEGIN ${nonce}`) || endMarker < 0) return NaN;
     const assignments = Math.max(
@@ -427,10 +436,18 @@ function readBound(conf: string, name: string): number {
       (probed.stderr ?? '').split(`${name}: readonly variable`).length - 1,
     );
     if (assignments !== 1) return NaN;
-    const value = existsSync(out) ? readFileSync(out, 'utf8') : '__unset__';
+    // The value mark is nonce-tagged and the FIRST one wins, and the pipe is closed by the shell before it exits, so a
+    // trap at exit, a saved duplicate of the fd and a reopen by /proc path all arrive too late (agent-do-l7at). What no
+    // ordering can stop is a forgery DURING the source, before this printf runs - see the ceiling test.
+    const valueText = String(sourced.output[4] ?? '');
+    const valueMark = `VALUE ${nonce} `;
+    const valueAt = valueText.indexOf(valueMark);
+    // Only the line the mark introduces: anything a conf managed to append after it is a separate line and is ignored.
+    const value = valueAt < 0 ? '__unset__' : (valueText.slice(valueAt + valueMark.length).split('\n')[0] ?? '');
     const literal = /^(\d+)$/.exec(value);
     return literal ? Number(literal[1]) : NaN;
   } finally {
+    closeSync(traceFd);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -826,6 +843,11 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // and reassigning BASH_XTRACEFD leaves our variable to check. Both are disowned by the vouchers, so both read NaN.
     ['a duplicate behind a redirected trace fd', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 3>/dev/null\nCHECK_TIMEOUT=600\n'],
     ['a duplicate behind a reassigned BASH_XTRACEFD', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 9>/dev/null\nBASH_XTRACEFD=9\nCHECK_TIMEOUT=600\n'],
+    // agent-do-yf46: the conf shares a process with the instrument, so the vouchers may not be anything it can DELETE or
+    // any path it can NAME. There is no flag file to remove, no trace path to reopen, and the end mark is positive.
+    ['a duplicate with the flag file removed by an EXIT trap', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nset +x\nCHECK_TIMEOUT=600\ntrap \'rm -f "$4"\' EXIT\n'],
+    ['a duplicate with the flag file removed by a DEBUG trap', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nset +x\nCHECK_TIMEOUT=600\ntrap \'rm -f "$4"\' DEBUG\n'],
+    ['a duplicate behind a trace channel reopened by path', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 3>/dev/null\nCHECK_TIMEOUT=600\nexec 3>>"$3"\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
@@ -897,6 +919,31 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     // Silence is never agreement (agent-do-hgk7): a conf that turns tracing off leaves a trace that is short BY
     // CONSTRUCTION, so even its single visible assignment is unreadable - the count cannot be vouched for.
     expect(Number.isFinite(readBound('set +x\nCHECK_TIMEOUT=600\n', 'CHECK_TIMEOUT'))).toBe(false);
+  });
+
+  it('pins the ceiling, which is about the COUNT only: a late forgery cannot move the value', () => {
+    // agent-do-yf46 and agent-do-l7at asked for the residual to be measured and stated rather than implied away, so it
+    // is pinned here. The conf is sourced IN THE SAME SHELL as the instrument, which means two different limits:
+    //
+    //   1. the COUNT can be shortened: a conf that saves our trace fd and restores it around a redirect is invisible to
+    //      any post-hoc check. Only the "assigned exactly once" advisory is lost, and only against a conf hiding its own
+    //      work. The VALUE is unaffected, so the FULL-window pin is still red for any window the gate does not use.
+    expect(readBound('CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 5>&3\nexec 3>/dev/null\nCHECK_TIMEOUT=600\nexec 3>&5\n', 'CHECK_TIMEOUT')).toBe(600);
+    //   2. the VALUE channel resists everything that arrives LATE - and that is a tested property, not a hope: the mark
+    //      is first-wins, the fd is closed by the shell before it exits, and the value leaves on a pipe, which has no
+    //      path for /proc/self/fd to give back. These three shapes each try to append a winning mark after ours
+    //      (agent-do-l7at): through the open fd from an exit trap, through a duplicate the conf saved first, and through
+    //      the path read out of /proc/self/fd.
+    const nonceFromProc = String.raw`_n=$(tr '\0' '\n' < /proc/$$/cmdline | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)`;
+    expect(readBound(`CHECK_TIMEOUT=600\n${nonceFromProc}\ntrap 'printf "\\nVALUE $_n 9999" >&4' EXIT\n`, 'CHECK_TIMEOUT')).toBe(600);
+    expect(readBound(`CHECK_TIMEOUT=600\nexec 5>&4\n${nonceFromProc}\ntrap 'printf "\\nVALUE $_n 9999" >&5' EXIT\n`, 'CHECK_TIMEOUT')).toBe(600);
+    expect(readBound(`CHECK_TIMEOUT=600\nexec 5>&4\n_p=$(readlink /proc/self/fd/5)\n${nonceFromProc}\ntrap 'printf "\\nVALUE $_n 9999" >"$_p"' EXIT\n`, 'CHECK_TIMEOUT')).toBe(600);
+    // What is NOT claimed, and cannot be while a correct reading means executing the conf: a conf that forges the mark
+    // DURING the source, before our own printf, wins - it is first. It has to read our nonce out of its own process
+    // state to do it, which nothing accidental does. This assertion documents that floor so no later change, and no
+    // review, has to rediscover it. It is the price of the property the reader is FOR: the window it reports is the one
+    // the shell really uses.
+    expect(readBound(`CHECK_TIMEOUT=600\n${nonceFromProc}\nprintf "\\nVALUE $_n 9999" >&4\n`, 'CHECK_TIMEOUT')).toBe(9999);
   });
 
   it('still finds exactly one of each key in the conf files this repo actually ships', () => {
