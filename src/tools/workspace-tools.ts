@@ -38,7 +38,7 @@ import {
 } from './deny-list.js';
 import type { ToolResult } from './types.js';
 import { wrapForModel } from './content-guards.js';
-import { escapeForLine } from './content-guards.js';
+import { escapeForLine, utf8ByteLength } from './content-guards.js';
 
 /**
  * The structured match records grep_file / memory_search put in `ToolResult.data.matches`.
@@ -176,7 +176,7 @@ export function createWorkspaceTools(
     maxGrepLineBytes: options.maxGrepLineBytes,
   });
 
-  return applyDenyGuard(raw, guard);
+  return applyDenyGuard(raw, guard, options.maxReadBytes);
 }
 
 /**
@@ -185,7 +185,7 @@ export function createWorkspaceTools(
  * deny list are refused; writes likewise; listings / greps / finds have
  * denied entries filtered out of the results.
  */
-function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
+function applyDenyGuard(raw: ToolSet, guard: DenyGuard, maxReadBytes?: number): ToolSet {
   /**
    * Combine a base path (from the tool args) with a child name into a
    * workspace-relative path suitable for deny-list lookup. `list_directory`
@@ -300,11 +300,22 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
           : `${kept.map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.path)}`).join('\n')}\n... ${hidden} entr${hidden === 1 ? 'y' : 'ies'} hidden by deny list`;
         const wrapped = kept.length === 0
           ? null
-          : wrapForModel(body, { tool: toolName, path: basePath });
+          : wrapForModel(body, { tool: toolName, path: basePath, maxBytes: maxReadBytes });
+        // agent-do-8trp: the guard stats must describe the text ACTUALLY returned. The pre-filter wrap's
+        // numbers (spread in from result.data) describe text the model will never see once an entry is
+        // hidden; the all-hidden case returns an unwrapped static string, so it reports its own size.
+        const guardStats = wrapped
+          ? {
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            }
+          : { truncated: false, totalBytes: utf8ByteLength(body), redactedMarkerCount: 0, neutralisedDelimiterCount: 0 };
         return {
           modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} hidden by deny list`,
-          data: { ...(result.data ?? {}), hiddenByDenyList: hidden, count: kept.length, entries: kept },
+          data: { ...(result.data ?? {}), ...guardStats, hiddenByDenyList: hidden, count: kept.length, entries: kept },
           blocked: result.blocked,
         };
       },
@@ -359,12 +370,22 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard): ToolSet {
         // wrapping the body keeps exactly one frame around what is actually returned.
         const wrapped = kept.length === 0
           ? null
-          : wrapForModel(body, { tool: 'grep_file', path: String(result.data?.scope ?? '.') });
+          : wrapForModel(body, { tool: 'grep_file', path: String(result.data?.scope ?? '.'), maxBytes: maxReadBytes });
+        // Same stale-fields fix as wrapList (agent-do-8trp): stats describe the returned text.
+        const guardStats = wrapped
+          ? {
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            }
+          : { truncated: false, totalBytes: utf8ByteLength(body), redactedMarkerCount: 0, neutralisedDelimiterCount: 0 };
         return {
           modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} match${hidden === 1 ? '' : 'es'} hidden by deny list`,
           data: {
             ...(result.data ?? {}),
+            ...guardStats,
             hiddenByDenyList: hidden,
             matchCount: kept.length,
             matches: kept,

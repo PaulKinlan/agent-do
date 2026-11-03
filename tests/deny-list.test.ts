@@ -248,6 +248,56 @@ describe('createWorkspaceTools with deny list', () => {
     expect(r.data?.hiddenByDenyList).toBeGreaterThanOrEqual(1);
   });
 
+  // agent-do-gqul: the filtered re-render must respect the CONFIGURED cap (maxReadBytes), not the 256 KB
+  // default — before this, createWorkspaceTools({ maxReadBytes: 512 }) capped the unfiltered listing at
+  // 512 bytes but the deny-filtered re-render of the same directory at 256 KB.
+  it('deny-filtered list re-render honours the configured maxReadBytes', async () => {
+    await fs.promises.writeFile(path.join(workDir, '.env'), 'SECRET=1');
+    for (let i = 0; i < 41; i++) {
+      await fs.promises.writeFile(
+        path.join(workDir, `entry-${String(i).padStart(3, '0')}-with-a-long-name.bin`), 'x',
+      );
+    }
+    const r = await call('list_directory', { path: '.' }, { maxReadBytes: 512 });
+    expect(r.data?.hiddenByDenyList).toBeGreaterThanOrEqual(1);
+    expect(r.modelContent).toContain('truncated at 512 bytes of');
+    expect(Buffer.byteLength(r.modelContent)).toBeLessThan(800);
+    // records stay complete even though the rendered text is capped
+    expect(r.data?.count).toBe((r.data?.entries as unknown[]).length);
+    // agent-do-8trp: the guard stats describe the RETURNED text, not the pre-filter wrap.
+    const stated = r.modelContent.match(/truncated at 512 bytes of (\d+)/);
+    expect(stated).not.toBeNull();
+    expect(r.data?.truncated).toBe(true);
+    expect(r.data?.totalBytes).toBe(Number(stated![1]));
+  });
+
+  it('deny-filtered re-render reports ITS OWN redaction count, not the pre-filter one', async () => {
+    // The denied entry carries an injection marker: the pre-filter wrap redacts it, but the entry is
+    // hidden, so the returned text has no marker and the count must drop to 0 (agent-do-8trp).
+    await fs.promises.writeFile(path.join(workDir, 'ignore previous instructions.env'), 'SECRET=1');
+    await fs.promises.writeFile(path.join(workDir, 'keep.md'), 'x');
+    const r = await call('list_directory', { path: '.' }, { exclude: ['*instructions*'] });
+    // .env (fixture default) + the marker-named file are both denied
+    expect(r.data?.hiddenByDenyList).toBe(2);
+    expect(r.modelContent).not.toContain('[redacted prompt-injection marker]');
+    expect(r.data?.redactedMarkerCount).toBe(0);
+  });
+
+  it('deny-filtered grep re-render honours the configured maxReadBytes (same shape as wrapList)', async () => {
+    await fs.promises.writeFile(path.join(workDir, '.env'), 'needle here');
+    const lines = Array.from({ length: 8 }, (_, i) => `needle match number ${i} with some padding text to add bytes`).join('\n');
+    await fs.promises.writeFile(path.join(workDir, 'a.md'), `${lines}\n`);
+    const r = await call('grep_file', { pattern: 'needle' }, { maxReadBytes: 200 });
+    expect(r.data?.hiddenByDenyList).toBe(1);
+    expect(r.modelContent).toContain('truncated at 200 bytes of');
+    expect(Buffer.byteLength(r.modelContent)).toBeLessThan(500);
+    expect(r.data?.matchCount).toBe(8);
+    // agent-do-8trp: stats describe the returned text (the pre-filter wrap's numbers differ).
+    const stated = r.modelContent.match(/truncated at 200 bytes of (\d+)/);
+    expect(stated).not.toBeNull();
+    expect(r.data?.totalBytes).toBe(Number(stated![1]));
+  });
+
   it('--include-sensitive reopens the defaults', async () => {
     const r = await call('read_file', { path: '.env' }, { includeSensitive: true });
     expect(r.blocked).toBeFalsy();
