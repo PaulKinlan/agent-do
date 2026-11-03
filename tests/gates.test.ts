@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -352,9 +353,17 @@ function runGate(fx: ReturnType<typeof fixture>, args: string[], env: Record<str
  * the conf silences an instrument (it turns tracing off, so the count is short by construction - agent-do-hgk7), or
  * when the value bash produces is not a bare integer: `600#note`, an expansion that resolves to nothing, a shell
  * that dies. Silence is never treated as agreement. And when in doubt this errs RED, never toward binding a number
- * nobody wrote: that one literal is what stands between a healthy loaded run and an UNKNOWN. Note what a conf
- * redirecting its OWN stderr does NOT do - `exec 2>/dev/null` still leaves the count intact, because the trace has
- * its own fd (agent-do-hgk7).
+ * nobody wrote: that one literal is what stands between a healthy loaded run and an UNKNOWN.
+ *
+ * What a conf redirecting its OWN stderr does NOT do is shorten the count, because the trace has its own fd
+ * (agent-do-hgk7). That channel is vouched for by FACTS, not by mode checks (agent-do-qvlv): a per-call nonce is
+ * written at both ends of the trace file and both marks must be IN THE FILE WE NAMED, and bash must still report
+ * BASH_XTRACEFD=3 at the end. A conf that redirects the channel (`exec 3>/dev/null`) sends the end mark elsewhere and
+ * is disowned; one that reassigns BASH_XTRACEFD is disowned by the variable check. The measured ceiling, stated
+ * rather than hidden: a conf that SAVES the fd and restores it (`exec 5>&3; exec 3>/dev/null; ...; exec 3>&5`) plus
+ * `exec 2>/dev/null` can still hide a duplicate from both instruments - no post-hoc check can see inside the gap.
+ * Even then the VALUE is bash's true final value, so the pin can never be green over a window the gate does not use;
+ * only the "assigned exactly once" advisory is lost, and only to a conf that is deliberately hiding its own work.
  */
 function readBound(conf: string, name: string): number {
   const dir = mkdtempSync(join(tmpdir(), 'readbound-'));
@@ -363,6 +372,9 @@ function readBound(conf: string, name: string): number {
     const out = join(dir, 'value');
     const traceFile = join(dir, 'trace');
     const offFile = join(dir, 'trace-off');
+    // A per-call nonce in the vouchers: the witness must be something the conf cannot fabricate even if it writes to
+    // the trace channel, because it cannot know the string (agent-do-qvlv).
+    const nonce = randomUUID();
     writeFileSync(file, conf);
     // Question 1 and the trace half of question 2, in one source. Two channels the conf cannot reach: the value goes
     // to a file only we named, and the trace goes to ITS OWN FD (BASH_XTRACEFD), not to stderr - so a conf that runs
@@ -372,7 +384,14 @@ function readBound(conf: string, name: string): number {
       'bash',
       [
         '-c',
-        `exec 3>"$3"; BASH_XTRACEFD=3; printf BEGIN >&3; set -x; . "$1"; [ -o xtrace ] || printf INCOMPLETE >"$4"; printf END >&3 2>/dev/null || printf INCOMPLETE >"$4"; set +x; printf '%s' "\${${name}-__unset__}" >"$2"`,
+        `exec 3>"$3"; BASH_XTRACEFD=3; printf 'BEGIN ${nonce}' >&3; set -x; . "$1"; ` +
+          // Vouch for the trace itself (agent-do-qvlv). Mode checks are not enough: a conf that REDIRECTS fd 3 leaves
+          // it open, and one that reassigns BASH_XTRACEFD leaves our variable alone in the file only if bash did not
+          // close it. So the vouchers are facts about our own file and our own variable - tracing still on, the trace
+          // variable still ours - and anything that does not vouch is unknown rather than trusted.
+          `[ -o xtrace ] && [ "\${BASH_XTRACEFD:-}" = 3 ] || printf INCOMPLETE >"$4"; ` +
+          `printf 'END ${nonce}' >&3 2>/dev/null || printf INCOMPLETE >"$4"; ` +
+          `set +x; printf '%s' "\${${name}-__unset__}" >"$2"`,
         'readbound',
         file,
         out,
@@ -395,9 +414,14 @@ function readBound(conf: string, name: string): number {
         );
     // `status === null` is the bound above killing a conf that blocks: UNKNOWN, so loud rather than a quiet number.
     if (sourced.status === null || probed.status === null) return NaN;
-    // A conf that turned tracing off shortens the trace to whatever ran before it, which is an undercount by
-    // construction - exactly the shape that would let a duplicate read as "assigned once". Unknown, so loud.
+    // A conf that turned tracing off, or redirected the channel it goes to, shortens the trace to whatever ran
+    // before it - an undercount by construction, exactly the shape that would let a duplicate read as "assigned
+    // once". Unknown, so loud. The witness is neither a mode nor a variable on its own: BEGIN and END must both be in
+    // THE FILE WE NAMED (so a redirect of fd 3 sends END elsewhere and the trace is disowned) and bash must still be
+    // reporting BASH_XTRACEFD=3 at the end (so a reassignment of the variable is disowned too). agent-do-qvlv.
     if (existsSync(offFile)) return NaN;
+    const endMarker = trace.indexOf(`END ${nonce}`);
+    if (!trace.startsWith(`BEGIN ${nonce}`) || endMarker < 0) return NaN;
     const assignments = Math.max(
       traced,
       (probed.stderr ?? '').split(`${name}: readonly variable`).length - 1,
@@ -798,6 +822,10 @@ describe('readBound — a duplicated bound cannot hide behind a shape bash honou
     ['a duplicate behind a stderr redirect', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nCHECK_TIMEOUT=600\n'],
     ['a duplicate once tracing is off', 'CHECK_TIMEOUT=1800; set +x; CHECK_TIMEOUT=600\n'],
     ['a duplicate once the trace fd is closed', 'exec 3>&-\nCHECK_TIMEOUT=1800\nCHECK_TIMEOUT=600\n'],
+    // agent-do-qvlv: and closing the channel is not the only way to silence it - REDIRECTING it leaves the fd open,
+    // and reassigning BASH_XTRACEFD leaves our variable to check. Both are disowned by the vouchers, so both read NaN.
+    ['a duplicate behind a redirected trace fd', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 3>/dev/null\nCHECK_TIMEOUT=600\n'],
+    ['a duplicate behind a reassigned BASH_XTRACEFD', 'CHECK_TIMEOUT=1800\nexec 2>/dev/null\nexec 9>/dev/null\nBASH_XTRACEFD=9\nCHECK_TIMEOUT=600\n'],
   ];
 
   it.each(duplicated)('reports NaN for %s', (_label, conf) => {
