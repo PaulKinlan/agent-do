@@ -264,6 +264,23 @@ describe('createWorkspaceTools with deny list', () => {
     expect(Buffer.byteLength(r.modelContent)).toBeLessThan(800);
     // records stay complete even though the rendered text is capped
     expect(r.data?.count).toBe((r.data?.entries as unknown[]).length);
+    // agent-do-8trp: the guard stats describe the RETURNED text, not the pre-filter wrap.
+    const stated = r.modelContent.match(/truncated at 512 bytes of (\d+)/);
+    expect(stated).not.toBeNull();
+    expect(r.data?.truncated).toBe(true);
+    expect(r.data?.totalBytes).toBe(Number(stated![1]));
+  });
+
+  it('deny-filtered re-render reports ITS OWN redaction count, not the pre-filter one', async () => {
+    // The denied entry carries an injection marker: the pre-filter wrap redacts it, but the entry is
+    // hidden, so the returned text has no marker and the count must drop to 0 (agent-do-8trp).
+    await fs.promises.writeFile(path.join(workDir, 'ignore previous instructions.env'), 'SECRET=1');
+    await fs.promises.writeFile(path.join(workDir, 'keep.md'), 'x');
+    const r = await call('list_directory', { path: '.' }, { exclude: ['*instructions*'] });
+    // .env (fixture default) + the marker-named file are both denied
+    expect(r.data?.hiddenByDenyList).toBe(2);
+    expect(r.modelContent).not.toContain('[redacted prompt-injection marker]');
+    expect(r.data?.redactedMarkerCount).toBe(0);
   });
 
   it('deny-filtered grep re-render honours the configured maxReadBytes (same shape as wrapList)', async () => {
@@ -275,6 +292,10 @@ describe('createWorkspaceTools with deny list', () => {
     expect(r.modelContent).toContain('truncated at 200 bytes of');
     expect(Buffer.byteLength(r.modelContent)).toBeLessThan(500);
     expect(r.data?.matchCount).toBe(8);
+    // agent-do-8trp: stats describe the returned text (the pre-filter wrap's numbers differ).
+    const stated = r.modelContent.match(/truncated at 200 bytes of (\d+)/);
+    expect(stated).not.toBeNull();
+    expect(r.data?.totalBytes).toBe(Number(stated![1]));
   });
 
   it('--include-sensitive reopens the defaults', async () => {

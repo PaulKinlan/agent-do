@@ -38,7 +38,7 @@ import {
 } from './deny-list.js';
 import type { ToolResult } from './types.js';
 import { wrapForModel } from './content-guards.js';
-import { escapeForLine } from './content-guards.js';
+import { escapeForLine, utf8ByteLength } from './content-guards.js';
 
 /**
  * The structured match records grep_file / memory_search put in `ToolResult.data.matches`.
@@ -301,10 +301,21 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard, maxReadBytes?: number): 
         const wrapped = kept.length === 0
           ? null
           : wrapForModel(body, { tool: toolName, path: basePath, maxBytes: maxReadBytes });
+        // agent-do-8trp: the guard stats must describe the text ACTUALLY returned. The pre-filter wrap's
+        // numbers (spread in from result.data) describe text the model will never see once an entry is
+        // hidden; the all-hidden case returns an unwrapped static string, so it reports its own size.
+        const guardStats = wrapped
+          ? {
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            }
+          : { truncated: false, totalBytes: utf8ByteLength(body), redactedMarkerCount: 0, neutralisedDelimiterCount: 0 };
         return {
           modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} hidden by deny list`,
-          data: { ...(result.data ?? {}), hiddenByDenyList: hidden, count: kept.length, entries: kept },
+          data: { ...(result.data ?? {}), ...guardStats, hiddenByDenyList: hidden, count: kept.length, entries: kept },
           blocked: result.blocked,
         };
       },
@@ -360,11 +371,21 @@ function applyDenyGuard(raw: ToolSet, guard: DenyGuard, maxReadBytes?: number): 
         const wrapped = kept.length === 0
           ? null
           : wrapForModel(body, { tool: 'grep_file', path: String(result.data?.scope ?? '.'), maxBytes: maxReadBytes });
+        // Same stale-fields fix as wrapList (agent-do-8trp): stats describe the returned text.
+        const guardStats = wrapped
+          ? {
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            }
+          : { truncated: false, totalBytes: utf8ByteLength(body), redactedMarkerCount: 0, neutralisedDelimiterCount: 0 };
         return {
           modelContent: wrapped ? wrapped.content : body,
           userSummary: `${result.userSummary}, ${hidden} match${hidden === 1 ? '' : 'es'} hidden by deny list`,
           data: {
             ...(result.data ?? {}),
+            ...guardStats,
             hiddenByDenyList: hidden,
             matchCount: kept.length,
             matches: kept,
