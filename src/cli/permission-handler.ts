@@ -167,10 +167,19 @@ const PREVIEW_TAIL = 40;
  */
 function previewArgs(args: unknown): string {
   if (args === undefined || args === null) return '';
-  return renderValue(args);
+  try {
+    return renderValue(args);
+  } catch {
+    // agent-do-ht31: pathological args (circular or thousands-deep) must degrade the preview, not
+    // throw out of onPermissionRequest. Fail closed AND keep the prompt alive.
+    return '(unrenderable args)';
+  }
 }
 
-function renderValue(value: unknown): string {
+const PREVIEW_MAX_DEPTH = 4;
+
+function renderValue(value: unknown, depth = 0): string {
+  if (depth >= PREVIEW_MAX_DEPTH) return '…';
   if (value === null) return 'null';
   if (typeof value === 'string') {
     if (value.length <= PREVIEW_VALUE_MAX) return JSON.stringify(value);
@@ -180,13 +189,13 @@ function renderValue(value: unknown): string {
   }
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
-    const items = value.slice(0, 5).map(renderValue);
+    const items = value.slice(0, 5).map((v) => renderValue(v, depth + 1));
     if (value.length > 5) items.push(`…+${value.length - 5} more`);
     return `[${items.join(', ')}]`;
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>).map(
-      ([k, v]) => `${JSON.stringify(k)}: ${renderValue(v)}`,
+      ([k, v]) => `${JSON.stringify(k)}: ${renderValue(v, depth + 1)}`,
     );
     return `{${entries.join(', ')}}`;
   }
@@ -201,6 +210,8 @@ function renderValue(value: unknown): string {
  * form is required — a head/tail preview key could collide two calls
  * whose difference hides in the middle.
  */
+let unserialisableCount = 0;
+
 function approvalKey(toolName: string, args: unknown): string {
   const sortValue = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sortValue);
@@ -213,13 +224,15 @@ function approvalKey(toolName: string, args: unknown): string {
     }
     return v;
   };
-  let canonical: string;
   try {
-    canonical = JSON.stringify(sortValue(args));
+    return `${toolName} ${JSON.stringify(sortValue(args))}`;
   } catch {
-    canonical = String(args);
+    // agent-do-ht31: unserialisable args (BigInt, circular, throwing toJSON) must never share a
+    // grant. The old String(args) fallback collapsed every such call to '[object Object]', so one
+    // approved call silently approved all the others. A unique per-call key is cached but can never
+    // match a later lookup — every unserialisable call re-prompts (fail closed).
+    return `${toolName} unserialisable:${++unserialisableCount}`;
   }
-  return `${toolName} ${canonical}`;
 }
 
 export { READ_ONLY_TOOLS };

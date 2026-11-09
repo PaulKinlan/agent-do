@@ -208,6 +208,59 @@ describe('buildCliPermissions', () => {
     stdin.end();
   });
 
+  it('unserialisable args never share an "always" grant (agent-do-ht31)', async () => {
+    const { stream: stderr } = mockStderr();
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const call = (args: Record<string, unknown>) =>
+      cfg.onPermissionRequest!({ toolName: 'write_file', args });
+
+    // BigInt args cannot JSON.stringify: the old String(args) fallback collapsed every such call to
+    // '[object Object]', so one 'always' approved them ALL. Each must prompt on its own now.
+    const p1 = call({ path: 'notes.txt', n: 1n });
+    stdin.write('always\n');
+    expect(await p1).toBe(true);
+
+    // A different unserialisable call must re-prompt (answer no -> deny).
+    const p2 = call({ path: '.git/hooks/pre-commit', n: 2n });
+    stdin.write('n\n');
+    expect(await p2).toBe(false);
+
+    // Even the IDENTICAL unserialisable call re-prompts: the unique key never matches a lookup.
+    const p3 = call({ path: 'notes.txt', n: 1n });
+    stdin.write('y\n');
+    expect(await p3).toBe(true);
+
+    stdin.end();
+  });
+
+  it('pathological args degrade the preview instead of throwing (agent-do-ht31)', async () => {
+    const { stream: stderr, written } = mockStderr();
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const call = (args: unknown) => cfg.onPermissionRequest!({ toolName: 'write_file', args });
+
+    // Circular args: the old renderer threw RangeError out of the permission path.
+    const circular: Record<string, unknown> = { path: 'x' };
+    circular.self = circular;
+    const p1 = call(circular);
+    stdin.write('y\n');
+    expect(await p1).toBe(true);
+    expect(written.join('')).toContain('path');
+
+    // 5000-deep nesting: bounded by the depth cap, still prompts normally.
+    let deep: unknown = { leaf: true };
+    for (let i = 0; i < 5000; i++) deep = { n: deep };
+    const p2 = call(deep);
+    stdin.write('y\n');
+    expect(await p2).toBe(true);
+    expect(written.join('')).toContain('…');
+
+    stdin.end();
+  });
+
   it('previews long args with head AND tail, keeping every key visible (agent-do-ulkp)', async () => {
     const { stream: stderr, written } = mockStderr();
     const stdin = mockStdin(true, ['n']);
