@@ -57,6 +57,8 @@ describe('createDenyGuard', () => {
     // spec's single-file form is covered beside the directory form.
     it('blocks writes to execution-surface config (agent-do-x6v6)', async () => {
       expect((await g().checkWrite('.github/workflows/ci.yml')).blocked).toBe(true);
+      // agent-do-16de: composite actions execute inside workflows — writing one mutates what CI runs.
+      expect((await g().checkWrite('.github/actions/build/action.yml')).blocked).toBe(true);
       expect((await g().checkWrite('.vscode/tasks.json')).blocked).toBe(true);
       expect((await g().checkWrite('.devcontainer/devcontainer.json')).blocked).toBe(true);
       expect((await g().checkWrite('.devcontainer.json')).blocked).toBe(true);
@@ -71,6 +73,7 @@ describe('createDenyGuard', () => {
     it('blocks execution-surface writes at ANY depth (agent-do-uush, agent-do-nc7i)', async () => {
       expect((await g().checkWrite('packages/web/.vscode/tasks.json')).blocked).toBe(true);
       expect((await g().checkWrite('services/api/.github/workflows/ci.yml')).blocked).toBe(true);
+      expect((await g().checkWrite('packages/web/.github/actions/build/action.yml')).blocked).toBe(true);
       expect((await g().checkWrite('services/api/.devcontainer/devcontainer.json')).blocked).toBe(true);
       expect((await g().checkWrite('packages/web/.devcontainer.json')).blocked).toBe(true);
       expect((await g().checkWrite('apps/desktop/.claude/settings.json')).blocked).toBe(true);
@@ -81,6 +84,7 @@ describe('createDenyGuard', () => {
 
     it('still allows reads of execution-surface config (the risk is mutation, not disclosure)', async () => {
       expect((await g().checkRead('.github/workflows/ci.yml')).blocked).toBe(false);
+      expect((await g().checkRead('.github/actions/build/action.yml')).blocked).toBe(false);
       expect((await g().checkRead('.vscode/tasks.json')).blocked).toBe(false);
       expect((await g().checkRead('.devcontainer/devcontainer.json')).blocked).toBe(false);
       expect((await g().checkRead('.devcontainer.json')).blocked).toBe(false);
