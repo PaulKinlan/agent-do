@@ -15,6 +15,20 @@
  * For any task that touches untrusted input, pass an isolating connector
  * (`createJustBashSandbox`, or your own).
  *
+ * A MODEL-SUPPLIED `cwd` IS CONFINED (agent-do-gfp6). The description says
+ * access is "scoped to whatever the connector allows", which was true of paths
+ * the *command* touches and false of the working directory it starts in: the
+ * `cwd` argument went straight to `SandboxApi.exec`, so a model could run the
+ * command in any directory the connector can reach (`/etc`, `~/.ssh`, a parent
+ * of the workspace) and read what it liked with `ls`/`cat` — the file tools'
+ * deny list never sees it. `cwd` is now resolved against `workspaceRoot`
+ * (default: the tool's own `cwd`) and refused if it lands outside, both
+ * lexically (`..`, absolute paths) and, when the connector can attest paths,
+ * after following symlinks (`realpathSafe`). A connector that cannot attest a
+ * path is refused rather than trusted. `allowCwdEscape` is the declared way to
+ * keep the old behaviour for connectors where the escape is intentional — like
+ * host execution, it is an opt-out, never the default.
+ *
  * Output is wrapped in `<tool_output tool="…" command="…">` markers with
  * the same prompt-injection-marker redaction `read_file` and `memory_read`
  * apply — shell stdout/stderr is attacker-controlled text (a fetched
@@ -31,6 +45,7 @@ import { tool } from 'ai';
 import type { ToolSet } from 'ai';
 import { z } from 'zod';
 import type { SandboxApi } from '../sandbox/types.js';
+import { POSIX_PATH_API, realpathSafe } from '../stores/sandbox.js';
 import type { ToolResult } from './types.js';
 import {
   DEFAULT_MAX_READ_BYTES,
@@ -68,6 +83,22 @@ const s = (schema: z.ZodType): any => schema;
 export interface CreateShellToolOptions {
   /** Default working directory passed to `sandbox.exec`. */
   cwd?: string;
+  /**
+   * Directory the model's per-call `cwd` is confined to. Default: `cwd`, or
+   * the connector's own default (`'.'`) when `cwd` is unset.
+   *
+   * A relative `cwd` is joined onto this root; an absolute one must still land
+   * inside it. Anything else is refused (agent-do-gfp6), as is a path the
+   * connector cannot attest, because a symlink is otherwise a way out.
+   */
+  workspaceRoot?: string;
+  /**
+   * Declared opt-out from {@link CreateShellToolOptions.workspaceRoot}: pass
+   * the model's `cwd` through untouched. Only for connectors where the shell is
+   * deliberately not workspace-scoped — a tool call can then start in any
+   * directory the connector reaches, which no file-tool deny list covers.
+   */
+  allowCwdEscape?: boolean;
   /**
    * Default timeout in milliseconds. The model can override per call up
    * to {@link CreateShellToolOptions.maxTimeoutMs}.
@@ -164,11 +195,38 @@ export function createShellTool(
           blocked: true,
         };
       }
+      // Confine a MODEL-supplied cwd before anything runs in it. The tool's own
+      // default is the operator's choice and is passed through as before.
+      const workspaceRoot = options.workspaceRoot ?? options.cwd ?? '.';
+      let effectiveCwd = options.cwd;
+      if (cwd !== undefined) {
+        if (options.allowCwdEscape) {
+          effectiveCwd = cwd;
+        } else {
+          const verdict = await confineCwd(target, workspaceRoot, cwd);
+          if (!verdict.ok) {
+            return {
+              modelContent:
+                `Refused: cwd ${JSON.stringify(cwd)} is not usable inside this shell's workspace ` +
+                `root (${verdict.reason}). Use a path inside the workspace, or omit cwd.`,
+              userSummary: `[${toolName}] REFUSED — cwd ${cwd} (${verdict.reason}, root ${workspaceRoot})`,
+              data: {
+                blocked: true,
+                reason: verdict.reason,
+                cwd,
+                workspaceRoot,
+              },
+              blocked: true,
+            };
+          }
+          effectiveCwd = verdict.cwd;
+        }
+      }
       const startedAt = Date.now();
       let result;
       try {
         result = await target.exec(command, {
-          cwd: cwd ?? options.cwd,
+          cwd: effectiveCwd,
           timeout: requested,
         });
       } catch (err) {
@@ -239,7 +297,7 @@ export function createShellTool(
         userSummary: summary,
         data: {
           command,
-          cwd: cwd ?? options.cwd,
+          cwd: effectiveCwd,
           exitCode: result.exitCode,
           stdoutBytes: utf8ByteLength(result.stdout),
           stderrBytes: utf8ByteLength(result.stderr),
@@ -254,6 +312,47 @@ export function createShellTool(
   });
 
   return { [toolName]: shell };
+}
+
+/**
+ * Decide whether a model-supplied `cwd` may be used, in two steps: a lexical
+ * containment check (cheap, and it catches `..` and absolute escapes even on a
+ * connector that can attest nothing), then an attestation of BOTH ends through
+ * the connector, so a symlink inside the workspace cannot be the way out. Any
+ * doubt is a refusal — the same `realpathSafe` contract the file tools use
+ * (agent-do-vn9: only a positively attested path is ok).
+ */
+async function confineCwd(
+  sandbox: SandboxApi,
+  workspaceRoot: string,
+  requested: string,
+): Promise<{ ok: true; cwd: string } | { ok: false; reason: string }> {
+  const joined = POSIX_PATH_API.isAbsolute(requested)
+    ? POSIX_PATH_API.join(requested)
+    : POSIX_PATH_API.join(workspaceRoot, requested);
+  if (!within(workspaceRoot, joined)) {
+    return { ok: false, reason: 'cwd-outside-workspace' };
+  }
+  const [rootReal, cwdReal] = await Promise.all([
+    realpathSafe(sandbox, workspaceRoot, POSIX_PATH_API),
+    realpathSafe(sandbox, joined, POSIX_PATH_API),
+  ]);
+  if (!rootReal.ok || !cwdReal.ok) {
+    return { ok: false, reason: 'cwd-unattestable' };
+  }
+  if (!within(rootReal.path, cwdReal.path)) {
+    // Lexically inside, canonically outside: a symlink pointed out of the root.
+    return { ok: false, reason: 'cwd-outside-workspace' };
+  }
+  // Hand back the caller's own spelling (relative stays relative, which is what
+  // the connector understands) now that it is attested inside the root.
+  return { ok: true, cwd: joined };
+}
+
+/** Is `candidate` the root itself, or inside it? (`relative` is '..'-free then.) */
+function within(root: string, candidate: string): boolean {
+  const rel = POSIX_PATH_API.relative(root, candidate);
+  return rel === '' || (!POSIX_PATH_API.isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'));
 }
 
 interface Capped { content: string; truncated: boolean; }

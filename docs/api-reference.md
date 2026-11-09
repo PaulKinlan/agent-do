@@ -384,9 +384,13 @@ The agent's private scratchpad, backed by any `MemoryStore`. Pass an `InMemoryMe
 
 A single shell-exec tool wired to a `SandboxApi`. The sandbox is required: pass an isolating connector, or `createHostSandbox()` explicitly to run on the host (**not** isolation). Calling it with no sandbox throws rather than silently using the host. Model-visible stdout/stderr is framed in `<tool_output>` markers and passed through the same injection-marker redaction as the file and memory tools. The host sandbox forwards an allowlisted environment rather than the parent's (`inheritEnv: true` opts out) — see [sandbox.md](sandbox.md#environment-policy-host-connector).
 
+A model-supplied `cwd` is confined to the workspace root: it is joined onto `workspaceRoot` (default `cwd`, else the connector's own default), and a call whose directory resolves outside it — by `..`, by an absolute path, or by following a symlink the connector can attest — is refused as a blocked `ToolResult` instead of running. A connector that cannot attest the path is refused rather than trusted, because otherwise a symlink is the way out. Pass `allowCwdEscape: true` for a shell that is deliberately not workspace-scoped; the tool's own default `cwd` is always the operator's choice and is not confined.
+
 **Options:**
 - `name` — override the model-facing tool name (default `bash`)
 - `cwd`, `defaultTimeoutMs`, `maxTimeoutMs`, `maxOutputBytes`
+- `workspaceRoot` — root the model's per-call `cwd` is confined to (default: `cwd`, else `'.'`)
+- `allowCwdEscape` — declared opt-out from that confinement (**not** isolation)
 
 **Returns one tool** named after `opts.name` (default `bash`).
 
