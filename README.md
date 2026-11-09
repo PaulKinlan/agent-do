@@ -403,7 +403,7 @@ access to credential material by default:
   `.git/hooks/**`.
 - **Writes blocked** (above plus): `.git/**`, `node_modules/**`, and
   execution-surface config a toolchain or agent host would execute —
-  `.github/workflows/**`, `.vscode/**`, `.devcontainer/**`, `.devcontainer.json`,
+  `.github/workflows/**`, `.github/actions/**`, `.vscode/**`, `.devcontainer/**`, `.devcontainer.json`,
   `.claude/**`, `.cursor/**`, `.husky/**`, `.mcp.json` (all matched at any depth, so monorepo
   subfolders are covered). Writing these would let an agent grant itself
   persistence: workflows run with repo secrets, editor tasks and devcontainer

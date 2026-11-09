@@ -61,9 +61,11 @@ export const DEFAULT_READ_DENY: readonly string[] = [
  * hooks); `node_modules/**` (malware persistence surface, also clobbered
  * by `npm install`); and execution surfaces — config files a toolchain or
  * agent host will EXECUTE, so writing one is self-granted persistence
- * (agent-do-x6v6): CI workflows run with repo secrets, editor tasks and
- * devcontainer lifecycle commands run on the next build, agent hooks and
- * MCP server definitions launch arbitrary commands. Every pattern below is
+ * (agent-do-x6v6): CI workflows run with repo secrets, and composite
+ * actions under .github/actions execute in those workflows too
+ * (agent-do-16de); editor tasks and devcontainer lifecycle commands run on
+ * the next build, agent hooks and MCP server definitions launch arbitrary
+ * commands. Every pattern below is
  * depth-independent — bare filename or a leading '**' glob prefix (agent-do-uush:
  * a middle-slash glob like '.vscode/**' is gitignore-ANCHORED to the root, so
  * monorepo subfolders opened in the corresponding host were writable) — and
@@ -79,6 +81,7 @@ export const DEFAULT_WRITE_DENY: readonly string[] = [
   '.git/**',
   'node_modules/**',
   '**/.github/workflows/**',
+  '**/.github/actions/**',
   '**/.vscode/**',
   '**/.devcontainer/**',
   '**/.claude/**',
