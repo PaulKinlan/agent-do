@@ -88,8 +88,11 @@ export interface CreateShellToolOptions {
    * the connector's own default (`'.'`) when `cwd` is unset.
    *
    * A relative `cwd` is joined onto this root; an absolute one must still land
-   * inside it. Anything else is refused (agent-do-gfp6), as is a path the
-   * connector cannot attest, because a symlink is otherwise a way out.
+   * inside it, which also means an ABSOLUTE `cwd` needs an ABSOLUTE root — a
+   * relative root cannot be compared with an absolute path, and pretending
+   * otherwise is how `/etc` reads as inside `.` (agent-do-8iyt). Anything else
+   * is refused (agent-do-gfp6), as is a path the connector cannot attest,
+   * because a symlink is otherwise a way out.
    */
   workspaceRoot?: string;
   /**
@@ -327,6 +330,15 @@ async function confineCwd(
   workspaceRoot: string,
   requested: string,
 ): Promise<{ ok: true; cwd: string } | { ok: false; reason: string }> {
+  // An absolute path and a relative root cannot be compared at all (agent-do-8iyt): `relative('.', '/etc')` drops
+  // the leading slash and answers `etc`, i.e. "inside" — for a path that is the host's /etc, not ours. Nothing
+  // downstream can recover the distinction on a connector that cannot attest, so the namespaces have to match before
+  // any comparison happens: an absolute `cwd` needs an absolute `workspaceRoot`.
+  if (POSIX_PATH_API.isAbsolute(requested) && !POSIX_PATH_API.isAbsolute(workspaceRoot)) {
+    // Only this direction is unanswerable: a relative root has no absolute spelling to compare against, so `/etc`
+    // would have to be taken on trust. The reverse is fine — `sub` joined onto `/ws` is `/ws/sub`.
+    return { ok: false, reason: 'cwd-uncomparable' };
+  }
   const joined = POSIX_PATH_API.isAbsolute(requested)
     ? POSIX_PATH_API.join(requested)
     : POSIX_PATH_API.join(workspaceRoot, requested);
@@ -349,8 +361,15 @@ async function confineCwd(
   return { ok: true, cwd: joined };
 }
 
-/** Is `candidate` the root itself, or inside it? (`relative` is '..'-free then.) */
+/**
+ * Is `candidate` the root itself, or inside it? (`relative` is '..'-free then.)
+ *
+ * Refuses a mixed pair outright rather than trusting `relative` across namespaces: for a relative root and an
+ * absolute candidate the answer looks like a plain child (`'etc'` for `('.', '/etc')`), which is the shape of the
+ * escape this function exists to stop (agent-do-8iyt). Both call sites compare like with like or not at all.
+ */
 function within(root: string, candidate: string): boolean {
+  if (POSIX_PATH_API.isAbsolute(root) !== POSIX_PATH_API.isAbsolute(candidate)) return false;
   const rel = POSIX_PATH_API.relative(root, candidate);
   return rel === '' || (!POSIX_PATH_API.isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'));
 }
