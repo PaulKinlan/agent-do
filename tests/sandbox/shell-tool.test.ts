@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createShellTool } from '../../src/tools/shell-tool.js';
 import { createHostSandbox } from '../../src/sandbox/connectors/host.js';
 import type { SandboxApi } from '../../src/sandbox/types.js';
@@ -12,6 +15,12 @@ function getExecute(tools: ReturnType<typeof createShellTool>, name = 'bash') {
     options?: unknown,
   ) => Promise<ToolResult>;
 }
+
+/** Every temp root a test made, removed once — a shell test must not litter /tmp. */
+const ROOTS: string[] = [];
+afterAll(() => {
+  for (const dir of ROOTS) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('createShellTool', () => {
   it('refuses to run without a sandbox — host execution is never implicit', () => {
@@ -104,10 +113,112 @@ describe('createShellTool', () => {
   it('forwards cwd/timeout to sandbox.exec', async () => {
     const spy = vi.fn().mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
     const sandbox = makeStubSandbox({ exec: spy });
-    const tools = createShellTool(sandbox);
+    // A model-supplied cwd has to be attestable inside the workspace root, and a
+    // stub connector cannot attest anything, so this pins the declared opt-out.
+    const tools = createShellTool(sandbox, { allowCwdEscape: true });
     const exec = getExecute(tools);
     await exec({ command: 'ls', cwd: '/tmp', timeoutMs: 1000 });
     expect(spy).toHaveBeenCalledWith('ls', { cwd: '/tmp', timeout: 1000 });
+  });
+
+  describe('model-supplied cwd is confined to the workspace root (agent-do-gfp6)', () => {
+    /** A real temp root, so the host connector can attest both ends of the walk. */
+    function makeRoot(): string {
+      const root = mkdtempSync(join(tmpdir(), 'shell-cwd-'));
+      mkdirSync(join(root, 'sub'), { recursive: true });
+      ROOTS.push(root);
+      return root;
+    }
+
+    it('refuses an absolute cwd outside the root, before running anything', async () => {
+      const spy = vi.fn().mockResolvedValue({ stdout: 'leaked', stderr: '', exitCode: 0 });
+      const tools = createShellTool(createHostSandbox(), { cwd: makeRoot() });
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'cat passwd', cwd: '/etc' });
+      expect(r.blocked).toBe(true);
+      expect(r.data?.reason).toBe('cwd-outside-workspace');
+      expect(r.modelContent).toMatch(/^Refused: cwd/);
+      expect(r.modelContent).not.toMatch(/leaked/);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('refuses a `..` walk out of the root', async () => {
+      const root = makeRoot();
+      const tools = createShellTool(createHostSandbox(), { cwd: root });
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'cat passwd', cwd: '../../etc' });
+      expect(r.blocked).toBe(true);
+      expect(r.data?.reason).toBe('cwd-outside-workspace');
+    });
+
+    it('runs in a directory inside the root, and reports the cwd it used', async () => {
+      const root = makeRoot();
+      const tools = createShellTool(createHostSandbox(), { cwd: root });
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'pwd', cwd: 'sub' });
+      expect(r.blocked).toBeUndefined();
+      expect(r.data?.cwd).toBe(join(root, 'sub'));
+      expect(r.modelContent).toMatch(new RegExp(`sub\n`));
+    });
+
+    it('refuses a symlink that points out of the root, which is lexically inside it', async () => {
+      const root = makeRoot();
+      const outside = mkdtempSync(join(tmpdir(), 'shell-outside-'));
+      ROOTS.push(outside);
+      symlinkSync(outside, join(root, 'escape'));
+      const tools = createShellTool(createHostSandbox(), { cwd: root });
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'ls', cwd: 'escape' });
+      expect(r.blocked).toBe(true);
+      expect(r.data?.reason).toBe('cwd-outside-workspace');
+    });
+
+    it('refuses a path the connector cannot attest rather than trusting it', async () => {
+      const spy = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+      const tools = createShellTool(makeStubSandbox({ exec: spy }));
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'ls', cwd: '.' });
+      expect(r.blocked).toBe(true);
+      expect(r.data?.reason).toBe('cwd-unattestable');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('refuses an absolute cwd against a relative root, which no check can compare (agent-do-8iyt)', async () => {
+      // The reported escape: `relative('.', '/etc')` drops the leading slash and answers `etc`, so `/etc` looked like a
+      // child of `.`. A connector with stat but no realpath (allowed by the contract) could not expose the difference
+      // either, so the namespaces are now required to match before anything is compared.
+      const calls: unknown[] = [];
+      const sandbox = {
+        stat: async () => ({ isSymbolicLink: false }),
+        exec: async (_c: string, o: unknown) => {
+          calls.push(o);
+          return { stdout: 'PWD=/etc', stderr: '', exitCode: 0 };
+        },
+      } as unknown as SandboxApi;
+      const tools = createShellTool(sandbox); // root defaults to '.', which is relative
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'pwd', cwd: '/etc' });
+      expect(r.blocked).toBe(true);
+      expect(r.data?.reason).toBe('cwd-uncomparable');
+      expect(calls).toEqual([]); // nothing ran
+    });
+
+    it('still accepts an absolute cwd inside an absolute root', async () => {
+      const root = makeRoot();
+      const tools = createShellTool(createHostSandbox(), { workspaceRoot: root });
+      const exec = getExecute(tools);
+      const r = await exec({ command: 'pwd', cwd: join(root, 'sub') });
+      expect(r.blocked).toBeUndefined();
+      expect(r.data?.cwd).toBe(join(root, 'sub'));
+    });
+
+    it('leaves the tool\'s own default cwd alone, because that is the operator\'s choice', async () => {
+      const spy = vi.fn().mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+      const tools = createShellTool(makeStubSandbox({ exec: spy }), { cwd: '/somewhere/else' });
+      const exec = getExecute(tools);
+      await exec({ command: 'ls' });
+      expect(spy).toHaveBeenCalledWith('ls', { cwd: '/somewhere/else', timeout: 30_000 });
+    });
   });
 
   it('does not throw when the sandbox throws — surfaces an error ToolResult', async () => {
