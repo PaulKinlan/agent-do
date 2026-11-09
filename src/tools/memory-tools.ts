@@ -161,10 +161,28 @@ export function createMemoryTools(
           const rendered = entries
             .map((e) => `${e.type === 'directory' ? '[dir]' : '[file]'} ${escapeForLine(e.name)}`)
             .join('\n');
+          // Same guarding as the workspace listing tools (agent-do-nurl): memory keys are stored data
+          // (writable by any agent sharing the store), so the listing is framed, injection-marker
+          // redacted and size-capped before it reaches the model, like memory_read's content already is.
+          const wrapped = wrapForModel(rendered, {
+            tool: 'memory_list',
+            path: listPath,
+            maxBytes: maxReadBytes,
+          });
+          const boundNote = wrapped.truncated
+            ? `, truncated at ${maxReadBytes} bytes of ${wrapped.totalBytes}`
+            : '';
           return {
-            modelContent: rendered,
-            userSummary: `[memory_list] ${listPath} — ${entries.length} entries`,
-            data: { path: listPath, count: entries.length },
+            modelContent: wrapped.content,
+            userSummary: `[memory_list] ${listPath} — ${entries.length} entries${boundNote}`,
+            data: {
+              path: listPath,
+              count: entries.length,
+              truncated: wrapped.truncated,
+              totalBytes: wrapped.totalBytes,
+              redactedMarkerCount: wrapped.redactedMarkerCount,
+              neutralisedDelimiterCount: wrapped.neutralisedDelimiterCount,
+            },
           };
         } catch (err) {
           return errorResult(err, 'memory_list', listPath);
