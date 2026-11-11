@@ -418,7 +418,23 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   // matches) was refused on EVERY fresh write, its walks ending unattested purely
   // because of the error's shape. Recognise the errno name or an explicit
   // not-found phrase; everything else stays unattestable — fail-closed.
-  const message = err instanceof Error ? err.message : String(err ?? '');
+  //
+  // agent-do-ihxv: read the message from ANY thrown shape that carries one —
+  // Error instances, duck-typed { message } objects (a plain-JSON throw from a
+  // connector is indistinguishable in intent from an Error), and bare strings.
+  // What decides the outcome is the not-found PHRASE, not the wrapper it arrived in.
+  let message: string;
+  if (err instanceof Error) {
+    message = err.message;
+  } else if (
+    err !== null &&
+    typeof err === 'object' &&
+    typeof (err as { message?: unknown }).message === 'string'
+  ) {
+    message = (err as { message: string }).message;
+  } else {
+    message = typeof err === 'string' ? err : String(err ?? '');
+  }
   if (/\bENOENT\b|no such file|not found|does not exist/i.test(message)) return 'absent';
   return 'unattestable';
 }

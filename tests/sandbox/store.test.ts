@@ -216,6 +216,26 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
   });
 
+  it('a duck-typed non-Error throw carrying a not-found message is absent too (agent-do-ihxv)', async () => {
+    // The same not-found text thrown as a plain { name, message } object must
+    // classify the same way as the Error-instance form — the outcome turns on
+    // the PHRASE, not the wrapper.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw { name: 'NotFoundError', message: 'no such file or directory: ' + p };
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
   it('an unclassifiable stat error still refuses the walk (fail-closed preserved, agent-do-q8hd)', async () => {
     const noRealpath = new SandboxBackedMemoryStore(
       {
