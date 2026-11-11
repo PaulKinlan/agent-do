@@ -153,6 +153,15 @@ const MAX_MCP_SCHEMA_BYTES = 32 * 1024;
  * unsanitised leaks and no stack is risked.
  */
 const MAX_MCP_SCHEMA_DEPTH = 32;
+/**
+ * Aggregate metadata budget per SERVER (agent-do-0e4e): per-tool caps alone still
+ * let tool COUNT drive the blowout — a server listing 300 tools at 8 KB each puts
+ * 2.4 MB of description text into the tool declarations, and tool count is entirely
+ * server-controlled. The guard sums the guarded description + schema bytes of one
+ * server's tools and refuses the server past this budget (the existing
+ * all-or-nothing failure path); mount a subset with `allowedTools`.
+ */
+const MAX_MCP_SERVER_METADATA_BYTES = 512 * 1024;
 
 /** The permissive schema an oversized or too-deep server schema is replaced with. */
 const PERMISSIVE_SCHEMA: Record<string, unknown> = {
@@ -447,6 +456,8 @@ export async function mountMcpServers(
       await client.connect(transport);
 
       const { tools: mcpTools } = await client.listTools();
+      // agent-do-0e4e: aggregate metadata budget for THIS server (see the constant).
+      let serverMetadataBytes = 0;
       for (const mcpTool of mcpTools) {
         if (
           config.allowedTools &&
@@ -511,6 +522,17 @@ export async function mountMcpServers(
           (schemaResult.droppedProtoKeys.length > 0
             ? schemaProtoDroppedNote(schemaResult.droppedProtoKeys)
             : '');
+        // agent-do-0e4e: aggregate per-server budget, checked as each tool's guarded
+        // metadata is added. Refusing here flows into the mount's all-or-nothing
+        // failure path (previously-connected servers are closed).
+        serverMetadataBytes += utf8ByteLength(description) + utf8ByteLength(JSON.stringify(schemaResult.schema));
+        if (serverMetadataBytes > MAX_MCP_SERVER_METADATA_BYTES) {
+          throw new Error(
+            `MCP server "${config.name}" exceeds the ${MAX_MCP_SERVER_METADATA_BYTES}-byte aggregate ` +
+            `metadata budget at tool "${mcpTool.name}" (${serverMetadataBytes} bytes so far). ` +
+            'Mount a subset with allowedTools.',
+          );
+        }
 
         // Dynamic tool: schema is not known at compile time, so we route
         // through `jsonSchema()` to get a Schema the AI SDK can pass to
