@@ -246,10 +246,24 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
           droppedHere.push(key);
           continue;
         }
-        if ((key === 'description' || key === 'title') && typeof value === 'string') {
+        if (
+          typeof value === 'string' &&
+          (key === 'description' || key === 'title' || key === '$comment' || key === 'default')
+        ) {
+          // agent-do-gdec: default/$comment join description/title — all four are
+          // model-visible free text the model never needs to echo verbatim, so a
+          // hostile payload in any of them is the same bypass as the one the
+          // description guard closes.
           out[key] = truncateUtf8ByBytes(
             sanitiseUntrustedText(value).text,
             MAX_MCP_DESCRIPTION_BYTES,
+          );
+        } else if (key === 'examples' && Array.isArray(value)) {
+          // Same rule for the example VALUES: free text, not contract.
+          out[key] = value.map((v) =>
+            typeof v === 'string'
+              ? truncateUtf8ByBytes(sanitiseUntrustedText(v).text, MAX_MCP_DESCRIPTION_BYTES)
+              : walk(v, depth + 1, path),
           );
         } else {
           out[key] = walk(value, depth + 1, path ? `${path}.${key}` : key);
