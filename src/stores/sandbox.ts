@@ -412,6 +412,10 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   // what a symlink above it pointed at, so it is unattested.
   const code = (err as { code?: unknown } | null)?.code;
   if (code === 'ENOENT') return 'absent';
+  // agent-do-nw7h: a present code that is NOT ENOENT is authoritative — an
+  // EACCES/EIO/ELOOP refusal whose message happens to echo a not-found-looking
+  // path (the path is model-controlled) is never sniffed into 'absent'.
+  if (code !== undefined && code !== null && code !== '') return 'unattestable';
   // agent-do-q8hd: the contract only says stat must fail for a missing path — it
   // does not mandate the Node `code` field. A connector that reports not-found by
   // message alone (the same phrases the just-bash connector's own rm force-handling
@@ -422,7 +426,6 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   // agent-do-ihxv: read the message from ANY thrown shape that carries one —
   // Error instances, duck-typed { message } objects (a plain-JSON throw from a
   // connector is indistinguishable in intent from an Error), and bare strings.
-  // What decides the outcome is the not-found PHRASE, not the wrapper it arrived in.
   let message: string;
   if (err instanceof Error) {
     message = err.message;
@@ -435,24 +438,18 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   } else {
     message = typeof err === 'string' ? err : String(err ?? '');
   }
-  // agent-do-ql2p: the match runs on the message HEAD only. Error messages echo
-  // the path, and the path text is model-controlled — a component named
-  // 'not found/x' inside an EACCES refusal used to make the refusal read as
-  // 'absent' and stepped the walk past a component that exists. Two real shapes:
-  // quoted ('EACCES: permission denied, stat \'/path\'') — strip from the first
-  // quote; bare ('stat: no such file or directory: /path') — strip at the LAST
-  // ': ', which is where the path begins. Both leave only the code/phrase head
-  // for the match; a genuinely not-found message still matches, a path-echoed
-  // phrase inside a refusal does not.
-  let head = message;
-  const quote = head.indexOf("'");
-  if (quote !== -1) {
-    head = head.slice(0, quote);
-  } else {
-    const lastColon = head.lastIndexOf(': ');
-    if (lastColon !== -1) head = head.slice(0, lastColon);
+  // agent-do-nw7h: a refusal NEVER reads as absence. A code that says anything
+  // other than ENOENT (EACCES, EPERM, ...) is authoritative — the message and the
+  // model-controlled path it echoes are never sniffed. Uncoded messages get a
+  // refusal-word veto (position-free: 'prog: <path>: permission denied' and
+  // '... denied, stat /work/not found/x' both veto), and only then does the
+  // q8hd not-found phrase decide. Residual: an uncoded refusal whose message
+  // avoids every refusal word yet contains a not-found phrase is indistinguishable
+  // from a genuine not-found — the phrase wins there, as q8hd intended.
+  if (message !== '' && /denied|not permitted|forbidden|\be(?:acc|perm|io|loop|notdir)\b|\bEACCES\b|\bEPERM\b/i.test(message)) {
+    return 'unattestable';
   }
-  if (/\bENOENT\b|no such file|not found|does not exist/i.test(head)) return 'absent';
+  if (/\bENOENT\b|no such file|not found|does not exist/i.test(message)) return 'absent';
   return 'unattestable';
 }
 

@@ -216,6 +216,46 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
   });
 
+  it('an uncoded refusal with the reason AFTER the path still refuses (agent-do-nw7h R1)', async () => {
+    // 'stat failed: <path>: no such file' — the phrase follows the path, so any
+    // positional head-cut misses it; the phrase-anywhere rule (vetoed only by
+    // refusal words) classifies it absent.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('stat failed: ' + p + ': no such file');
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('an uncoded refusal with refusal words vetoed even when the path echoes not-found (agent-do-nw7h R2)', async () => {
+    // 'prog: <path>: permission denied' with a hostile path: no code, phrase in
+    // the path, refusal words in the reason — the veto wins, the walk refuses.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('prog: ' + p + ': permission denied');
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('not-found text inside the PATH of an EACCES refusal does not read as absent (agent-do-ql2p)', async () => {
     // The error message echoes the path, and the path is model-controlled: a
     // component named 'not found' inside an ordinary EACCES refusal must stay
