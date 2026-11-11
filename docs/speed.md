@@ -223,6 +223,20 @@ module graph for suites that are shown not to leak state (`--no-isolate`, measur
 suites reaching the central surfaces (R6/R7), or (3) a smaller static step. Until one of those lands, the
 numbers above are the truth and the bounds say so.
 
+### The gates suite split (agent-do-1o5o, 2026-11-11)
+
+`tests/gates.test.ts` had become the fleet's everyone-edits file: 20 landings in 30 days, 92 KB, and eight of
+those landings touched only the config-bound pins (readBound and the kill windows). Every such test-only
+amendment paid for the whole gate-behaviour suite — cached fast walls of **52-54 s**, close to the <=60 s
+budget, while it could not affect gate selection. The config-bound pins (readBound, countTraceAssignments,
+the two kill-window config pins, and the readBound behaviour suite) now live in
+**tests/gate-config-bounds.test.ts**; gate selection, teardown and fixture behaviour stay in
+`tests/gates.test.ts`. `tools/gen-suite-map.mjs` maps every `tools/*` change to BOTH suites (the hardcoded
+row and the coverage contract list both), so a gate script or config change still cannot land without both
+green. Measured: a test-only change to the config pins now selects and runs one suite (single-suite wall
+below), and a `tools/check.conf` change selects both suites with no material regression; the full gate is
+unaffected (serial whole-tree).
+
 ## 5. Changes the fast tier refuses (and why that is deliberate)
 
 `package.json`, `package-lock.json` and `vitest.config.ts` are **not in the map and not exempt**. The fast

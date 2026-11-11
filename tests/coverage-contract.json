@@ -976,6 +976,7 @@
     "tests/sandbox/host.test.ts"
   ],
   "tools/*": [
+    "tests/gate-config-bounds.test.ts",
     "tests/gates.test.ts"
   ]
 }

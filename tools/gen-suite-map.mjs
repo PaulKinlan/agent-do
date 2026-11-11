@@ -26,7 +26,8 @@
  *                                  does not read suite-map.tsv: it looks for a test file whose *name*
  *                                  corresponds to the changed file, and with no contract every module whose
  *                                  suite is not eponymous (`src/cli/args.ts` -> `tests/cli-args.test.ts`,
- *                                  every `tools/*.sh` -> `tests/gates.test.ts`) is published in the cached
+ *                                  every `tools/*` -> `tests/gates.test.ts` +
+ *                                  `tests/gate-config-bounds.test.ts`) is published in the cached
  *                                  record as `unmapped` at the moment its suites really did run. The
  *                                  contract file is the sanctioned hook for that oracle (it also makes the
  *                                  oracle a mode-(b) check, which the map cannot be: if the gate ever ran
@@ -205,9 +206,10 @@ for (const [file, set] of [...rows.entries()].sort((a, b) => a[0].localeCompare(
 lines.push(
   '',
   '# --- the gate is code, and tests/gates.test.ts is its suite -------------------------------------------',
-  'tools/*\ttests/gates.test.ts',
+  'tools/*\ttests/gates.test.ts tests/gate-config-bounds.test.ts',
   'scripts/*\ttests/build-script.test.ts',
   'tests/gates.test.ts\ttests/gates.test.ts',
+  'tests/gate-config-bounds.test.ts\ttests/gate-config-bounds.test.ts',
   'tests/coverage-contract.json\ttests/gates.test.ts',
   '',
   '# --- exemptions: no suite can cover these, and the reason is on the line ------------------------------',
@@ -237,7 +239,7 @@ const contract = {};
 for (const [file, set] of [...rows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
   contract[file] = [...set].sort();
 }
-contract['tools/*'] = ['tests/gates.test.ts'];
+contract['tools/*'] = ['tests/gate-config-bounds.test.ts', 'tests/gates.test.ts'];
 const generatedContract = `${JSON.stringify(contract, null, 2)}\n`;
 
 const mode = process.argv.includes('--check') ? 'check' : 'write';

@@ -79,7 +79,8 @@ src/
     warnings.ts       — startup "no sandbox" warning
 
 tests/              — vitest unit tests (one file per module)
-  gates.test.ts     — the gates' own suite (fail-loud, markers, the generated map's truth)
+  gates.test.ts     — gate behaviour: selection, teardown, fixtures (fail-loud, markers, the map's truth)
+  gate-config-bounds.test.ts — the config-bound pins (readBound, kill windows); tools/* maps to BOTH suites
   coverage-contract.json — GENERATED changed path -> suites for the FLEET's coverage extractor
 examples/           — focused single-feature examples (npx tsx examples/NN-name.ts)
 evals/              — eval suites: behaviour.ts (mock tier, CI) + quality.live.ts
@@ -291,9 +292,9 @@ This repo is tiered, and the tiers are the contract (`docs/speed.md`, `~/fleet/d
   unmapped: they can reach every suite, so the fast gate refuses them and the full gate pays. Say so on the
   bead when you need `fleet-check --full`.
 - **`tools/` is mapped and fast-gateable; `check.conf` is only *install*-blocked.** `tools/suite-map.tsv` maps
-  `tools/*` to `tests/gates.test.ts` — `bash tools/fast-gate.sh --list --changed tools/check.conf` prints
-  `tests/gates.test.ts` — so a change to the gate scripts, either `.conf` or `gen-suite-map.mjs` is selected and
-  run. What a lane cannot do is *install* it: `tools/install-gate.sh` refuses a `check.conf` that is not on
+  `tools/*` to `tests/gates.test.ts` AND `tests/gate-config-bounds.test.ts` — `bash tools/fast-gate.sh --list
+  --changed tools/check.conf` prints both — so a change to the gate scripts, either `.conf` or
+  `gen-suite-map.mjs` is selected and run in both suites. What a lane cannot do is *install* it: `tools/install-gate.sh` refuses a `check.conf` that is not on
   `origin/main`, so the gate that runs while you iterate obeys the installed windows, not your branch's
   (`docs/speed.md` §5). Run the fast gate anyway and say which window the verdict used.
 - **Tests must be independent** — no order dependence, no machine state, no other lane's files, no

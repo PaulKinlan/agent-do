@@ -98,9 +98,10 @@ src/usage.ts	tests/agent-trust.test.ts tests/browser-entry.test.ts tests/cli-age
 tests/sandbox/contract.ts	tests/sandbox/host.test.ts
 
 # --- the gate is code, and tests/gates.test.ts is its suite -------------------------------------------
-tools/*	tests/gates.test.ts
+tools/*	tests/gates.test.ts tests/gate-config-bounds.test.ts
 scripts/*	tests/build-script.test.ts
 tests/gates.test.ts	tests/gates.test.ts
+tests/gate-config-bounds.test.ts	tests/gate-config-bounds.test.ts
 tests/coverage-contract.json	tests/gates.test.ts
 
 # --- exemptions: no suite can cover these, and the reason is on the line ------------------------------
