@@ -525,7 +525,13 @@ export async function mountMcpServers(
         // agent-do-0e4e: aggregate per-server budget, checked as each tool's guarded
         // metadata is added. Refusing here flows into the mount's all-or-nothing
         // failure path (previously-connected servers are closed).
-        serverMetadataBytes += utf8ByteLength(description) + utf8ByteLength(JSON.stringify(schemaResult.schema));
+        // The NAMESPACED NAME is server-authored model-visible text too (qjh0):
+        // NAMESPACE_RE bounds its characters, not its length, so a 5MB name would
+        // ride past a budget that counted only description + schema.
+        serverMetadataBytes +=
+          utf8ByteLength(description) +
+          utf8ByteLength(toolName) +
+          utf8ByteLength(JSON.stringify(schemaResult.schema));
         if (serverMetadataBytes > MAX_MCP_SERVER_METADATA_BYTES) {
           throw new Error(
             `MCP server "${config.name}" exceeds the ${MAX_MCP_SERVER_METADATA_BYTES}-byte aggregate ` +
