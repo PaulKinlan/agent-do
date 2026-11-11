@@ -6,6 +6,7 @@
     "tests/conversation-history.test.ts",
     "tests/orchestrator.test.ts",
     "tests/permissions.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts"
   ],
@@ -28,6 +29,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -41,6 +43,7 @@
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/shellm.test.ts",
     "tests/trust-boundary.test.ts"
@@ -49,6 +52,7 @@
     "tests/agent-trust.test.ts",
     "tests/cli-agents.test.ts",
     "tests/cli-answer-stream.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/trust-boundary.test.ts"
   ],
@@ -56,6 +60,7 @@
     "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/args.ts": [
@@ -70,6 +75,7 @@
     "tests/cli-scheduled-tasks.test.ts",
     "tests/csv.test.ts",
     "tests/debug-observability.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/trust-boundary.test.ts"
@@ -78,6 +84,7 @@
     "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/debug-observability.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/eval-cmd.ts": [
@@ -88,6 +95,7 @@
     "tests/cli-answer-stream.test.ts",
     "tests/cli-permissions.test.ts",
     "tests/cli-prompt-stream.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/prompt.ts": [
@@ -106,6 +114,7 @@
     "tests/cli-scheduled-tasks.test.ts",
     "tests/csv.test.ts",
     "tests/debug-observability.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/trust-boundary.test.ts"
@@ -114,6 +123,7 @@
     "tests/cli-answer-stream.test.ts",
     "tests/cli-prompt-stream.test.ts",
     "tests/cli-render.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/resolve-model.ts": [
@@ -129,6 +139,7 @@
     "tests/csv.test.ts",
     "tests/debug-observability.test.ts",
     "tests/resolve-model.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/trust-boundary.test.ts",
@@ -140,6 +151,7 @@
   ],
   "src/cli/script.ts": [
     "tests/cli-answer-stream.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/cli/shellm.ts": [
@@ -156,6 +168,7 @@
     "tests/cli-render.test.ts",
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-terminal-safety.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/shellm.test.ts",
     "tests/trust-boundary.test.ts"
@@ -166,6 +179,7 @@
     "tests/cli-scheduled-tasks.test.ts",
     "tests/cli-warnings.test.ts",
     "tests/csv.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/csv.ts": [
@@ -188,6 +202,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -209,6 +224,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -247,6 +263,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/shellm.test.ts",
     "tests/skills.test.ts",
@@ -276,6 +293,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -297,6 +315,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -332,6 +351,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -366,6 +386,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -389,6 +410,7 @@
     "tests/policies.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -427,6 +449,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -447,6 +470,7 @@
     "tests/sandbox/host.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -469,6 +493,7 @@
     "tests/sandbox/just-bash.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -502,6 +527,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -537,6 +563,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/skills.test.ts",
     "tests/slash-commands.test.ts",
@@ -560,6 +587,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -581,6 +609,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -602,6 +631,7 @@
     "tests/path-resolution.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
     "tests/trust-boundary.test.ts",
@@ -617,6 +647,7 @@
     "tests/path-resolution.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
     "tests/trust-boundary.test.ts",
@@ -630,6 +661,7 @@
     "tests/deny-list.test.ts",
     "tests/file-lock.test.ts",
     "tests/filesystem-store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -643,6 +675,7 @@
     "tests/deny-list.test.ts",
     "tests/file-lock.test.ts",
     "tests/filesystem-store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
     "tests/trust-boundary.test.ts",
@@ -668,6 +701,7 @@
     "tests/path-resolution.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -687,6 +721,7 @@
     "tests/path-resolution.test.ts",
     "tests/sandbox/shell-tool.test.ts",
     "tests/sandbox/store.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
     "tests/trust-boundary.test.ts",
@@ -708,6 +743,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -745,6 +781,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -785,6 +822,7 @@
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
     "tests/sandbox/shell-tool.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -802,6 +840,7 @@
     "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -813,6 +852,7 @@
     "tests/deny-list.test.ts",
     "tests/eval-runner.test.ts",
     "tests/file-tools.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -822,6 +862,7 @@
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
     "tests/memory-tools.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts"
   ],
   "src/tools/provider-output-guard.ts": [
@@ -840,6 +881,7 @@
     "tests/permissions.test.ts",
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -872,6 +914,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/sandbox/shell-tool.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/slash-commands.test.ts",
     "tests/system-prompt-delivery.test.ts",
@@ -885,6 +928,7 @@
     "tests/cli-prompt-stream.test.ts",
     "tests/conversation-history.test.ts",
     "tests/deny-list.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/script-import.test.ts",
     "tests/workspace-tools.test.ts"
   ],
@@ -918,6 +962,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",
@@ -960,6 +1005,7 @@
     "tests/provider-output-guard.test.ts",
     "tests/provider-tool-loop.test.ts",
     "tests/routines.test.ts",
+    "tests/saved-agent-resume.test.ts",
     "tests/scheduled-tasks.test.ts",
     "tests/script-import.test.ts",
     "tests/search-redos.test.ts",

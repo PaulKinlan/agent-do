@@ -461,7 +461,7 @@ export async function runScriptMode(args: ParsedArgs): Promise<void> {
   if (sawError) process.exit(1);
 }
 
-async function runSavedAgent(
+export async function runSavedAgent(
   saved: import('./agents.js').SavedAgent,
   args: ParsedArgs,
 ): Promise<void> {
@@ -471,9 +471,13 @@ async function runSavedAgent(
   // Resolve effective flags BEFORE the warning, otherwise (per Codex's
   // P2 on PR #47) `npx agent-do run <saved> --no-tools` would suppress
   // the warning while a saved agent with `noTools: false` still ran
-  // with full file access. Saved-agent config wins because that's
-  // what actually drives `tools` below.
-  const effectiveNoTools = saved.noTools;
+  // with full file access.
+  //
+  // The operator's flags can only RESTRICT a saved agent, never expand it (agent-do-u3bv): the saved
+  // config grants capabilities, the command line takes them away. `--no-tools` used to be ignored
+  // entirely (the old "saved config wins" reading) — an operator disabling tools on a writable saved
+  // agent got full file access anyway. Both restricting flags now OR in.
+  const effectiveNoTools = saved.noTools || args.noTools;
   const effectiveReadOnly = saved.readOnly || args.readOnly;
   emitSandboxWarning({
     toolsEnabled: !effectiveNoTools,
@@ -492,7 +496,7 @@ async function runSavedAgent(
     });
     if (saved.withMemory || args.withMemory) {
       const memStore = new FilesystemMemoryStore(saved.memoryDir, {
-        readOnly: saved.readOnly,
+        readOnly: effectiveReadOnly,
       });
       tools = { ...tools, ...createMemoryTools(memStore, agentId) };
     }
