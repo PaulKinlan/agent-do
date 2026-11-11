@@ -61,8 +61,11 @@ export interface SandboxApi {
    * Optional capability — return the canonical absolute path for
    * `path`, resolving symlinks. Connectors whose substrate doesn't
    * have symlinks (e.g. just-bash's virtual fs) MAY omit this; the
-   * generic store treats absence as "no symlinks to resolve" and
-   * skips the canonical containment check.
+   * resolvers then end their walk lexically. Absence does NOT skip
+   * the walk: `stat()` (required, lstat semantics) still reports
+   * symlinks, and a link the connector can see but cannot read is
+   * refused, never judged by the link's own name (agent-do-34f,
+   * agent-do-ws1u).
    *
    * Beyond the symlink case, the host connector implements this with
    * `node:fs/promises.realpath`, which is what allows

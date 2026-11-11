@@ -88,9 +88,11 @@ export class SandboxBackedMemoryStore implements MemoryStore {
    *    is what keeps a `link → ../other-tenant` symlink from letting
    *    one agent write into another's directory.
    *
-   * Connectors that don't expose `realpath` (e.g. just-bash's virtual
-   * fs has no symlinks) skip step 2 — the string check is sufficient
-   * for substrates without symlinks.
+   * Connectors that don't expose `realpath` still get the walk: `stat()`
+   * (which the contract REQUIRES, with lstat semantics) reports symlinks on
+   * its own, so the walk ends lexically only for substrates that genuinely
+   * have no links — and a link the connector can see but cannot read is
+   * refused, never judged by the link's own name (agent-do-34f, agent-do-ws1u).
    */
   private async resolve(agentId: string, filePath: string): Promise<string> {
     validateAgentId(agentId);
@@ -104,8 +106,11 @@ export class SandboxBackedMemoryStore implements MemoryStore {
       ? (`${base}${agentSegment}` || '/')
       : `${base}${agentSegment}/${normalised}`;
 
-    if (!this.sandbox.realpath) return joined;
-
+    // No capability short-circuit here: the walk below runs whether or not the connector has
+    // `realpath`, because its `stat()` (lstat semantics, required on the contract) can report a
+    // symlink on its own — just-bash does, via `[ -L ]`. Returning `joined` un-walked for a
+    // no-realpath connector judged a planted link by its own name and re-opened the
+    // `alias -> ../other-tenant` leak this file exists to close (agent-do-34f, agent-do-ws1u).
     const agentRoot = `${base}${agentSegment}` || '/';
     const resolvedRoot = await realpathSafe(this.sandbox, agentRoot, POSIX_PATH_API);
     const resolved = await realpathSafe(this.sandbox, joined, POSIX_PATH_API);

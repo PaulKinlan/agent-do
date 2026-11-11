@@ -102,6 +102,11 @@ describe('SandboxBackedMemoryStore', () => {
     // permission-style error.
     const failing = new SandboxBackedMemoryStore(
       {
+        // Contract-valid stat: the resolver must be able to attest the path so
+        // the read itself is what surfaces the connector's EACCES.
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async readFile() {
           const e = new Error('EACCES: permission denied');
           (e as NodeJS.ErrnoException).code = 'EACCES';
@@ -118,6 +123,11 @@ describe('SandboxBackedMemoryStore', () => {
     // file is still on disk, and reporting "deleted" would be a lie.
     const failing = new SandboxBackedMemoryStore(
       {
+        // Same contract-valid stat as the read test above: without it the
+        // resolver refuses before delete can surface the connector's error.
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async rm() {
           const e = new Error('EACCES: permission denied');
           (e as NodeJS.ErrnoException).code = 'EACCES';
@@ -164,13 +174,16 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(store.write('alice', 'loop-a', 'pwned')).rejects.toThrow(/Path traversal via symlink/);
   });
 
-  it('skips canonical containment check when the connector lacks realpath', async () => {
-    // Connectors without `realpath` (e.g. just-bash's virtual fs) get
-    // string-only path normalisation. Verify that no realpath-shaped
-    // call is required for them.
+  it('a connector without realpath still walks: plain paths resolve lexically (agent-do-ws1u)', async () => {
+    // Connectors without `realpath` (e.g. just-bash's virtual fs) do NOT get
+    // string-only normalisation any more: the stat-based walk runs and ends
+    // lexically for genuinely link-free paths.
     const writes: Array<{ path: string; content: string | Uint8Array }> = [];
     const noRealpath = new SandboxBackedMemoryStore(
       {
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async writeFile(p: string, content: string | Uint8Array) {
           writes.push({ path: p, content });
         },
@@ -180,5 +193,27 @@ describe('SandboxBackedMemoryStore', () => {
     );
     await noRealpath.write('agent1', 'note.txt', 'hi');
     expect(writes[0]?.path).toBe('/work/agent1/note.txt');
+  });
+
+  it('a connector without realpath but WITH symlink-reporting stat refuses a planted link (agent-do-ws1u)', async () => {
+    // agent-do-34f's exact shape, re-closed for the memory store: the connector
+    // cannot canonicalise (no `realpath`) but its `stat()` can see the link
+    // (just-bash's `[ -L ]`). Judging the alias by its own name let
+    // `alias -> ../bob/secret.txt` cross tenants; the walk must refuse it
+    // because a link that is visible but unreadable (no `readlink`) is
+    // unattested.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p.endsWith('/alias')) return { isSymbolicLink: true, isFile: () => false, isDirectory: () => false } as unknown as import('../../src/sandbox/types.js').FileStat;
+          return { isSymbolicLink: false, isFile: () => true, isDirectory: () => false } as unknown as import('../../src/sandbox/types.js').FileStat;
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'alias', 'pwned'))
+      .rejects.toThrow(/Path traversal via symlink/);
   });
 });
