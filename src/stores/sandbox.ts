@@ -438,18 +438,21 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   } else {
     message = typeof err === 'string' ? err : String(err ?? '');
   }
-  // agent-do-nw7h: a refusal NEVER reads as absence. A code that says anything
-  // other than ENOENT (EACCES, EPERM, ...) is authoritative — the message and the
-  // model-controlled path it echoes are never sniffed. Uncoded messages get a
-  // refusal-word veto (position-free: 'prog: <path>: permission denied' and
-  // '... denied, stat /work/not found/x' both veto), and only then does the
-  // q8hd not-found phrase decide. Residual: an uncoded refusal whose message
-  // avoids every refusal word yet contains a not-found phrase is indistinguishable
-  // from a genuine not-found — the phrase wins there, as q8hd intended.
-  if (message !== '' && /denied|not permitted|forbidden|\be(?:acc|perm|io|loop|notdir)\b|\bEACCES\b|\bEPERM\b/i.test(message)) {
-    return 'unattestable';
-  }
-  if (/\bENOENT\b|no such file|not found|does not exist/i.test(message)) return 'absent';
+  // agent-do-nw7h + agent-do-g3ib: for uncoded messages, classify PER SEGMENT,
+  // split on ': '. A segment that starts with a quote or '/' is the echoed PATH
+  // — model-controlled, so its text neither vetoes nor attests: refusal words in
+  // a path ('/work/denied-rides/x' that is genuinely missing) must not veto, and
+  // not-found phrases in a path must not attest. Only REASON segments decide:
+  // refusal wording vetoes (fail-closed), then a not-found phrase attests.
+  // Residual: an uncoded refusal whose reason avoids every refusal word yet
+  // contains a not-found phrase is indistinguishable from a genuine not-found —
+  // the phrase wins there, as q8hd intended.
+  const segments = message.split(': ');
+  const isPathSegment = (seg: string): boolean => seg.startsWith("'") || seg.startsWith('/');
+  const refusal = segments.some((seg) => !isPathSegment(seg) && /denied|not permitted|forbidden|EACCES|EPERM|ELOOP|EIO|ENOTDIR/i.test(seg));
+  if (refusal) return 'unattestable';
+  const notFound = segments.some((seg) => !isPathSegment(seg) && /\bENOENT\b|no such file|not found|does not exist/i.test(seg));
+  if (notFound) return 'absent';
   return 'unattestable';
 }
 
