@@ -240,12 +240,12 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
 
   let depthOverrun = false;
   const droppedProtoKeys: string[] = [];
-  const walk = (node: unknown, depth: number, path: string): unknown => {
+  const walk = (node: unknown, depth: number, path: string, inMetadata = false): unknown => {
     if (depth > MAX_MCP_SCHEMA_DEPTH) {
       depthOverrun = true;
       return node;
     }
-    if (Array.isArray(node)) return node.map((v) => walk(v, depth + 1, path));
+    if (Array.isArray(node)) return node.map((v) => walk(v, depth + 1, path, inMetadata));
     if (node !== null && typeof node === 'object') {
       const out: Record<string, unknown> = {};
       const droppedHere: string[] = [];
@@ -262,7 +262,20 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
           droppedHere.push(key);
           continue;
         }
-        if (key === 'properties' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        // agent-do-goj2: inside a default/example SUBTREE every string is free
+        // text — there is no schema structure there to preserve, so sanitise all
+        // of it and skip the schema-semantic branches entirely below.
+        if (
+          inMetadata &&
+          typeof value === 'string'
+        ) {
+          out[key] = truncateUtf8ByBytes(
+            sanitiseUntrustedText(value).text,
+            MAX_MCP_DESCRIPTION_BYTES,
+          );
+          continue;
+        }
+        if (!inMetadata && key === 'properties' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
           // Walk the properties sibling directly so the names dropped from it are
           // known HERE, where the matching `required` lives.
           const childOut: Record<string, unknown> = {};
@@ -293,14 +306,22 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
             MAX_MCP_DESCRIPTION_BYTES,
           );
         } else if (key === 'examples' && Array.isArray(value)) {
-          // Same rule for the example VALUES: free text, not contract.
+          // Same rule for the example VALUES: free text, not contract — string
+          // elements sanitised here, object elements walked as metadata (goj2).
           out[key] = value.map((v) =>
             typeof v === 'string'
               ? truncateUtf8ByBytes(sanitiseUntrustedText(v).text, MAX_MCP_DESCRIPTION_BYTES)
-              : walk(v, depth + 1, path),
+              : walk(v, depth + 1, path, true),
           );
+        } else if (key === 'default') {
+          // agent-do-goj2: a structured default is data, not schema — every string
+          // inside it is model-visible free text.
+          out[key] = walk(value, depth + 1, path, true);
         } else {
-          out[key] = walk(value, depth + 1, path ? `${path}.${key}` : key);
+          // inMetadata propagates: nested objects under a default/example are all
+          // metadata (agent-do-goj2 — the flag loss here re-opened the bypass one
+          // level deep).
+          out[key] = walk(value, depth + 1, path ? `${path}.${key}` : key, inMetadata);
         }
       }
       if (droppedHere.length > 0 && Array.isArray(out.required)) {
