@@ -24,11 +24,13 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { dynamicTool, jsonSchema, type ToolSet } from 'ai';
 import {
+  escapeForLine,
   sanitiseUntrustedText,
   truncateUtf8ByBytes,
   utf8ByteLength,
   wrapForModel,
 } from './tools/content-guards.js';
+import { sanitiseForTerminal } from './cli/terminal-safety.js';
 import type { AgentConfig } from './types.js';
 
 /**
@@ -502,12 +504,17 @@ export async function mountMcpServers(
         // descriptions. The tool is not mounted, so there is no collision to
         // protect against by throwing; the warning keeps the skip visible.
         if (!NAMESPACE_RE.test(mcpTool.name)) {
-          // console.error, not process.stderr.write — this module is in the browser
-          // entry graph, where a free `process` reference is forbidden (GH #139).
+          // agent-do-twpi: the NAME is untrusted — escape it for one-line output
+          // (newlines would forge '[mcp]' log lines, ANSI escapes corrupt the
+          // terminal) and cap it, or 500 skipped tools × megabyte names flood
+          // stderr. console.error, not process.stderr.write — this module is in
+          // the browser entry graph, where a free `process` reference is
+          // forbidden (GH #139).
           console.error(
-            `[mcp] skipping tool "${mcpTool.name}" from server "${config.name}": its name does not match ` +
-            `${NAMESPACE_RE} — names containing "__" or other unsafe characters would collide in the ` +
-            'namespaced tool set.',
+            `[mcp] skipping tool "${escapeForLine(sanitiseForTerminal(truncateUtf8ByBytes(mcpTool.name, 200)))}"` +
+            `${mcpTool.name.length > 200 ? ` (+${mcpTool.name.length - 200} chars)` : ''} from server "${config.name}": ` +
+            `its name does not match ${NAMESPACE_RE} — names containing "__" or other unsafe characters ` +
+            'would collide in the namespaced tool set.',
           );
           continue;
         }
