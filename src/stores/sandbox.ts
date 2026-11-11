@@ -407,7 +407,16 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   // wrong: "there is a file where a directory belongs" still says nothing about
   // what a symlink above it pointed at, so it is unattested.
   const code = (err as { code?: unknown } | null)?.code;
-  return code === 'ENOENT' ? 'absent' : 'unattestable';
+  if (code === 'ENOENT') return 'absent';
+  // agent-do-q8hd: the contract only says stat must fail for a missing path — it
+  // does not mandate the Node `code` field. A connector that reports not-found by
+  // message alone (the same phrases the just-bash connector's own rm force-handling
+  // matches) was refused on EVERY fresh write, its walks ending unattested purely
+  // because of the error's shape. Recognise the errno name or an explicit
+  // not-found phrase; everything else stays unattestable — fail-closed.
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (/\bENOENT\b|no such file|not found|does not exist/i.test(message)) return 'absent';
+  return 'unattestable';
 }
 
 /**

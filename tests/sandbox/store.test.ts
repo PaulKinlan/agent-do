@@ -195,6 +195,44 @@ describe('SandboxBackedMemoryStore', () => {
     expect(writes[0]?.path).toBe('/work/agent1/note.txt');
   });
 
+  it('a connector reporting not-found by MESSAGE (uncoded) still walks on fresh writes (agent-do-q8hd)', async () => {
+    // The contract says stat must fail for a missing path; it does not mandate
+    // the Node `code` field. Before the fix, classifyError accepted only
+    // code==='ENOENT', so this connector was refused on every fresh write while
+    // its ENOENT-coded twin succeeded — the outcome turned on error shape alone.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error("stat: no such file or directory: " + p);
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('an unclassifiable stat error still refuses the walk (fail-closed preserved, agent-do-q8hd)', async () => {
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat() {
+          const e = new Error('EACCES: permission denied');
+          (e as NodeJS.ErrnoException).code = 'EACCES';
+          throw e;
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('a connector without realpath but WITH symlink-reporting stat refuses a planted link (agent-do-ws1u)', async () => {
     // agent-do-34f's exact shape, re-closed for the memory store: the connector
     // cannot canonicalise (no `realpath`) but its `stat()` can see the link
