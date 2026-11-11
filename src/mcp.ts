@@ -490,11 +490,19 @@ export async function mountMcpServers(
         // Reject tool names that contain the `__` separator — same
         // rationale as the server namespace (a `tool.name` with `__`
         // would collide with other (server, tool) pairs when flattened
-        // to `mcp__<server>__<tool>`). Codex #75.
+        // to `mcp__<server>__<tool>`). Codex #75. agent-do-3uji: SKIP the
+        // offending tool with a loud warning instead of throwing — one hostile
+        // or buggy tool name used to abort the mount of every configured
+        // server (all-or-nothing), the same take-down shape f7io fixed for
+        // descriptions. The tool is not mounted, so there is no collision to
+        // protect against by throwing; the warning keeps the skip visible.
         if (!NAMESPACE_RE.test(mcpTool.name)) {
-          throw new TypeError(
-            `MCP server "${config.name}" exposes tool "${mcpTool.name}" which does not match ${NAMESPACE_RE} — names containing "__" or other unsafe characters would collide in the namespaced tool set.`,
+          process.stderr.write(
+            `[mcp] skipping tool "${mcpTool.name}" from server "${config.name}": its name does not match ` +
+            `${NAMESPACE_RE} — names containing "__" or other unsafe characters would collide in the ` +
+            'namespaced tool set.\n',
           );
+          continue;
         }
 
         const toolName = namespacedToolName(config.name, mcpTool.name);

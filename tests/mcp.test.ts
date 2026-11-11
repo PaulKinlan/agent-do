@@ -409,11 +409,12 @@ describe('mountMcpServers (#75)', () => {
       ],
     });
 
-    await expect(
-      mountMcpServers([
-        { name: 'srv', transport: { type: 'stdio', command: 'noop' } },
-      ]),
-    ).rejects.toThrow(/match/);
+    // agent-do-3uji: the offending tool is SKIPPED with a loud warning instead of
+    // aborting the mount of every configured server; the healthy tool mounts.
+    const { tools } = await mountMcpServers([
+      { name: 'srv', transport: { type: 'stdio', command: 'noop' } },
+    ]);
+    expect(Object.keys(tools)).toEqual(['mcp__srv__ok_name']);
   });
 
   it('close() is idempotent', async () => {
@@ -895,5 +896,21 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     expect(js).not.toContain('ignore previous instructions');
     expect(js).toContain('[redacted');
     expect(js).toContain('[redacted');
+  });
+
+  it('a tool with an unsafe name is skipped with a warning, not a mount abort (agent-do-3uji)', async () => {
+    // One hostile tool name used to throw from mountMcpServers and, all-or-
+    // nothing, close every configured server. Now the tool is skipped loudly
+    // and the healthy tools mount.
+    stubClient.listTools.mockResolvedValue({
+      tools: [
+        { name: 'bad__name', description: 'd', inputSchema: { type: 'object', properties: {} } },
+        { name: 'good_tool', description: 'd', inputSchema: { type: 'object', properties: {} } },
+      ],
+    });
+    const { tools } = await mountMcpServers([
+      { name: 'srv11', transport: { type: 'stdio', command: 'noop' } },
+    ]);
+    expect(Object.keys(tools)).toEqual(['mcp__srv11__good_tool']);
   });
 });
