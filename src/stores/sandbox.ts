@@ -80,13 +80,14 @@ export class SandboxBackedMemoryStore implements MemoryStore {
    *    and an attempt to outpace the leading segments rejects with
    *    "Path traversal not allowed". Cheap, runs always.
    *
-   * 2. **Canonical containment.** If the connector exposes
-   *    {@link SandboxApi.realpath}, we resolve both the agent root and
-   *    the requested path to canonical form (walking up to the deepest
-   *    existing ancestor for not-yet-created paths) and verify the
-   *    canonical path is still inside the canonical agent root. This
-   *    is what keeps a `link → ../other-tenant` symlink from letting
-   *    one agent write into another's directory.
+   * 2. **Canonical containment.** The walk always runs (agent-do-ws1u):
+   *    with {@link SandboxApi.realpath} the walk ends at a canonical
+   *    attestation of the agent root and the requested path (walking up to
+   *    the deepest existing ancestor for not-yet-created paths); without
+   *    it, `stat()` inspects every component. Either way the answer is
+   *    verified to be inside the agent root. This is what keeps a
+   *    `link → ../other-tenant` symlink from letting one agent write into
+   *    another's directory.
    *
    * Connectors that don't expose `realpath` still get the walk: `stat()`
    * (which the contract REQUIRES, with lstat semantics) reports symlinks on
