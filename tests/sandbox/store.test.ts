@@ -236,6 +236,31 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
   });
 
+  it('an uncoded refusal with unrecognised wording and a phrase-echoing path refuses (agent-do-45rh)', async () => {
+    // 'Input/output error' misses the refusal-word veto list, and the path echoes
+    // a not-found phrase: the only not-found evidence sits in model-controlled
+    // path text, which is ambiguous by construction — the walk must refuse.
+    const writes: Array<{ path: string }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('Input/output error: ' + p);
+        },
+        async writeFile(p: string) {
+          writes.push({ path: p });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+    expect(writes).toHaveLength(0);
+  });
+
   it('a genuine not-found whose PATH contains a veto word still resolves (agent-do-g3ib)', async () => {
     // Mirror of nw7h R2: the veto must not read the echoed path either — a real
     // missing file under '/work/denied-rides/' is absent, not a refusal.

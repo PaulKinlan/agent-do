@@ -438,21 +438,27 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   } else {
     message = typeof err === 'string' ? err : String(err ?? '');
   }
-  // agent-do-nw7h + agent-do-g3ib: for uncoded messages, classify PER SEGMENT,
-  // split on ': '. A segment that starts with a quote or '/' is the echoed PATH
-  // — model-controlled, so its text neither vetoes nor attests: refusal words in
-  // a path ('/work/denied-rides/x' that is genuinely missing) must not veto, and
-  // not-found phrases in a path must not attest. Only REASON segments decide:
-  // refusal wording vetoes (fail-closed), then a not-found phrase attests.
-  // Residual: an uncoded refusal whose reason avoids every refusal word yet
-  // contains a not-found phrase is indistinguishable from a genuine not-found —
-  // the phrase wins there, as q8hd intended.
+  // agent-do-nw7h + agent-do-g3ib + agent-do-45rh: for uncoded messages, classify
+  // PER SEGMENT, split on ': '. A segment that starts with a quote or '/' is the
+  // echoed PATH — model-controlled, so its text NEVER decides: refusal words in a
+  // path ('/work/denied-rides/x') do not veto (g3ib), and not-found phrases in a
+  // path do not attest (45rh: 'Input/output error: /work/alice/not found/x' has
+  // no recognisable refusal wording and no reason-side phrase — the ambiguous
+  // combination attests NOTHING and the walk refuses). Only REASON segments
+  // decide: refusal wording vetoes; a not-found phrase that appears ONLY in
+  // reasons attests; a phrase that appears in the path too is ambiguous (the
+  // reason may be describing the model-chosen path, not the error) and refuses.
   const segments = message.split(': ');
   const isPathSegment = (seg: string): boolean => seg.startsWith("'") || seg.startsWith('/');
-  const refusal = segments.some((seg) => !isPathSegment(seg) && /denied|not permitted|forbidden|EACCES|EPERM|ELOOP|EIO|ENOTDIR/i.test(seg));
+  const refusal = segments.some((seg) => !isPathSegment(seg) && /denied|not permitted|forbidden|EACCES|EPERM|ELOOP|EIO|ENOTDIR|input\/output error/i.test(seg));
   if (refusal) return 'unattestable';
-  const notFound = segments.some((seg) => !isPathSegment(seg) && /\bENOENT\b|no such file|not found|does not exist/i.test(seg));
-  if (notFound) return 'absent';
+  const NOT_FOUND = /\bENOENT\b|no such file|not found|does not exist/i;
+  const phraseInReason = segments.some((seg) => !isPathSegment(seg) && NOT_FOUND.test(seg));
+  const phraseInPath = segments.some((seg) => isPathSegment(seg) && NOT_FOUND.test(seg));
+  // Ambiguous: the only not-found evidence sits in model-controlled path text —
+  // an uncoded refusal with unusual wording rides exactly here. Attest nothing.
+  if (phraseInPath) return 'unattestable';
+  if (phraseInReason) return 'absent';
   return 'unattestable';
 }
 
