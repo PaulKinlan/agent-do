@@ -826,4 +826,20 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     ]);
     expect(Object.keys(tools)).toEqual(['mcp__greedy2__tool_1', 'mcp__greedy2__tool_2']);
   });
+
+  it('a giant tool NAME counts into the aggregate budget (agent-do-qjh0)', async () => {
+    // NAMESPACE_RE bounds characters, not length: a server listing one tool with
+    // a ~600KB name must hit the 512KB aggregate budget — the name is
+    // server-authored model-visible text like any other.
+    const longName = 'a'.repeat(600 * 1024);
+    stubClient.listTools.mockResolvedValue({
+      tools: [{ name: longName, description: 'd', inputSchema: { type: 'object', properties: {} } }],
+    });
+    await expect(
+      mountMcpServers([
+        { name: 'srv8', transport: { type: 'stdio', command: 'noop' } },
+      ]),
+    ).rejects.toThrow(/aggregate.*budget/s);
+    expect(stubClient.close).toHaveBeenCalled();
+  });
 });
