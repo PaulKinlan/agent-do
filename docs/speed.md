@@ -233,9 +233,11 @@ the two kill-window config pins, and the readBound behaviour suite) now live in
 **tests/gate-config-bounds.test.ts**; gate selection, teardown and fixture behaviour stay in
 `tests/gates.test.ts`. `tools/gen-suite-map.mjs` maps every `tools/*` change to BOTH suites (the hardcoded
 row and the coverage contract list both), so a gate script or config change still cannot land without both
-green. Measured: a test-only change to the config pins now selects and runs one suite (single-suite wall
-below), and a `tools/check.conf` change selects both suites with no material regression; the full gate is
-unaffected (serial whole-tree).
+green. Measured 2026-11-11 on this VM: a test-only change to the config pins selects one suite and the
+fast gate wall is **6.4 s** (warm static 4 s + the suite) against the 52-54 s baseline - ~8x under, well
+inside the <=30 s target; a `tools/check.conf` change selects both suites and ran **67.6 s** (static 27 s
+under load + both suites) - the pre-split tools/* case paid the same static plus the whole 92 KB suite
+(~60-75 s), so no material regression; the full gate is serial whole-tree and unaffected.
 
 ## 5. Changes the fast tier refuses (and why that is deliberate)
 
