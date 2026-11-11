@@ -463,10 +463,21 @@ export async function mountMcpServers(
         // `NAMESPACE_RE`-validated names — our text, not the server's — so it
         // needs no guard. A replaced schema is announced either way, because it
         // changes what the model may assume about argument shapes.
+        // agent-do-f7io: the wire type of `description` is whatever the server
+        // sent — the SDK's TS type says string, but a hostile or buggy server can
+        // send a number/object, and the guard would throw on it and (all-or-nothing)
+        // take down every configured server. A non-string description carries no
+        // readable metadata, so it is treated as absent: built-in fallback, plus a
+        // note so the substitution is not silent.
+        const serverDescription =
+          typeof mcpTool.description === 'string' ? mcpTool.description : undefined;
         const description =
-          (mcpTool.description != null
-            ? guardMcpToolDescription(config.name, mcpTool.description)
+          (serverDescription !== undefined
+            ? guardMcpToolDescription(config.name, serverDescription)
             : `MCP tool "${mcpTool.name}" from server "${config.name}".`) +
+          (serverDescription === undefined && mcpTool.description != null
+            ? `\n[agent-do: server sent a non-string description (${typeof mcpTool.description}) — using the built-in fallback]`
+            : '') +
           (schemaResult.replaced ? schemaReplacedNote() : '') +
           (schemaResult.droppedProtoKeys.length > 0
             ? schemaProtoDroppedNote(schemaResult.droppedProtoKeys)

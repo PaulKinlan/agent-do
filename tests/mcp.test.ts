@@ -719,4 +719,22 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     expect(js).toContain('42');
     expect(js).not.toContain('[redacted');
   });
+
+  it('a non-string description falls back instead of throwing at mount (agent-do-f7io)', async () => {
+    stubClient.listTools.mockResolvedValue({
+      tools: [
+        {
+          name: 't5',
+          description: 42,
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    });
+    const { tools } = await mountMcpServers([
+      { name: 'srv5', transport: { type: 'stdio', command: 'noop' } },
+    ]);
+    const tool = tools['mcp__srv5__t5'] as { description: string };
+    expect(tool.description).toContain('MCP tool "t5" from server "srv5"');
+    expect(tool.description).toContain('non-string description (number)');
+  });
 });
