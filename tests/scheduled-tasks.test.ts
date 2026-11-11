@@ -314,5 +314,32 @@ describe('runScheduledTask', () => {
     expect(res.skipped).toBe(true);
     expect(ran).toBe(false);
     await holder.release();
+    // agent-do-l1bz: the skip must be VISIBLE in the status file — it used to be recorded as plain
+    // 'ok', masking the fact that this firing never executed.
+    const status = await readStatus(sf);
+    expect(status.sweep?.lastOutcome).toBe('skipped');
+  });
+
+  it('a skip does not overwrite the outcome of the last real run with ok (agent-do-l1bz)', async () => {
+    const sf = join(dir, 'status.json');
+    const { acquireFileLock } = await import('../src/stores/file-lock.js');
+    // A real failing run first: status records 'error'.
+    await runScheduledTask('flappy', {
+      memoryDir: dir, statusFile: sf,
+      run: async () => { throw new Error('boom'); },
+      payload: 'x',
+    });
+    expect((await readStatus(sf)).flappy?.lastOutcome).toBe('error');
+    // Then a firing that cannot take the lock: the error outcome must SURVIVE the skip.
+    const holder = await acquireFileLock('scheduled-task:flappy', 'scheduler', join(dir, '.locks'));
+    await runScheduledTask('flappy', {
+      memoryDir: dir, statusFile: sf,
+      run: async () => 'never runs',
+      payload: 'x',
+      lock: { staleMs: 60_000, retry: { count: 2, minDelayMs: 1, maxDelayMs: 2 } },
+    });
+    await holder.release();
+    const status = await readStatus(sf);
+    expect(status.flappy?.lastOutcome).toBe('skipped');
   });
 });

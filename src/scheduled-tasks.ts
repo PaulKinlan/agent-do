@@ -222,9 +222,10 @@ export function validateScheduledTasks(tasks: ScheduledTask[]): ScheduledTask[] 
 // ── Status tracking ─────────────────────────────────────────────────────
 
 export interface TaskStatus {
-  lastRunAt?: string; // ISO
+  lastRunAt?: string; // ISO timestamp of the last scheduling ATTEMPT (a skip is an attempt that did not run)
   lastDurationMs?: number;
-  lastOutcome?: 'ok' | 'error';
+  /** 'skipped' = the firing could not take the lock (previous run still active) and did not execute. */
+  lastOutcome?: 'ok' | 'error' | 'skipped';
   lastError?: string;
   runCount: number;
 }
