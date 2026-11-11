@@ -318,6 +318,8 @@ describe('runScheduledTask', () => {
     // 'ok', masking the fact that this firing never executed.
     const status = await readStatus(sf);
     expect(status.sweep?.lastOutcome).toBe('skipped');
+    // agent-do-otw8: the skip did not execute, so it must not count as a run either.
+    expect(status.sweep?.runCount).toBe(0);
   });
 
   it('a skip does not overwrite the outcome of the last real run with ok (agent-do-l1bz)', async () => {
@@ -348,5 +350,7 @@ describe('runScheduledTask', () => {
     expect(status.flappy?.lastOutcome).toBe('skipped');
     expect(status.flappy?.lastError).toBe('boom');
     expect(status.flappy?.lastDurationMs).toBe(realDuration);
+    // agent-do-otw8: one real execution, one skip -> the counter stays at the executions, not the firings.
+    expect(status.flappy?.runCount).toBe(1);
   });
 });

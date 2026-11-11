@@ -227,6 +227,7 @@ export interface TaskStatus {
   /** 'skipped' = the firing could not take the lock (previous run still active) and did not execute. */
   lastOutcome?: 'ok' | 'error' | 'skipped';
   lastError?: string;
+  /** Real executions (ok or error). A lock-loss skip does not increment — it is not a run. */
   runCount: number;
 }
 

@@ -113,7 +113,10 @@ export async function recordRun(
           lastDurationMs: outcome.durationMs,
           lastError: outcome.ok ? undefined : (outcome.error ?? 'unknown error'),
         }),
-    runCount: prev.runCount + 1,
+    // agent-do-otw8: runCount counts EXECUTIONS. A skip did not execute — incrementing it made the
+    // 'runs' column of `scheduled-tasks status` claim runs that never happened, the same falsehood
+    // l1bz removed from lastOutcome. Only ok/error outcomes advance the counter.
+    runCount: outcome.skipped ? prev.runCount : prev.runCount + 1,
   };
   all[taskId] = next;
   await writeStatus(statusFile, all).catch(() => { /* best-effort */ });
