@@ -96,9 +96,12 @@ These are deliberate trust decisions; an audit should not report them as vulnera
 - **Anything a model-controlled tool name or argument renders to the terminal** — B7.
 - **MCP server definitions and `--provider-tool` names** are operator config, but the *responses* those servers and
   providers return are third-party content (B3) — and so is the **tool metadata the server authors**: the
-  `description` and `inputSchema` each MCP tool advertises are server text that reaches the model's tool block
-  unframed (`src/mcp.ts:271-281`). Choosing which servers to configure is the operator's trust decision; the
-  words inside a configured server's tool metadata are that server's.
+  `name`, `description` and `inputSchema` each MCP tool advertises are server text that reaches the model's tool
+  block (`src/mcp.ts:271-281`). Choosing which servers to configure is the operator's trust decision; the words
+  inside a configured server's tool metadata are that server's. Guarded as of `agent-do-4ah` + `agent-do-gdec`
+  (fleet/imp-1-4ah, in review): the description is framed/redacted/capped and schema metadata free text
+  (`description`/`title`/`$comment`/`default`/`examples` values) is sanitised and capped — the name and the
+  validation-relevant schema identifiers stay verbatim (see §7).
 
 ## 4. Controls, per surface
 
@@ -223,12 +226,13 @@ Each family below was found, fixed, and then found again somewhere else. The les
 - **The host connector is not a security boundary**: same user, same PID namespace, so `/proc/$PPID/environ` still
   reads the parent's credentials, and it has no network policy (`docs/sandbox.md:75-94,126-135`).
 - **MCP tool metadata reaches the model unframed** — accepted only until `agent-do-4ah` (P2, assigned) lands its
-  planned mitigation: a server's tool `name`, `description` and `inputSchema` are all server-authored and pass
-  into `dynamicTool` as-is (`src/mcp.ts:271-281`), so a hostile or compromised server can put instructions in
-  the text the model reads alongside its tools, and a pathological schema can be large. The residual risk after
-  4ah's framing and caps remains the operator's server choice — the description is the server's own contract and
-  must stay faithful for calls to make sense — so do not configure servers you do not trust (`agent-do-a8pg`,
-  `agent-do-ol2q`).
+  **Mitigated by `agent-do-4ah` + `agent-do-gdec` + `agent-do-6jzn`** (fleet/imp-1-4ah, in review): the
+  description is framed, redacted and byte-capped; schema metadata free text (`description`/`title`/`$comment`/
+  `default`/`examples` values) is sanitised and capped; `__proto__` schema keys are dropped; pathological schemas
+  are replaced whole. The **residual** is the validation-relevant identifiers the guard must keep verbatim: the
+  tool `name` and property names / `enum` / `const` / `pattern` values — a hostile server can still put steering
+  text there, and mounting a server remains the same trust decision as running its tools — do not configure
+  servers you do not trust (`agent-do-a8pg`, `agent-do-ol2q`, `agent-do-cysa`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
 - **Store containment is string-level for a connector with no `realpath`** — live at `a151c46` and at this
