@@ -168,6 +168,15 @@ function schemaReplacedNote(): string {
   );
 }
 
+/** agent-do-6jzn: the note appended when `__proto__` keys were dropped from the schema. */
+function schemaProtoDroppedNote(paths: string[]): string {
+  return (
+    `\n[agent-do: input schema contained ${paths.length} __proto__ key(s) ` +
+    `(${paths.join(', ')}) — dropped: a schema cannot define that key, and honouring ` +
+    'it would poison the rebuilt object]'
+  );
+}
+
 /**
  * Frame + sanitise + cap a server-provided tool description.
  *
@@ -192,6 +201,8 @@ interface GuardedSchema {
   schema: Record<string, unknown>;
   /** True when the original was replaced by the permissive schema. */
   replaced: boolean;
+  /** Paths of `__proto__` keys dropped from the walk (agent-do-6jzn). */
+  droppedProtoKeys: string[];
 }
 
 /**
@@ -206,33 +217,63 @@ interface GuardedSchema {
  * partially walked tree is never handed to `jsonSchema()`.
  */
 function guardMcpToolSchema(raw: unknown): GuardedSchema {
-  const replaced: GuardedSchema = { schema: { ...PERMISSIVE_SCHEMA }, replaced: true };
+  const replaced: GuardedSchema = {
+    schema: { ...PERMISSIVE_SCHEMA },
+    replaced: true,
+    droppedProtoKeys: [],
+  };
 
   let depthOverrun = false;
-  const walk = (node: unknown, depth: number): unknown => {
+  const droppedProtoKeys: string[] = [];
+  const walk = (node: unknown, depth: number, path: string): unknown => {
     if (depth > MAX_MCP_SCHEMA_DEPTH) {
       depthOverrun = true;
       return node;
     }
-    if (Array.isArray(node)) return node.map((v) => walk(v, depth + 1));
+    if (Array.isArray(node)) return node.map((v) => walk(v, depth + 1, path));
     if (node !== null && typeof node === 'object') {
       const out: Record<string, unknown> = {};
+      const droppedHere: string[] = [];
       for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+        // agent-do-6jzn: a `__proto__` key must not reach `out[key] = ...` —
+        // that assignment hits the Object.prototype accessor, silently dropping
+        // the property AND poisoning the rebuilt object's [[Prototype]] with
+        // server-controlled content (phantom keys for every later for..in).
+        // Drop it and remove it from any sibling `required`, or the rebuilt
+        // schema would demand an argument that no longer exists.
+        if (key === '__proto__') {
+          droppedProtoKeys.push(path ? `${path}.__proto__` : '__proto__');
+          droppedHere.push(key);
+          continue;
+        }
         if ((key === 'description' || key === 'title') && typeof value === 'string') {
           out[key] = truncateUtf8ByBytes(
             sanitiseUntrustedText(value).text,
             MAX_MCP_DESCRIPTION_BYTES,
           );
         } else {
-          out[key] = walk(value, depth + 1);
+          out[key] = walk(value, depth + 1, path ? `${path}.${key}` : key);
         }
+      }
+      if (droppedHere.length > 0 && Array.isArray(out.required)) {
+        out.required = out.required.filter((r) => !droppedHere.includes(r as string));
+      }
+      // A drop one level down (inside this object's `properties`) must also remove
+      // the argument from THIS object's `required` — JSON Schema semantics: required
+      // names keys of the sibling `properties` (agent-do-6jzn: a rebuilt schema that
+      // demanded a vanished argument would break every honest call).
+      if (Array.isArray(out.required) && out.properties !== null && typeof out.properties === 'object') {
+        const props = out.properties as Record<string, unknown>;
+        out.required = out.required.filter((r) =>
+          Object.prototype.hasOwnProperty.call(props, r),
+        );
       }
       return out;
     }
     return node;
   };
 
-  const walked = walk(raw, 0);
+  const walked = walk(raw, 0, '');
   if (
     depthOverrun ||
     walked === null ||
@@ -242,7 +283,7 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
   ) {
     return replaced;
   }
-  return { schema: walked as Record<string, unknown>, replaced: false };
+  return { schema: walked as Record<string, unknown>, replaced: false, droppedProtoKeys };
 }
 
 /**
@@ -412,7 +453,10 @@ export async function mountMcpServers(
           (mcpTool.description != null
             ? guardMcpToolDescription(config.name, mcpTool.description)
             : `MCP tool "${mcpTool.name}" from server "${config.name}".`) +
-          (schemaResult.replaced ? schemaReplacedNote() : '');
+          (schemaResult.replaced ? schemaReplacedNote() : '') +
+          (schemaResult.droppedProtoKeys.length > 0
+            ? schemaProtoDroppedNote(schemaResult.droppedProtoKeys)
+            : '');
 
         // Dynamic tool: schema is not known at compile time, so we route
         // through `jsonSchema()` to get a Schema the AI SDK can pass to
