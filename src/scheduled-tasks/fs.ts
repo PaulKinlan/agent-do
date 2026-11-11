@@ -32,7 +32,7 @@ const TaskStatusSchema = z.object({
     .refine((s) => !Number.isNaN(Date.parse(s)), 'lastRunAt must parse as a date')
     .optional(),
   lastDurationMs: z.number().optional(),
-  lastOutcome: z.enum(['ok', 'error']).optional(),
+  lastOutcome: z.enum(['ok', 'error', 'skipped']).optional(),
   lastError: z.string().optional(),
   // recordRun counts runs: a fractional or negative value in the file is
   // hostile corruption, not history (runCount + 1 on either drifts the
@@ -93,17 +93,30 @@ export async function writeStatus(statusFile: string, record: StatusRecord): Pro
 export async function recordRun(
   statusFile: string,
   taskId: string,
-  outcome: { ok: boolean; durationMs: number; error?: string },
+  outcome: { ok: boolean; durationMs: number; error?: string; skipped?: boolean },
 ): Promise<TaskStatus> {
   const all = await readStatus(statusFile).catch(() => ({}) as StatusRecord);
   const prev = all[taskId] ?? { runCount: 0 };
   const next: TaskStatus = {
     ...prev,
     lastRunAt: new Date().toISOString(),
-    lastDurationMs: outcome.durationMs,
-    lastOutcome: outcome.ok ? 'ok' : 'error',
-    lastError: outcome.ok ? undefined : (outcome.error ?? 'unknown error'),
-    runCount: prev.runCount + 1,
+    // agent-do-l1bz: a lock-loss skip is not an execution — recording it as plain 'ok' masked skipped
+    // firings, so the status file claimed work that never ran.
+    lastOutcome: outcome.skipped ? 'skipped' : outcome.ok ? 'ok' : 'error',
+    // agent-do-ww4s: on a skip the record must keep the last REAL run's outcome detail. A skip has no
+    // duration and no error of its own; spreading prev and then assigning undefined erased the
+    // previous run's lastError/lastDurationMs, leaving an operator unable to see when/why the last
+    // real run failed. Touch those fields only when something actually ran.
+    ...(outcome.skipped
+      ? {}
+      : {
+          lastDurationMs: outcome.durationMs,
+          lastError: outcome.ok ? undefined : (outcome.error ?? 'unknown error'),
+        }),
+    // agent-do-otw8: runCount counts EXECUTIONS. A skip did not execute — incrementing it made the
+    // 'runs' column of `scheduled-tasks status` claim runs that never happened, the same falsehood
+    // l1bz removed from lastOutcome. Only ok/error outcomes advance the counter.
+    runCount: outcome.skipped ? prev.runCount : prev.runCount + 1,
   };
   all[taskId] = next;
   await writeStatus(statusFile, all).catch(() => { /* best-effort */ });
@@ -150,7 +163,11 @@ export async function runScheduledTask(
     // Couldn't acquire — a previous run is still active (or its stale lock
     // hasn't aged out). Skip rather than pile on. Not an error outcome.
     const skipped = { ok: true, skipped: true, durationMs: Date.now() - started };
-    await recordRun(opts.statusFile, taskId, { ok: true, durationMs: skipped.durationMs });
+    await recordRun(opts.statusFile, taskId, {
+      ok: true,
+      skipped: true,
+      durationMs: skipped.durationMs,
+    });
     return skipped;
   }
 

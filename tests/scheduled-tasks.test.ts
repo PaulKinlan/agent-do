@@ -314,5 +314,43 @@ describe('runScheduledTask', () => {
     expect(res.skipped).toBe(true);
     expect(ran).toBe(false);
     await holder.release();
+    // agent-do-l1bz: the skip must be VISIBLE in the status file — it used to be recorded as plain
+    // 'ok', masking the fact that this firing never executed.
+    const status = await readStatus(sf);
+    expect(status.sweep?.lastOutcome).toBe('skipped');
+    // agent-do-otw8: the skip did not execute, so it must not count as a run either.
+    expect(status.sweep?.runCount).toBe(0);
+  });
+
+  it('a skip does not overwrite the outcome of the last real run with ok (agent-do-l1bz)', async () => {
+    const sf = join(dir, 'status.json');
+    const { acquireFileLock } = await import('../src/stores/file-lock.js');
+    // A real failing run first: status records 'error'.
+    await runScheduledTask('flappy', {
+      memoryDir: dir, statusFile: sf,
+      run: async () => { throw new Error('boom'); },
+      payload: 'x',
+    });
+    expect((await readStatus(sf)).flappy?.lastOutcome).toBe('error');
+    // Then a firing that cannot take the lock: the error outcome must SURVIVE the skip — lastOutcome
+    // flips to 'skipped' (agent-do-l1bz), but lastError and lastDurationMs stay the last real run's
+    // (agent-do-ww4s): a skip has no duration and no error of its own.
+    const before = await readStatus(sf);
+    const realDuration = before.flappy?.lastDurationMs;
+    expect(realDuration).toBeTypeOf('number');
+    const holder = await acquireFileLock('scheduled-task:flappy', 'scheduler', join(dir, '.locks'));
+    await runScheduledTask('flappy', {
+      memoryDir: dir, statusFile: sf,
+      run: async () => 'never runs',
+      payload: 'x',
+      lock: { staleMs: 60_000, retry: { count: 2, minDelayMs: 1, maxDelayMs: 2 } },
+    });
+    await holder.release();
+    const status = await readStatus(sf);
+    expect(status.flappy?.lastOutcome).toBe('skipped');
+    expect(status.flappy?.lastError).toBe('boom');
+    expect(status.flappy?.lastDurationMs).toBe(realDuration);
+    // agent-do-otw8: one real execution, one skip -> the counter stays at the executions, not the firings.
+    expect(status.flappy?.runCount).toBe(1);
   });
 });

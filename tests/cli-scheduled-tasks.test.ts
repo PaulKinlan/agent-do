@@ -273,6 +273,35 @@ describe('runScheduledTasksMode — run', { timeout: 15_000 }, () => {
     expect(text).toContain('sweep');
     expect(text).toContain('never');  // no valid last-run to show
   });
+
+  it('a task that only ever skipped shows last-run never, not the attempt time (agent-do-lu6p)', async () => {
+    // agent-do-l1bz records skipped firings (lastRunAt + lastOutcome 'skipped', runCount 0); the
+    // status table must not dress a skip up as a run for a task that never executed.
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },
+    ]));
+    await writeFile(join(dir, 'scheduler-status.json'),
+      '{"sweep":{"runCount":0,"lastRunAt":"2026-11-11T13:00:00.000Z","lastOutcome":"skipped"}}');
+    const args = parseArgs(['scheduled-tasks', 'status', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const row = text.split('\n').find((l) => l.startsWith('sweep\t')) ?? '';
+    expect(row).toContain('\tnever\t');
+    expect(row).toContain('skipped');
+    expect(row).not.toContain('2026-11-11');
+  });
+
+  it('a task that ran shows its last-run time even after a later skip (agent-do-lu6p)', async () => {
+    await writeFile(tasksFile, JSON.stringify([
+      { id: 'sweep', cron: '*/15 * * * *', payload: 'triage' },
+    ]));
+    await writeFile(join(dir, 'scheduler-status.json'),
+      '{"sweep":{"runCount":1,"lastRunAt":"2026-11-11T13:00:00.000Z","lastOutcome":"skipped"}}');
+    const args = parseArgs(['scheduled-tasks', 'status', '--tasks', tasksFile, '--memory', dir]);
+    const text = await captureStdout(() => runScheduledTasksMode(args));
+    const row = text.split('\n').find((l) => l.startsWith('sweep\t')) ?? '';
+    expect(row).toContain('2026-11-11');  // the attempt time is shown once something executed
+    expect(row).toContain('skipped');
+  });
 });
 
 // ── helpers ─────────────────────────────────────────────────────────────

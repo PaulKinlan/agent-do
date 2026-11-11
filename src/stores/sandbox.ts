@@ -80,17 +80,20 @@ export class SandboxBackedMemoryStore implements MemoryStore {
    *    and an attempt to outpace the leading segments rejects with
    *    "Path traversal not allowed". Cheap, runs always.
    *
-   * 2. **Canonical containment.** If the connector exposes
-   *    {@link SandboxApi.realpath}, we resolve both the agent root and
-   *    the requested path to canonical form (walking up to the deepest
-   *    existing ancestor for not-yet-created paths) and verify the
-   *    canonical path is still inside the canonical agent root. This
-   *    is what keeps a `link → ../other-tenant` symlink from letting
-   *    one agent write into another's directory.
+   * 2. **Canonical containment.** The walk always runs (agent-do-ws1u):
+   *    with {@link SandboxApi.realpath} the walk ends at a canonical
+   *    attestation of the agent root and the requested path (walking up to
+   *    the deepest existing ancestor for not-yet-created paths); without
+   *    it, `stat()` inspects every component. Either way the answer is
+   *    verified to be inside the agent root. This is what keeps a
+   *    `link → ../other-tenant` symlink from letting one agent write into
+   *    another's directory.
    *
-   * Connectors that don't expose `realpath` (e.g. just-bash's virtual
-   * fs has no symlinks) skip step 2 — the string check is sufficient
-   * for substrates without symlinks.
+   * Connectors that don't expose `realpath` still get the walk: `stat()`
+   * (which the contract REQUIRES, with lstat semantics) reports symlinks on
+   * its own, so the walk ends lexically only for substrates that genuinely
+   * have no links — and a link the connector can see but cannot read is
+   * refused, never judged by the link's own name (agent-do-34f, agent-do-ws1u).
    */
   private async resolve(agentId: string, filePath: string): Promise<string> {
     validateAgentId(agentId);
@@ -104,8 +107,11 @@ export class SandboxBackedMemoryStore implements MemoryStore {
       ? (`${base}${agentSegment}` || '/')
       : `${base}${agentSegment}/${normalised}`;
 
-    if (!this.sandbox.realpath) return joined;
-
+    // No capability short-circuit here: the walk below runs whether or not the connector has
+    // `realpath`, because its `stat()` (lstat semantics, required on the contract) can report a
+    // symlink on its own — just-bash does, via `[ -L ]`. Returning `joined` un-walked for a
+    // no-realpath connector judged a planted link by its own name and re-opened the
+    // `alias -> ../other-tenant` leak this file exists to close (agent-do-34f, agent-do-ws1u).
     const agentRoot = `${base}${agentSegment}` || '/';
     const resolvedRoot = await realpathSafe(this.sandbox, agentRoot, POSIX_PATH_API);
     const resolved = await realpathSafe(this.sandbox, joined, POSIX_PATH_API);
@@ -386,23 +392,100 @@ const UNRESOLVED: ResolvedPath = { ok: false, reason: 'unresolved-path' };
  * not there yet, so the walk can step past it" or "I cannot tell where this path
  * goes, so refuse".
  *
- * ONLY ENOENT is `absent`. Everything else - EACCES, EPERM, ELOOP, EIO, ENOTDIR,
- * a connector's own thrown value, a thrown non-Error - is `unattestable`, even
- * where a platform might consider it benign. Being strict is what makes the
- * invariant hold, and refusing a path is always safe.
+ * `absent` is: ENOENT by code; or (uncoded) a not-found phrase read from the
+ * message of ANY thrown shape that carries one - Error instances, duck-typed
+ * { message } objects, bare strings (agent-do-q8hd, -ihxv) - subject to the
+ * agent-do-ql2p/g3ib/45rh segment rules (path segments never decide; refusal
+ * wording in a reason segment vetoes; a phrase that appears only in the path
+ * attests nothing) and the agent-do-p3uk rule (phrasing in the resolved path
+ * disables message attestation entirely; only a code attests).
+ * Everything else - a genuinely ambiguous thrown value, refusal wording,
+ * any shape whose message says nothing recognisable - is `unattestable`,
+ * even where a platform might consider it benign. Being strict about what
+ * counts as known-absent is what makes the invariant hold, and refusing a
+ * path is always safe.
  *
  * This exists because six of the seven findings in this area were one sentence:
  * a catch swallowed a failure it could not classify and the walk continued as if
  * the component had been attested. There are no bare catches in the resolver for
  * that reason - each one either classifies or refuses.
  */
-function classifyError(err: unknown): 'absent' | 'unattestable' {
+/**
+ * Read `.message` without letting a throwing getter escape (agent-do-asjc):
+ * a connector object whose property access throws is classified by the
+ * resolver's own rules, never surfaced as a raw foreign error.
+ */
+function safeMessage(value: object): unknown {
+  try {
+    return (value as { message?: unknown }).message;
+  } catch {
+    return undefined;
+  }
+}
+
+function classifyError(err: unknown, path = ''): 'absent' | 'unattestable' {
+  // agent-do-p3uk: when the model-chosen path itself carries not-found or refusal
+  // phrasing, message text cannot distinguish reason from path echo at all (no
+  // segment split survives a format that inlines the path). Only a CODE may attest;
+  // everything uncoded is ambiguous by construction and refuses.
+  if (path && /\bENOENT\b|no such file|not found|does not exist/i.test(path)) {
+    const coded = (err as { code?: unknown } | null)?.code;
+    return coded === 'ENOENT' ? 'absent' : 'unattestable';
+  }
   // Checked inline rather than via isNotFoundError, which also treats ENOTDIR as
   // absent for the store's own "File not found" messages. Here that would be
   // wrong: "there is a file where a directory belongs" still says nothing about
   // what a symlink above it pointed at, so it is unattested.
   const code = (err as { code?: unknown } | null)?.code;
-  return code === 'ENOENT' ? 'absent' : 'unattestable';
+  if (code === 'ENOENT') return 'absent';
+  // agent-do-nw7h: a present code that is NOT ENOENT is authoritative — an
+  // EACCES/EIO/ELOOP refusal whose message happens to echo a not-found-looking
+  // path (the path is model-controlled) is never sniffed into 'absent'.
+  if (code !== undefined && code !== null && code !== '') return 'unattestable';
+  // agent-do-q8hd: the contract only says stat must fail for a missing path — it
+  // does not mandate the Node `code` field. A connector that reports not-found by
+  // message alone (the same phrases the just-bash connector's own rm force-handling
+  // matches) was refused on EVERY fresh write, its walks ending unattested purely
+  // because of the error's shape. Recognise the errno name or an explicit
+  // not-found phrase; everything else stays unattestable — fail-closed.
+  //
+  // agent-do-ihxv: read the message from ANY thrown shape that carries one —
+  // Error instances, duck-typed { message } objects (a plain-JSON throw from a
+  // connector is indistinguishable in intent from an Error), and bare strings.
+  let message: string;
+  if (err instanceof Error) {
+    message = err.message;
+  } else if (
+    err !== null &&
+    typeof err === 'object' &&
+    typeof safeMessage(err) === 'string'
+  ) {
+    message = safeMessage(err) as string;
+  } else {
+    message = typeof err === 'string' ? err : String(err ?? '');
+  }
+  // agent-do-nw7h + agent-do-g3ib + agent-do-45rh: for uncoded messages, classify
+  // PER SEGMENT, split on ': '. A segment that starts with a quote or '/' is the
+  // echoed PATH — model-controlled, so its text NEVER decides: refusal words in a
+  // path ('/work/denied-rides/x') do not veto (g3ib), and not-found phrases in a
+  // path do not attest (45rh: 'Input/output error: /work/alice/not found/x' has
+  // no recognisable refusal wording and no reason-side phrase — the ambiguous
+  // combination attests NOTHING and the walk refuses). Only REASON segments
+  // decide: refusal wording vetoes; a not-found phrase that appears ONLY in
+  // reasons attests; a phrase that appears in the path too is ambiguous (the
+  // reason may be describing the model-chosen path, not the error) and refuses.
+  const segments = message.split(': ');
+  const isPathSegment = (seg: string): boolean => seg.startsWith("'") || seg.startsWith('/');
+  const refusal = segments.some((seg) => !isPathSegment(seg) && /denied|not permitted|forbidden|EACCES|EPERM|ELOOP|EIO|ENOTDIR|input\/output error/i.test(seg));
+  if (refusal) return 'unattestable';
+  const NOT_FOUND = /\bENOENT\b|no such file|not found|does not exist/i;
+  const phraseInReason = segments.some((seg) => !isPathSegment(seg) && NOT_FOUND.test(seg));
+  const phraseInPath = segments.some((seg) => isPathSegment(seg) && NOT_FOUND.test(seg));
+  // Ambiguous: the only not-found evidence sits in model-controlled path text —
+  // an uncoded refusal with unusual wording rides exactly here. Attest nothing.
+  if (phraseInPath) return 'unattestable';
+  if (phraseInReason) return 'absent';
+  return 'unattestable';
 }
 
 /**
@@ -521,7 +604,7 @@ async function walkToRealpath(
       try {
         canonical = await sandbox.realpath!(current);
       } catch (err) {
-        if (classifyError(err) === 'unattestable') return UNRESOLVED;
+        if (classifyError(err, current) === 'unattestable') return UNRESOLVED;
         absent = true;
       }
       if (!absent) {
@@ -545,7 +628,7 @@ async function walkToRealpath(
       isLink = entry.isSymbolicLink;
     } catch (err) {
       // An error we cannot classify means we do not know what is here.
-      if (classifyError(err) === 'unattestable') return UNRESOLVED;
+      if (classifyError(err, current) === 'unattestable') return UNRESOLVED;
     }
 
     // 3. Follow it. A link identified but not readable is unattested: judging

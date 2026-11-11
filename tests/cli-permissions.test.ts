@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Readable, Writable } from 'node:stream';
+import { PassThrough } from 'node:stream';
 import { parseArgs } from '../src/cli/args.js';
 import {
   buildCliPermissions,
@@ -34,13 +35,21 @@ describe('buildCliPermissions', () => {
   // Helpers that simulate a TTY stdin and capture stderr writes.
   function mockStdin(isTTY: boolean, answers: string[] = []): NodeJS.ReadStream {
     // Vitest / node readline uses `createInterface({ input })`. The
-    // interface reads line-by-line from the stream. Feed the answers
-    // as separate lines. The Readable implementation below is the
-    // standard "push strings then null to end" pattern.
+    // interface reads line-by-line from the stream. Feed ONE answer per
+    // read(): pushing every line at once let the first readline interface
+    // eagerly swallow all buffered lines, starving a SECOND prompt created
+    // by a later onPermissionRequest call (agent-do-ulkp exercises exactly
+    // that: approve one call, then re-prompt for a different call).
+    let next = 0;
+    let ended = false;
     const r = new Readable({
-      read() {
-        for (const ans of answers) this.push(ans + '\n');
-        this.push(null);
+      read(this: Readable) {
+        if (next < answers.length) {
+          this.push(answers[next++] + '\n');
+        } else if (!ended) {
+          ended = true;
+          this.push(null);
+        }
       },
     });
     (r as unknown as { isTTY: boolean }).isTTY = isTTY;
@@ -162,35 +171,97 @@ describe('buildCliPermissions', () => {
     expect(ok).toBe(false);
   });
 
-  it('"always" caches approval for the rest of the session', async () => {
+  it('"always" caches the exact call and re-prompts on different args (agent-do-ulkp)', async () => {
     const { stream: stderr } = mockStderr();
-    // Three calls: first answers "always", next two should not prompt.
-    const stdin = mockStdin(true, ['always']);
+    // A PassThrough stream so the test writes each answer exactly when its prompt is pending —
+    // the push-everything mock lets the first readline eagerly swallow lines meant for a later prompt.
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
     const cfg = buildCliPermissions({
       acceptAll: false,
       allow: [],
       stdin,
       stderr,
     });
-    const first = await cfg.onPermissionRequest!({
-      toolName: 'write_file',
-      args: { path: 'a' },
-    });
-    expect(first).toBe(true);
-    // Subsequent calls should auto-approve — no stdin line consumed.
-    const second = await cfg.onPermissionRequest!({
-      toolName: 'write_file',
-      args: { path: 'b' },
-    });
-    const third = await cfg.onPermissionRequest!({
-      toolName: 'write_file',
-      args: { path: 'c' },
-    });
-    expect(second).toBe(true);
-    expect(third).toBe(true);
+    const call = (args: Record<string, unknown>) =>
+      cfg.onPermissionRequest!({ toolName: 'write_file', args });
+
+    // First call: answer "always".
+    const p1 = call({ path: 'a', content: 'hello' });
+    stdin.write('always\n');
+    expect(await p1).toBe(true);
+
+    // Identical call (key order too): auto-approved from the cache, no prompt, no stdin needed.
+    expect(await call({ content: 'hello', path: 'a' })).toBe(true);
+
+    // Different args: must re-prompt — the old tool-name grant made this call silent.
+    const p3 = call({ path: 'a', content: 'DIFFERENT' });
+    stdin.write('y\n');
+    expect(await p3).toBe(true);
+
+    // Same tool, different shape AGAIN: prompts once more (answers exhausted -> we only check it
+    // consumed the prompt by answering 'n').
+    const p4 = call({ path: 'zz' });
+    stdin.write('n\n');
+    expect(await p4).toBe(false);
+
+    stdin.end();
   });
 
-  it('truncates long args in the prompt preview', async () => {
+  it('unserialisable args never share an "always" grant (agent-do-ht31)', async () => {
+    const { stream: stderr } = mockStderr();
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const call = (args: Record<string, unknown>) =>
+      cfg.onPermissionRequest!({ toolName: 'write_file', args });
+
+    // BigInt args cannot JSON.stringify: the old String(args) fallback collapsed every such call to
+    // '[object Object]', so one 'always' approved them ALL. Each must prompt on its own now.
+    const p1 = call({ path: 'notes.txt', n: 1n });
+    stdin.write('always\n');
+    expect(await p1).toBe(true);
+
+    // A different unserialisable call must re-prompt (answer no -> deny).
+    const p2 = call({ path: '.git/hooks/pre-commit', n: 2n });
+    stdin.write('n\n');
+    expect(await p2).toBe(false);
+
+    // Even the IDENTICAL unserialisable call re-prompts: the unique key never matches a lookup.
+    const p3 = call({ path: 'notes.txt', n: 1n });
+    stdin.write('y\n');
+    expect(await p3).toBe(true);
+
+    stdin.end();
+  });
+
+  it('pathological args degrade the preview instead of throwing (agent-do-ht31)', async () => {
+    const { stream: stderr, written } = mockStderr();
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    const cfg = buildCliPermissions({ acceptAll: false, allow: [], stdin, stderr });
+    const call = (args: unknown) => cfg.onPermissionRequest!({ toolName: 'write_file', args });
+
+    // Circular args: the old renderer threw RangeError out of the permission path.
+    const circular: Record<string, unknown> = { path: 'x' };
+    circular.self = circular;
+    const p1 = call(circular);
+    stdin.write('y\n');
+    expect(await p1).toBe(true);
+    expect(written.join('')).toContain('path');
+
+    // 5000-deep nesting: bounded by the depth cap, still prompts normally.
+    let deep: unknown = { leaf: true };
+    for (let i = 0; i < 5000; i++) deep = { n: deep };
+    const p2 = call(deep);
+    stdin.write('y\n');
+    expect(await p2).toBe(true);
+    expect(written.join('')).toContain('…');
+
+    stdin.end();
+  });
+
+  it('previews long args with head AND tail, keeping every key visible (agent-do-ulkp)', async () => {
     const { stream: stderr, written } = mockStderr();
     const stdin = mockStdin(true, ['n']);
     const cfg = buildCliPermissions({
@@ -205,10 +276,13 @@ describe('buildCliPermissions', () => {
       args: { content: huge },
     });
     const promptText = written.join('');
-    // The prompt contains args but not all 500 chars (truncated to ~120).
     expect(promptText).toMatch(/write_file\(/);
-    expect(promptText).toMatch(/\.\.\./);
-    expect(promptText.length).toBeLessThan(huge.length + 500);
+    // Long value: head kept, tail kept, length disclosed — neither end hidden.
+    expect(promptText).toContain('…[500 chars]…');
+    expect(promptText).toContain('aaaa');
+    // The 500 'a's must NOT be fully inlined (bounded prompt), but the preview is not capped
+    // at an overall 120 chars that could hide later keys.
+    expect(promptText).not.toContain(huge);
   });
 
   it('truncates per-value, not just the final string (Copilot #68)', async () => {

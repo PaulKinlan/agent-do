@@ -129,7 +129,12 @@ async function printStatus(tasksFile: string, memoryDir: string): Promise<void> 
   console.log('id\tschedule\tlast-run\toutcome\truns');
   for (const t of tasks) {
     const s = status[t.id];
-    const last = s?.lastRunAt ? new Date(s.lastRunAt).toISOString().replace('T', ' ').slice(0, 19) : 'never';
+    // agent-do-lu6p: the column is 'last-run', and lastRunAt is the last ATTEMPT (a skip writes it —
+    // agent-do-l1bz). A task that has never actually executed (runCount 0) must not present a skip's
+    // attempt time as a run; 'never' is the honest value until something really runs.
+    const last = s?.lastRunAt && (s.runCount ?? 0) > 0
+      ? new Date(s.lastRunAt).toISOString().replace('T', ' ').slice(0, 19)
+      : 'never';
     const outcome = s?.lastOutcome ?? '-';
     console.log(sanitiseRow([t.id, t.cron, last, outcome, s?.runCount ?? 0]));
   }

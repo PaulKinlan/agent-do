@@ -102,6 +102,11 @@ describe('SandboxBackedMemoryStore', () => {
     // permission-style error.
     const failing = new SandboxBackedMemoryStore(
       {
+        // Contract-valid stat: the resolver must be able to attest the path so
+        // the read itself is what surfaces the connector's EACCES.
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async readFile() {
           const e = new Error('EACCES: permission denied');
           (e as NodeJS.ErrnoException).code = 'EACCES';
@@ -118,6 +123,11 @@ describe('SandboxBackedMemoryStore', () => {
     // file is still on disk, and reporting "deleted" would be a lie.
     const failing = new SandboxBackedMemoryStore(
       {
+        // Same contract-valid stat as the read test above: without it the
+        // resolver refuses before delete can surface the connector's error.
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async rm() {
           const e = new Error('EACCES: permission denied');
           (e as NodeJS.ErrnoException).code = 'EACCES';
@@ -164,13 +174,16 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(store.write('alice', 'loop-a', 'pwned')).rejects.toThrow(/Path traversal via symlink/);
   });
 
-  it('skips canonical containment check when the connector lacks realpath', async () => {
-    // Connectors without `realpath` (e.g. just-bash's virtual fs) get
-    // string-only path normalisation. Verify that no realpath-shaped
-    // call is required for them.
+  it('a connector without realpath still walks: plain paths resolve lexically (agent-do-ws1u)', async () => {
+    // Connectors without `realpath` (e.g. just-bash's virtual fs) do NOT get
+    // string-only normalisation any more: the stat-based walk runs and ends
+    // lexically for genuinely link-free paths.
     const writes: Array<{ path: string; content: string | Uint8Array }> = [];
     const noRealpath = new SandboxBackedMemoryStore(
       {
+        async stat() {
+          return { isSymbolicLink: false } as import('../../src/sandbox/types.js').FileStat;
+        },
         async writeFile(p: string, content: string | Uint8Array) {
           writes.push({ path: p, content });
         },
@@ -180,5 +193,250 @@ describe('SandboxBackedMemoryStore', () => {
     );
     await noRealpath.write('agent1', 'note.txt', 'hi');
     expect(writes[0]?.path).toBe('/work/agent1/note.txt');
+  });
+
+  it('a connector reporting not-found by MESSAGE (uncoded) still walks on fresh writes (agent-do-q8hd)', async () => {
+    // The contract says stat must fail for a missing path; it does not mandate
+    // the Node `code` field. Before the fix, classifyError accepted only
+    // code==='ENOENT', so this connector was refused on every fresh write while
+    // its ENOENT-coded twin succeeded — the outcome turned on error shape alone.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error("stat: no such file or directory: " + p);
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('an uncoded refusal with the reason AFTER the path still refuses (agent-do-nw7h R1)', async () => {
+    // 'stat failed: <path>: no such file' — the phrase follows the path, so any
+    // positional head-cut misses it; the phrase-anywhere rule (vetoed only by
+    // refusal words) classifies it absent.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('stat failed: ' + p + ': no such file');
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('path-echoed not-found phrasing in a refusal with NO segment boundary refuses (agent-do-p3uk)', async () => {
+    // 'screwed up at /work/alice/not found/x' — no ': ' anywhere, so reason and
+    // path are one segment and message-sniffing cannot separate them. The path
+    // itself carries the phrase, so only a CODE may attest; uncoded -> refuse.
+    const writes: Array<{ path: string }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('screwed up at ' + p);
+        },
+        async writeFile(p: string) {
+          writes.push({ path: p });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+    expect(writes).toHaveLength(0);
+    // Fail-closed residual: with the phrasing disabled by the path echo, an
+    // uncoded message has NO usable evidence — a clean-path write through the
+    // same connector refuses too. Only a code can attest ambiguous paths.
+    await expect(noRealpath.write('alice', 'plain.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
+  it('an uncoded refusal with unrecognised wording and a phrase-echoing path refuses (agent-do-45rh)', async () => {
+    // 'Input/output error' misses the refusal-word veto list, and the path echoes
+    // a not-found phrase: the only not-found evidence sits in model-controlled
+    // path text, which is ambiguous by construction — the walk must refuse.
+    const writes: Array<{ path: string }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('Input/output error: ' + p);
+        },
+        async writeFile(p: string) {
+          writes.push({ path: p });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('a genuine not-found whose PATH contains a veto word still resolves (agent-do-g3ib)', async () => {
+    // Mirror of nw7h R2: the veto must not read the echoed path either — a real
+    // missing file under '/work/denied-rides/' is absent, not a refusal.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('stat: no such file or directory: ' + p);
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'denied-rides/secret.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('an uncoded refusal with refusal words vetoed even when the path echoes not-found (agent-do-nw7h R2)', async () => {
+    // 'prog: <path>: permission denied' with a hostile path: no code, phrase in
+    // the path, refusal words in the reason — the veto wins, the walk refuses.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('prog: ' + p + ': permission denied');
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
+  it('not-found text inside the PATH of an EACCES refusal does not read as absent (agent-do-ql2p)', async () => {
+    // The error message echoes the path, and the path is model-controlled: a
+    // component named 'not found' inside an ordinary EACCES refusal must stay
+    // unattestable — the walk must refuse, not step past a component that exists.
+    const writes: Array<{ path: string }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          const e = new Error(`EACCES: permission denied, stat '${p}'`);
+          (e as NodeJS.ErrnoException).code = 'EACCES';
+          throw e;
+        },
+        async writeFile(p: string) {
+          writes.push({ path: p });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+    expect(writes).toHaveLength(0);
+  });
+
+  it('a duck-typed throw with a THROWING message getter is refused, not escaped (agent-do-asjc)', async () => {
+    // Reading .message on a hostile object can itself throw; the resolver must
+    // classify (refuse), never surface the getter's raw error.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw {
+            get message(): string {
+              throw new Error('getter exploded');
+            },
+          };
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
+  it('a duck-typed non-Error throw carrying a not-found message is absent too (agent-do-ihxv)', async () => {
+    // The same not-found text thrown as a plain { name, message } object must
+    // classify the same way as the Error-instance form — the outcome turns on
+    // the PHRASE, not the wrapper.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw { name: 'NotFoundError', message: 'no such file or directory: ' + p };
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
+  });
+
+  it('an unclassifiable stat error still refuses the walk (fail-closed preserved, agent-do-q8hd)', async () => {
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat() {
+          const e = new Error('EACCES: permission denied');
+          (e as NodeJS.ErrnoException).code = 'EACCES';
+          throw e;
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
+  it('a connector without realpath but WITH symlink-reporting stat refuses a planted link (agent-do-ws1u)', async () => {
+    // agent-do-34f's exact shape, re-closed for the memory store: the connector
+    // cannot canonicalise (no `realpath`) but its `stat()` can see the link
+    // (just-bash's `[ -L ]`). Judging the alias by its own name let
+    // `alias -> ../bob/secret.txt` cross tenants; the walk must refuse it
+    // because a link that is visible but unreadable (no `readlink`) is
+    // unattested.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p.endsWith('/alias')) return { isSymbolicLink: true, isFile: () => false, isDirectory: () => false } as unknown as import('../../src/sandbox/types.js').FileStat;
+          return { isSymbolicLink: false, isFile: () => true, isDirectory: () => false } as unknown as import('../../src/sandbox/types.js').FileStat;
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'alias', 'pwned'))
+      .rejects.toThrow(/Path traversal via symlink/);
   });
 });
