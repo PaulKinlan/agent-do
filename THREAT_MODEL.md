@@ -183,7 +183,9 @@ Each family below was found, fixed, and then found again somewhere else. The les
 ## 6. Security invariants for auditors
 
 - A path the resolver cannot attest never reaches an I/O call, on either the file-tool path or the store path
-  (`src/tools/deny-list.ts:262-280`; `src/stores/sandbox.ts:107-120`).
+  (`src/tools/deny-list.ts:262-280`; `src/stores/sandbox.ts` resolve). Unconditional as of `agent-do-ws1u`
+  (fleet/imp-1-ulkp): the store's `!realpath -> return joined` short-circuit — the one path that reached I/O
+  on a name instead of an attestation at `a151c46` — is removed; the stat walk now runs for every connector.
 - The deny list's `modelContent` never echoes the matched rule (`src/tools/deny-list.ts:384-396`).
 - Every string that becomes `ToolResult.modelContent` from a source outside this process is framed, redacted and
   capped — or returns a `ToolResult` that says why it is not.
@@ -217,10 +219,10 @@ Each family below was found, fixed, and then found again somewhere else. The les
   reads the parent's credentials, and it has no network policy (`docs/sandbox.md:75-94,126-135`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
-- **Store containment is string-level for a connector with no `realpath`** — the canonical walk is skipped on that
-  path (`if (!this.sandbox.realpath) return joined`), on the stated assumption that a substrate without `realpath`
-  has no symlinks (`src/stores/sandbox.ts:91-107`). Note the tension with `docs/sandbox.md:257-259`, which describes
-  the walk as unconditional; worth re-checking for any connector that exposes `stat`/`readlink` without `realpath`.
+- ~~Store containment is string-level for a connector with no `realpath`~~ **CLOSED by `agent-do-ws1u`**
+  (fleet/imp-1-ulkp, in review at the time of writing): the store's short-circuit judged a planted alias by its
+  own name on that path, in tension with `docs/sandbox.md:257-259`; the walk is now unconditional and a link a
+  connector can see but cannot read is refused. Recorded here because the risk was live at `a151c46`.
 - **File locks are advisory and mtime-based**; a process that writes without acquiring the lock can clobber a locked
   file, and 1s mtime granularity plus a 60s stale threshold is the accepted trade (`src/stores/file-lock.ts:25-41`).
 - **`.agent-doignore` is not read for sandbox-backed workspaces** (`skipAgentDoIgnore` is forced), so a virtual root
