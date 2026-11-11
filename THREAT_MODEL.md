@@ -96,9 +96,14 @@ These are deliberate trust decisions; an audit should not report them as vulnera
 - **Anything a model-controlled tool name or argument renders to the terminal** — B7.
 - **MCP server definitions and `--provider-tool` names** are operator config, but the *responses* those servers and
   providers return are third-party content (B3) — and so is the **tool metadata the server authors**: the
-  `description` and `inputSchema` each MCP tool advertises are server text that reaches the model's tool block
-  unframed (`src/mcp.ts:271-281`). Choosing which servers to configure is the operator's trust decision; the
-  words inside a configured server's tool metadata are that server's.
+  `name`, `description` and `inputSchema` each MCP tool advertises are server text that reaches the model's tool
+  block (`src/mcp.ts:271-281`; on `origin/main` raw, `src/mcp.ts:265-277` — the metadata reaches the model
+  **unframed**). Choosing which servers to configure is the operator's trust decision; the words inside a
+  configured server's tool metadata are that server's. **Guarded on the fix stack in review** (`fleet/imp-1-4ah`:
+  agent-do-4ah + gdec + 6jzn + f7io + 0e4e + 9umo — the description framed/redacted/capped, schema metadata
+  free text sanitised and capped, the name and validation-relevant identifiers verbatim); not landed on main,
+  so per-tree readers should treat the metadata as unframed until then (same convention as the store invariant
+  in §6; residual in §7).
 
 ## 4. Controls, per surface
 
@@ -222,13 +227,18 @@ Each family below was found, fixed, and then found again somewhere else. The les
   for schema reasons (`src/tools/provider-output-guard.ts:35-41`).
 - **The host connector is not a security boundary**: same user, same PID namespace, so `/proc/$PPID/environ` still
   reads the parent's credentials, and it has no network policy (`docs/sandbox.md:75-94,126-135`).
-- **MCP tool metadata reaches the model unframed** — accepted only until `agent-do-4ah` (P2, assigned) lands its
-  planned mitigation: a server's tool `name`, `description` and `inputSchema` are all server-authored and pass
-  into `dynamicTool` as-is (`src/mcp.ts:271-281`), so a hostile or compromised server can put instructions in
-  the text the model reads alongside its tools, and a pathological schema can be large. The residual risk after
-  4ah's framing and caps remains the operator's server choice — the description is the server's own contract and
-  must stay faithful for calls to make sense — so do not configure servers you do not trust (`agent-do-a8pg`,
-  `agent-do-ol2q`).
+- **MCP tool metadata reaches the model unframed** — live at the pinned tree and on `origin/main`: the server
+  authors a tool's `name`, `description` and `inputSchema`, and main passes the description and schema into
+  `dynamicTool` raw (`src/mcp.ts:265-277` on main), so a hostile or compromised server owns the model's view of
+  every tool before any call happens, and tool count is server-controlled too. **Fix in review, not landed**: the
+  stack on `fleet/imp-1-4ah` (agent-do-4ah, -6jzn, -gdec, -f7io, -0e4e, -9umo) frames/redacts/caps the
+  description, sanitises schema metadata free text, drops `__proto__` keys, replaces pathological schemas whole,
+  falls back on non-string descriptions, and bounds a server's aggregate metadata (512 KB) — partially
+  reviewer-cleared (gdec), remainder under review at the time of writing. Until it lands on main, treat
+  server-authored metadata as unframed instruction-channel text. The **residual after landing** is the
+  validation-relevant identifiers the guard must keep verbatim — the tool `name` and property names / `enum` /
+  `const` / `pattern` values — and the operator's server choice remains a trust decision: do not configure
+  servers you do not trust (`agent-do-a8pg`, `agent-do-ol2q`, `agent-do-cysa`, `agent-do-tx46`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
 - **Store containment is string-level for a connector with no `realpath`** — live at `a151c46` and at this
