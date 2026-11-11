@@ -435,7 +435,24 @@ function classifyError(err: unknown): 'absent' | 'unattestable' {
   } else {
     message = typeof err === 'string' ? err : String(err ?? '');
   }
-  if (/\bENOENT\b|no such file|not found|does not exist/i.test(message)) return 'absent';
+  // agent-do-ql2p: the match runs on the message HEAD only. Error messages echo
+  // the path, and the path text is model-controlled — a component named
+  // 'not found/x' inside an EACCES refusal used to make the refusal read as
+  // 'absent' and stepped the walk past a component that exists. Two real shapes:
+  // quoted ('EACCES: permission denied, stat \'/path\'') — strip from the first
+  // quote; bare ('stat: no such file or directory: /path') — strip at the LAST
+  // ': ', which is where the path begins. Both leave only the code/phrase head
+  // for the match; a genuinely not-found message still matches, a path-echoed
+  // phrase inside a refusal does not.
+  let head = message;
+  const quote = head.indexOf("'");
+  if (quote !== -1) {
+    head = head.slice(0, quote);
+  } else {
+    const lastColon = head.lastIndexOf(': ');
+    if (lastColon !== -1) head = head.slice(0, lastColon);
+  }
+  if (/\bENOENT\b|no such file|not found|does not exist/i.test(head)) return 'absent';
   return 'unattestable';
 }
 
