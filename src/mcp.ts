@@ -182,7 +182,12 @@ function schemaProtoDroppedNote(paths: string[]): string {
   // agent-do-27u5: the note is appended AFTER the description's 8 KB cap, so the
   // paths list itself must be bounded — a deep hostile schema can generate
   // thousands of long paths (406 KB measured). Show the first few, count the rest.
-  const shown = paths.slice(0, 8).map((p) => truncateUtf8ByBytes(p, 120));
+  // agent-do-za0w: the paths are built from SERVER key names — model-visible
+  // note text. Sanitise (injection markers redacted, boundary tags escaped)
+  // before truncating, exactly like any other untrusted metadata string.
+  const shown = paths
+    .slice(0, 8)
+    .map((p) => truncateUtf8ByBytes(sanitiseUntrustedText(p).text, 120));
   const rest = paths.length - shown.length;
   const listed = shown.join(', ') + (rest > 0 ? `, … +${rest} more` : '');
   return (
