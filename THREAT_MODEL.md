@@ -97,11 +97,13 @@ These are deliberate trust decisions; an audit should not report them as vulnera
 - **MCP server definitions and `--provider-tool` names** are operator config, but the *responses* those servers and
   providers return are third-party content (B3) — and so is the **tool metadata the server authors**: the
   `name`, `description` and `inputSchema` each MCP tool advertises are server text that reaches the model's tool
-  block (`src/mcp.ts:271-281`). Choosing which servers to configure is the operator's trust decision; the words
-  inside a configured server's tool metadata are that server's. Guarded as of `agent-do-4ah` + `agent-do-gdec`
-  (fleet/imp-1-4ah, in review): the description is framed/redacted/capped and schema metadata free text
-  (`description`/`title`/`$comment`/`default`/`examples` values) is sanitised and capped — the name and the
-  validation-relevant schema identifiers stay verbatim (see §7).
+  block (`src/mcp.ts:271-281`; on `origin/main` raw, `src/mcp.ts:265-277` — the metadata reaches the model
+  **unframed**). Choosing which servers to configure is the operator's trust decision; the words inside a
+  configured server's tool metadata are that server's. **Guarded on the fix stack in review** (`fleet/imp-1-4ah`:
+  agent-do-4ah + gdec + 6jzn + f7io + 0e4e + 9umo — the description framed/redacted/capped, schema metadata
+  free text sanitised and capped, the name and validation-relevant identifiers verbatim); not landed on main,
+  so per-tree readers should treat the metadata as unframed until then (same convention as the store invariant
+  in §6; residual in §7).
 
 ## 4. Controls, per surface
 
