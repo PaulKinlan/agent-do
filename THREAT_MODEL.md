@@ -186,9 +186,11 @@ Each family below was found, fixed, and then found again somewhere else. The les
 ## 6. Security invariants for auditors
 
 - A path the resolver cannot attest never reaches an I/O call, on either the file-tool path or the store path
-  (`src/tools/deny-list.ts:262-280`; `src/stores/sandbox.ts` resolve). Unconditional as of `agent-do-ws1u`
-  (fleet/imp-1-ulkp): the store's `!realpath -> return joined` short-circuit — the one path that reached I/O
-  on a name instead of an attestation at `a151c46` — is removed; the stat walk now runs for every connector.
+  (`src/tools/deny-list.ts:262-280`; `src/stores/sandbox.ts` resolve). **Test it per tree:** at the pinned tree
+  `a151c46` the store path has an exception — `resolve` short-circuits on `!sandbox.realpath` and returns the
+  name un-walked (`src/stores/sandbox.ts:107`), so the invariant holds on the store path only when the connector
+  exposes `realpath`. `agent-do-ws1u` (fleet/imp-1-ulkp, in review) removes that short-circuit; once it lands,
+  the invariant is unconditional on both paths.
 - The deny list's `modelContent` never echoes the matched rule (`src/tools/deny-list.ts:384-396`).
 - Every string that becomes `ToolResult.modelContent` from a source outside this process is framed, redacted and
   capped — or returns a `ToolResult` that says why it is not.
@@ -228,10 +230,11 @@ Each family below was found, fixed, and then found again somewhere else. The les
   not trust (`agent-do-a8pg`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
-- ~~Store containment is string-level for a connector with no `realpath`~~ **CLOSED by `agent-do-ws1u`**
-  (fleet/imp-1-ulkp, in review at the time of writing): the store's short-circuit judged a planted alias by its
-  own name on that path, in tension with `docs/sandbox.md:257-259`; the walk is now unconditional and a link a
-  connector can see but cannot read is refused. Recorded here because the risk was live at `a151c46`.
+- **Store containment is string-level for a connector with no `realpath`** — live at `a151c46` and at this
+  document's own pinned tree (`src/stores/sandbox.ts:107`: the short-circuit judges a planted alias by its own
+  name, in tension with `docs/sandbox.md:257-259`). **Fix in review**: `agent-do-ws1u` (fleet/imp-1-ulkp)
+  removes the short-circuit; the walk becomes unconditional and a link a connector can see but cannot read is
+  refused. Mark this risk CLOSED only once that branch has landed.
 - **File locks are advisory and mtime-based**; a process that writes without acquiring the lock can clobber a locked
   file, and 1s mtime granularity plus a 60s stale threshold is the accepted trade (`src/stores/file-lock.ts:25-41`).
 - **`.agent-doignore` is not read for sandbox-backed workspaces** (`skipAgentDoIgnore` is forced), so a virtual root
