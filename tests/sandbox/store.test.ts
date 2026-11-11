@@ -236,6 +236,36 @@ describe('SandboxBackedMemoryStore', () => {
     await expect(noRealpath.write('alice', 'note.txt', 'hi')).resolves.toBeUndefined();
   });
 
+  it('path-echoed not-found phrasing in a refusal with NO segment boundary refuses (agent-do-p3uk)', async () => {
+    // 'screwed up at /work/alice/not found/x' — no ': ' anywhere, so reason and
+    // path are one segment and message-sniffing cannot separate them. The path
+    // itself carries the phrase, so only a CODE may attest; uncoded -> refuse.
+    const writes: Array<{ path: string }> = [];
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw new Error('screwed up at ' + p);
+        },
+        async writeFile(p: string) {
+          writes.push({ path: p });
+        },
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'not found/secret.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+    expect(writes).toHaveLength(0);
+    // Fail-closed residual: with the phrasing disabled by the path echo, an
+    // uncoded message has NO usable evidence — a clean-path write through the
+    // same connector refuses too. Only a code can attest ambiguous paths.
+    await expect(noRealpath.write('alice', 'plain.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('an uncoded refusal with unrecognised wording and a phrase-echoing path refuses (agent-do-45rh)', async () => {
     // 'Input/output error' misses the refusal-word veto list, and the path echoes
     // a not-found phrase: the only not-found evidence sits in model-controlled

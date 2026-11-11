@@ -405,7 +405,15 @@ const UNRESOLVED: ResolvedPath = { ok: false, reason: 'unresolved-path' };
  * the component had been attested. There are no bare catches in the resolver for
  * that reason - each one either classifies or refuses.
  */
-function classifyError(err: unknown): 'absent' | 'unattestable' {
+function classifyError(err: unknown, path = ''): 'absent' | 'unattestable' {
+  // agent-do-p3uk: when the model-chosen path itself carries not-found or refusal
+  // phrasing, message text cannot distinguish reason from path echo at all (no
+  // segment split survives a format that inlines the path). Only a CODE may attest;
+  // everything uncoded is ambiguous by construction and refuses.
+  if (path && /\bENOENT\b|no such file|not found|does not exist/i.test(path)) {
+    const coded = (err as { code?: unknown } | null)?.code;
+    return coded === 'ENOENT' ? 'absent' : 'unattestable';
+  }
   // Checked inline rather than via isNotFoundError, which also treats ENOTDIR as
   // absent for the store's own "File not found" messages. Here that would be
   // wrong: "there is a file where a directory belongs" still says nothing about
@@ -578,7 +586,7 @@ async function walkToRealpath(
       try {
         canonical = await sandbox.realpath!(current);
       } catch (err) {
-        if (classifyError(err) === 'unattestable') return UNRESOLVED;
+        if (classifyError(err, current) === 'unattestable') return UNRESOLVED;
         absent = true;
       }
       if (!absent) {
@@ -602,7 +610,7 @@ async function walkToRealpath(
       isLink = entry.isSymbolicLink;
     } catch (err) {
       // An error we cannot classify means we do not know what is here.
-      if (classifyError(err) === 'unattestable') return UNRESOLVED;
+      if (classifyError(err, current) === 'unattestable') return UNRESOLVED;
     }
 
     // 3. Follow it. A link identified but not readable is unattested: judging
