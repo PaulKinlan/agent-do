@@ -100,11 +100,19 @@ export async function recordRun(
   const next: TaskStatus = {
     ...prev,
     lastRunAt: new Date().toISOString(),
-    lastDurationMs: outcome.durationMs,
     // agent-do-l1bz: a lock-loss skip is not an execution — recording it as plain 'ok' masked skipped
     // firings, so the status file claimed work that never ran.
     lastOutcome: outcome.skipped ? 'skipped' : outcome.ok ? 'ok' : 'error',
-    lastError: outcome.ok || outcome.skipped ? undefined : (outcome.error ?? 'unknown error'),
+    // agent-do-ww4s: on a skip the record must keep the last REAL run's outcome detail. A skip has no
+    // duration and no error of its own; spreading prev and then assigning undefined erased the
+    // previous run's lastError/lastDurationMs, leaving an operator unable to see when/why the last
+    // real run failed. Touch those fields only when something actually ran.
+    ...(outcome.skipped
+      ? {}
+      : {
+          lastDurationMs: outcome.durationMs,
+          lastError: outcome.ok ? undefined : (outcome.error ?? 'unknown error'),
+        }),
     runCount: prev.runCount + 1,
   };
   all[taskId] = next;

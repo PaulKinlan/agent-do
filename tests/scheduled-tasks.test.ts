@@ -330,7 +330,12 @@ describe('runScheduledTask', () => {
       payload: 'x',
     });
     expect((await readStatus(sf)).flappy?.lastOutcome).toBe('error');
-    // Then a firing that cannot take the lock: the error outcome must SURVIVE the skip.
+    // Then a firing that cannot take the lock: the error outcome must SURVIVE the skip — lastOutcome
+    // flips to 'skipped' (agent-do-l1bz), but lastError and lastDurationMs stay the last real run's
+    // (agent-do-ww4s): a skip has no duration and no error of its own.
+    const before = await readStatus(sf);
+    const realDuration = before.flappy?.lastDurationMs;
+    expect(realDuration).toBeTypeOf('number');
     const holder = await acquireFileLock('scheduled-task:flappy', 'scheduler', join(dir, '.locks'));
     await runScheduledTask('flappy', {
       memoryDir: dir, statusFile: sf,
@@ -341,5 +346,7 @@ describe('runScheduledTask', () => {
     await holder.release();
     const status = await readStatus(sf);
     expect(status.flappy?.lastOutcome).toBe('skipped');
+    expect(status.flappy?.lastError).toBe('boom');
+    expect(status.flappy?.lastDurationMs).toBe(realDuration);
   });
 });
