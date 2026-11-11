@@ -225,14 +225,18 @@ Each family below was found, fixed, and then found again somewhere else. The les
   for schema reasons (`src/tools/provider-output-guard.ts:35-41`).
 - **The host connector is not a security boundary**: same user, same PID namespace, so `/proc/$PPID/environ` still
   reads the parent's credentials, and it has no network policy (`docs/sandbox.md:75-94,126-135`).
-- **MCP tool metadata reaches the model unframed** — accepted only until `agent-do-4ah` (P2, assigned) lands its
-  **Mitigated by `agent-do-4ah` + `agent-do-gdec` + `agent-do-6jzn`** (fleet/imp-1-4ah, in review): the
-  description is framed, redacted and byte-capped; schema metadata free text (`description`/`title`/`$comment`/
-  `default`/`examples` values) is sanitised and capped; `__proto__` schema keys are dropped; pathological schemas
-  are replaced whole. The **residual** is the validation-relevant identifiers the guard must keep verbatim: the
-  tool `name` and property names / `enum` / `const` / `pattern` values — a hostile server can still put steering
-  text there, and mounting a server remains the same trust decision as running its tools — do not configure
-  servers you do not trust (`agent-do-a8pg`, `agent-do-ol2q`, `agent-do-cysa`).
+- **MCP tool metadata reaches the model unframed** — live at the pinned tree and on `origin/main`: the server
+  authors a tool's `name`, `description` and `inputSchema`, and main passes the description and schema into
+  `dynamicTool` raw (`src/mcp.ts:265-277` on main), so a hostile or compromised server owns the model's view of
+  every tool before any call happens, and tool count is server-controlled too. **Fix in review, not landed**: the
+  stack on `fleet/imp-1-4ah` (agent-do-4ah, -6jzn, -gdec, -f7io, -0e4e, -9umo) frames/redacts/caps the
+  description, sanitises schema metadata free text, drops `__proto__` keys, replaces pathological schemas whole,
+  falls back on non-string descriptions, and bounds a server's aggregate metadata (512 KB) — partially
+  reviewer-cleared (gdec), remainder under review at the time of writing. Until it lands on main, treat
+  server-authored metadata as unframed instruction-channel text. The **residual after landing** is the
+  validation-relevant identifiers the guard must keep verbatim — the tool `name` and property names / `enum` /
+  `const` / `pattern` values — and the operator's server choice remains a trust decision: do not configure
+  servers you do not trust (`agent-do-a8pg`, `agent-do-ol2q`, `agent-do-cysa`, `agent-do-tx46`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
 - **Store containment is string-level for a connector with no `realpath`** — live at `a151c46` and at this
