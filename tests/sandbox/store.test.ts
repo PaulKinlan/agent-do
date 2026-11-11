@@ -357,6 +357,30 @@ describe('SandboxBackedMemoryStore', () => {
     expect(writes).toHaveLength(0);
   });
 
+  it('a duck-typed throw with a THROWING message getter is refused, not escaped (agent-do-asjc)', async () => {
+    // Reading .message on a hostile object can itself throw; the resolver must
+    // classify (refuse), never surface the getter's raw error.
+    const noRealpath = new SandboxBackedMemoryStore(
+      {
+        async stat(p: string) {
+          if (p === '/' || p === '/work' || p === '/work/alice') {
+            return { isSymbolicLink: false, isDirectory: true } as import('../../src/sandbox/types.js').FileStat;
+          }
+          throw {
+            get message(): string {
+              throw new Error('getter exploded');
+            },
+          };
+        },
+        async writeFile() {},
+        async mkdir() {},
+      } as unknown as SandboxApi,
+      '/work',
+    );
+    await expect(noRealpath.write('alice', 'note.txt', 'hi'))
+      .rejects.toThrow(/Path traversal via symlink/);
+  });
+
   it('a duck-typed non-Error throw carrying a not-found message is absent too (agent-do-ihxv)', async () => {
     // The same not-found text thrown as a plain { name, message } object must
     // classify the same way as the Error-instance form — the outcome turns on

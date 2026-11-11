@@ -410,6 +410,19 @@ const UNRESOLVED: ResolvedPath = { ok: false, reason: 'unresolved-path' };
  * the component had been attested. There are no bare catches in the resolver for
  * that reason - each one either classifies or refuses.
  */
+/**
+ * Read `.message` without letting a throwing getter escape (agent-do-asjc):
+ * a connector object whose property access throws is classified by the
+ * resolver's own rules, never surfaced as a raw foreign error.
+ */
+function safeMessage(value: object): unknown {
+  try {
+    return (value as { message?: unknown }).message;
+  } catch {
+    return undefined;
+  }
+}
+
 function classifyError(err: unknown, path = ''): 'absent' | 'unattestable' {
   // agent-do-p3uk: when the model-chosen path itself carries not-found or refusal
   // phrasing, message text cannot distinguish reason from path echo at all (no
@@ -445,9 +458,9 @@ function classifyError(err: unknown, path = ''): 'absent' | 'unattestable' {
   } else if (
     err !== null &&
     typeof err === 'object' &&
-    typeof (err as { message?: unknown }).message === 'string'
+    typeof safeMessage(err) === 'string'
   ) {
-    message = (err as { message: string }).message;
+    message = safeMessage(err) as string;
   } else {
     message = typeof err === 'string' ? err : String(err ?? '');
   }
