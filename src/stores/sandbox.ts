@@ -392,10 +392,13 @@ const UNRESOLVED: ResolvedPath = { ok: false, reason: 'unresolved-path' };
  * not there yet, so the walk can step past it" or "I cannot tell where this path
  * goes, so refuse".
  *
- * ONLY ENOENT is `absent`. Everything else - EACCES, EPERM, ELOOP, EIO, ENOTDIR,
- * a connector's own thrown value, a thrown non-Error - is `unattestable`, even
- * where a platform might consider it benign. Being strict is what makes the
- * invariant hold, and refusing a path is always safe.
+ * `absent` is ENOENT by code, or a not-found reported by message alone (the
+ * errno name or an explicit not-found phrase - agent-do-q8hd; the contract only
+ * says stat must fail for a missing path, not that it carries a Node code).
+ * Everything else - EACCES, EPERM, ELOOP, EIO, ENOTDIR, a genuinely ambiguous
+ * thrown value, a thrown non-Error - is `unattestable`, even where a platform
+ * might consider it benign. Being strict about what counts as known-absent is
+ * what makes the invariant hold, and refusing a path is always safe.
  *
  * This exists because six of the seven findings in this area were one sentence:
  * a catch swallowed a failure it could not classify and the walk continued as if
