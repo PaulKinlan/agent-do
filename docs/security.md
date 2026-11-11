@@ -1,7 +1,8 @@
 # Security model
 
 What the workspace tools guarantee, and what they do not. `docs/sandbox.md` covers the connector mechanics; this
-document is about the boundary an operator is relying on.
+document is about the boundary an operator is relying on. `THREAT_MODEL.md` is the tracked roll-up: assets,
+trust boundaries, controls per surface with citations, and accepted residual risks.
 
 ## Two layers, and one surface that ignores both
 
