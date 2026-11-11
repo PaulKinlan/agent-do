@@ -737,4 +737,26 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     expect(tool.description).toContain('MCP tool "t5" from server "srv5"');
     expect(tool.description).toContain('non-string description (number)');
   });
+
+  it('the __proto__ drop note is bounded even for thousands of dropped keys (agent-do-27u5)', async () => {
+    // Many dropped keys at SHALLOW depth (the depth cap replaces the whole
+    // schema past 32 levels, which would bypass the note): 400 siblings, each
+    // carrying a __proto__ key — a ~12KB paths list appended to an 8KB-capped
+    // description must not become the finding's 406KB blowout.
+    const props: Record<string, unknown> = {};
+    for (let i = 0; i < 400; i++) {
+      props[`p${i}`] = JSON.parse('{"__proto__":{"type":"string"}}');
+    }
+    stubClient.listTools.mockResolvedValue({
+      tools: [
+        { name: 't6', description: 'd', inputSchema: { type: 'object', properties: props } },
+      ],
+    });
+    const { tools } = await mountMcpServers([
+      { name: 'srv6', transport: { type: 'stdio', command: 'noop' } },
+    ]);
+    const tool = tools['mcp__srv6__t6'] as { description: string };
+    expect(tool.description).toContain('__proto__ key(s)');
+    expect(tool.description.length).toBeLessThan(4000);
+  });
 });
