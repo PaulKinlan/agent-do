@@ -759,4 +759,31 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     expect(tool.description).toContain('__proto__ key(s)');
     expect(tool.description.length).toBeLessThan(4000);
   });
+
+  it('legal unconstrained required names survive the __proto__ reconciliation (agent-do-9umo)', async () => {
+    // required names need not be declared in the sibling properties (allOf/$ref
+    // composition, or intentionally unconstrained) — the blanket
+    // reconcile-against-properties deleted them; only actually-dropped names go.
+    stubClient.listTools.mockResolvedValue({
+      tools: [
+        {
+          name: 't7',
+          description: 'd',
+          inputSchema: {
+            type: 'object',
+            properties: JSON.parse(
+              '{"__proto__":{"type":"string"},"declared":{"type":"string"}}',
+            ),
+            required: ['__proto__', 'declared', 'fromAllOf'],
+          },
+        },
+      ],
+    });
+    const { tools } = await mountMcpServers([
+      { name: 'srv7', transport: { type: 'stdio', command: 'noop' } },
+    ]);
+    const tool = tools['mcp__srv7__t7'] as { inputSchema: { jsonSchema: Record<string, unknown> } };
+    const js = tool.inputSchema.jsonSchema as { required: string[] };
+    expect(js.required).toEqual(['declared', 'fromAllOf']);
+  });
 });
