@@ -114,7 +114,7 @@ These are deliberate trust decisions; an audit should not report them as vulnera
 | All tool output into model context | `<tool_output …>` frame, injection-marker redaction, `<tool_output>` tags escaped so content cannot close its own frame, 256 KB read cap | `src/tools/content-guards.ts:23,46,84,196-241` | #48 |
 | Bare tool returns | The loop's execute wrapper puts any non-`ToolResult` return through the same guards | `src/tools-build.ts:48,274` | agent-do-3qb |
 | Provider-native tool output | Text framed/capped; JSON redacted in place (schema preserved, deliberately not framed or truncated) | `src/tools/provider-output-guard.ts:29-41,77` | agent-do-7hu, agent-do-dul |
-| MCP | `stdio` transport refused where it cannot spawn; failures framed rather than returned bare. Tool **metadata** (server-authored `description`/`inputSchema`) is deliberately NOT framed — see §7 residual risks | `src/mcp.ts:186-189,271-281,330` | agent-do-5sh, agent-do-hvz, agent-do-a8pg |
+| MCP | `stdio` transport refused where it cannot spawn; failures framed rather than returned bare. Tool **metadata** (server-authored `name`/`description`/`inputSchema`) is not framed yet — framing planned under agent-do-4ah, residual risk in §7 | `src/mcp.ts:186-189,271-281,330` | agent-do-5sh, agent-do-hvz, agent-do-a8pg |
 | `delegate_task` | Worker output framed before it is read as data | `src/orchestrator.ts:42-59` | agent-do-4ya |
 | Error strings | `sanitiseFsError` builds the model string from an errno allowlist, never `err.message`; only this repo's own guard messages pass through | `src/tools/content-guards.ts:269-300` | #45, #48 |
 | Shell arguments | A model-supplied `cwd` is confined to the workspace root and refused if it escapes or cannot be attested; an absolute `cwd` needs an absolute root | `src/tools/shell-tool.ts:18-28,201-228` | agent-do-gfp6, agent-do-8iyt |
@@ -222,12 +222,13 @@ Each family below was found, fixed, and then found again somewhere else. The les
   for schema reasons (`src/tools/provider-output-guard.ts:35-41`).
 - **The host connector is not a security boundary**: same user, same PID namespace, so `/proc/$PPID/environ` still
   reads the parent's credentials, and it has no network policy (`docs/sandbox.md:75-94,126-135`).
-- **MCP tool metadata reaches the model unframed**: a server's `description` and `inputSchema` pass into
-  `dynamicTool` as-is (`src/mcp.ts:271-281`), so a hostile or compromised server can put instructions in the text
-  the model reads alongside its tools, and a pathological schema can be large. Accepted because the schema must
-  reach the model verbatim for calls to typecheck, the description is the server's own contract, and the
-  operator's choice of server is the same trust decision as running its tools — do not configure servers you do
-  not trust (`agent-do-a8pg`).
+- **MCP tool metadata reaches the model unframed** — accepted only until `agent-do-4ah` (P2, assigned) lands its
+  planned mitigation: a server's tool `name`, `description` and `inputSchema` are all server-authored and pass
+  into `dynamicTool` as-is (`src/mcp.ts:271-281`), so a hostile or compromised server can put instructions in
+  the text the model reads alongside its tools, and a pathological schema can be large. The residual risk after
+  4ah's framing and caps remains the operator's server choice — the description is the server's own contract and
+  must stay faithful for calls to make sense — so do not configure servers you do not trust (`agent-do-a8pg`,
+  `agent-do-ol2q`).
 - **`readOnly` / `onBeforeWrite` are soft hooks**, not a boundary; a tool calling `node:fs` directly bypasses them
   (`docs/sandbox.md:209-220`).
 - **Store containment is string-level for a connector with no `realpath`** — live at `a151c46` and at this
