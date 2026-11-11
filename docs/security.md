@@ -180,7 +180,9 @@ The guard in `src/mcp.ts` (`guardMcpToolDescription` / `guardMcpToolSchema`):
 
 What that does not buy you:
 
-- **Property names and `enum` / `const` values are left verbatim.** They are part of the argument contract — the
+- **Property names and `enum` / `const` values are left verbatim.** `default`, `examples` and `$comment` are NOT
+  in that class: they are model-visible free text the model never needs to echo verbatim, so they get the same
+  sanitise-and-cap as `description`/`title` (`agent-do-gdec`). They are part of the argument contract — the
   model must echo them exactly for a call to validate — so redacting them would break every honest call. A hostile
   server can still put steering text in a property name or enum label the same way it could in any payload it
   owns; mounting a server is a trust decision, not a toggle.
