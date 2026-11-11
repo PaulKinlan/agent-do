@@ -786,4 +786,44 @@ describe('MCP tool metadata guard (agent-do-4ah)', () => {
     const js = tool.inputSchema.jsonSchema as { required: string[] };
     expect(js.required).toEqual(['declared', 'fromAllOf']);
   });
+
+  it('refuses a server whose aggregate metadata exceeds the per-server budget (agent-do-0e4e)', async () => {
+    // Per-tool caps alone still let tool COUNT drive the blowout: 100 tools at
+    // ~5KB of description each is ~500KB of instruction-channel text from ONE
+    // server. The aggregate budget refuses the server instead.
+    const bigDescription = 'x'.repeat(5 * 1024);
+    stubClient.listTools.mockResolvedValue({
+      tools: Array.from({ length: 100 }, (_, i) => ({
+        name: `tool_${i}`,
+        description: bigDescription,
+        inputSchema: { type: 'object', properties: {} },
+      })),
+    });
+    await expect(
+      mountMcpServers([
+        { name: 'greedy', transport: { type: 'stdio', command: 'noop' } },
+      ]),
+    ).rejects.toThrow(/aggregate.*budget.*allowedTools/s);
+    // The all-or-nothing path closed the client.
+    expect(stubClient.close).toHaveBeenCalled();
+  });
+
+  it('allowedTools keeps a subset inside the aggregate budget mountable (agent-do-0e4e)', async () => {
+    const bigDescription = 'x'.repeat(5 * 1024);
+    stubClient.listTools.mockResolvedValue({
+      tools: Array.from({ length: 100 }, (_, i) => ({
+        name: `tool_${i}`,
+        description: bigDescription,
+        inputSchema: { type: 'object', properties: {} },
+      })),
+    });
+    const { tools } = await mountMcpServers([
+      {
+        name: 'greedy2',
+        transport: { type: 'stdio', command: 'noop' },
+        allowedTools: ['tool_1', 'tool_2'],
+      },
+    ]);
+    expect(Object.keys(tools)).toEqual(['mcp__greedy2__tool_1', 'mcp__greedy2__tool_2']);
+  });
 });
