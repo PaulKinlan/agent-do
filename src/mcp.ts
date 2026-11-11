@@ -240,6 +240,7 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
     if (node !== null && typeof node === 'object') {
       const out: Record<string, unknown> = {};
       const droppedHere: string[] = [];
+      let childPropsDropped: string[] | null = null;
       for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
         // agent-do-6jzn: a `__proto__` key must not reach `out[key] = ...` —
         // that assignment hits the Object.prototype accessor, silently dropping
@@ -250,6 +251,24 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
         if (key === '__proto__') {
           droppedProtoKeys.push(path ? `${path}.__proto__` : '__proto__');
           droppedHere.push(key);
+          continue;
+        }
+        if (key === 'properties' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+          // Walk the properties sibling directly so the names dropped from it are
+          // known HERE, where the matching `required` lives.
+          const childOut: Record<string, unknown> = {};
+          const childDropped: string[] = [];
+          const childPath = path ? `${path}.properties` : 'properties';
+          for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
+            if (pk === '__proto__') {
+              droppedProtoKeys.push(`${childPath}.__proto__`);
+              childDropped.push(pk);
+              continue;
+            }
+            childOut[pk] = walk(pv, depth + 1, `${childPath}.${pk}`);
+          }
+          childPropsDropped = childDropped;
+          out[key] = childOut;
           continue;
         }
         if (
@@ -278,15 +297,19 @@ function guardMcpToolSchema(raw: unknown): GuardedSchema {
       if (droppedHere.length > 0 && Array.isArray(out.required)) {
         out.required = out.required.filter((r) => !droppedHere.includes(r as string));
       }
-      // A drop one level down (inside this object's `properties`) must also remove
-      // the argument from THIS object's `required` — JSON Schema semantics: required
-      // names keys of the sibling `properties` (agent-do-6jzn: a rebuilt schema that
-      // demanded a vanished argument would break every honest call).
-      if (Array.isArray(out.required) && out.properties !== null && typeof out.properties === 'object') {
-        const props = out.properties as Record<string, unknown>;
-        out.required = out.required.filter((r) =>
-          Object.prototype.hasOwnProperty.call(props, r),
-        );
+      // agent-do-6jzn: a drop inside THIS object's `properties` must also remove that
+      // name from THIS object's `required` — required names keys of the sibling
+      // properties, so demanding a vanished argument would break every honest call.
+      // agent-do-9umo: remove ONLY the names actually dropped. JSON Schema does not
+      // require a required name to be declared in the sibling properties (it may come
+      // from allOf/$ref composition or be intentionally unconstrained), so the earlier
+      // blanket reconcile-against-properties deleted legal required names.
+      if (
+        childPropsDropped !== null &&
+        childPropsDropped.length > 0 &&
+        Array.isArray(out.required)
+      ) {
+        out.required = out.required.filter((r) => !childPropsDropped.includes(r as string));
       }
       return out;
     }
